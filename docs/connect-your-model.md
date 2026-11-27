@@ -117,17 +117,17 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 
 | Key | Type | Shape | Description |
 |-----|------|-------|-------------|
-| `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first). A Franka rig reports its grip point `gripper`, on the flange axes ([frame contract](../positronic/drivers/roboarm/README.md)); a policy that reads poses states its frame as an offset from it |
+| `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first). A Franka rig reports its grip point `gripper`, on the flange axes ([frame contract](../positronic/drivers/roboarm/README.md)). The server gets this key only when it states its frame ([State the end-effector frame](#state-the-end-effector-frame)) |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
-| `robot_state.ee_wrench` | float32 | (6,) | External force and torque on the end effector: `fx, fy, fz` (N), `tx, ty, tz` (N·m). A Franka rig sends the libfranka estimate `K_F_ext_hat_K`, in the libfranka end-effector frame. That frame can differ from the `robot_state.ee_pose` point. An arm that does not measure the wrench sends no such key |
+| `robot_state.ee_wrench` | float32 | (6,) | External force and torque on the end effector: `fx, fy, fz` (N), `tx, ty, tz` (N·m). A Franka rig sends the libfranka estimate `K_F_ext_hat_K`, in the libfranka end-effector frame. That frame can differ from the `robot_state.ee_pose` point. libfranka sets all six values to zero when the arm is near or in a singularity ([`robot_state.h`](https://github.com/frankarobotics/libfranka/blob/0.21.3/include/franka/robot_state.h#L341-L349)), and the driver sends them unchanged. An all-zero wrench from a Franka rig, live or recorded, means that libfranka has no estimate. An arm that does not measure the wrench sends no such key |
 | `robot_state.status` | int | scalar | The arm's status: `0` available, `1` busy, `3` error. `2` is also accepted and read as available — an arm travelling towards a setpoint still takes commands. The measurements above come on every sample whatever the status; this is what says whether a command you send will reach the arm |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`. The standard stack continues inference and command playback for those observations. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step, except a pose whose frame it does not state. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`. The standard stack continues inference and command playback for those observations. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -188,6 +188,44 @@ A rig with more than one arm names every channel after the arm that owns it: obs
 `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
 `target_grip.left`. An arm your action omits holds its last command.
 
+### State the end-effector frame
+
+A server that reads `robot_state.ee_pose`, or sends `CartesianPosition` or `CartesianDelta` commands, states the
+end-effector frame of each pose. A server that reads no pose and sends joint commands only states no frame.
+
+Put the frames in the server metadata as `ee_frames`, with one entry for each pose. Every client reads them there.
+A `PolicyServer` sends `Model.meta()` in its metadata. A protocol v3 `Model` takes its metadata as `metadata=`.
+
+```python
+"ee_frames": {
+    "robot_state.ee_pose": {"site": "gripper"},  # the pose that the server reads
+    "robot_command.pose": {"site": "gripper"},  # the pose of its Cartesian commands
+}
+```
+
+- `site` is `gripper`, the grip point where the rig reports its pose. Do not name another site.
+- With no `offset`, the server gets the pose at the grip point, as the rig reports it.
+- The client converts a pose only through `ChangeEEFrame`. An `offset` in the metadata alone converts nothing.
+- A model that speaks another frame puts `ChangeEEFrame` in its client stack before `TrajectoryPlayer`, as the
+  [example](#models-and-deployments) does. The codec converts each pose and each pose command, and states their
+  frames. `cfg.codecs` has presets: `gripper_frame`, `franka_hand_frame` (the FR3 Franka Hand point `F_T_EE`) and
+  `droid_frame` (the DROID flange). The [Codecs Guide](../positronic/policy/codecs/README.md#end-effector-frames)
+  tells more.
+- A protocol v3 stack names the codec
+  `component("change_ee_frame", site="gripper", transform=[x, y, z, qw, qx, qy, qz])`.
+- `PolicyServer` copies the frames of its client stack into its metadata. A server of another kind puts the same
+  frames in its metadata too.
+
+A server that states no frame gets no `robot_state.ee_pose`. A codec of its client stack that reads the pose fails at
+the first observation:
+
+```
+PolicyCommandError: The client stack that the server declares cannot use the answer or the observation: KeyError('robot_state.ee_pose')
+```
+
+A server that reads the pose in its own code gets a `KeyError` there. A pose command with no stated frame fails the
+episode with a `PolicyCommandError` that names the channel.
+
 ## Debugging with recordings
 
 Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-dataset-viewer`.
@@ -203,7 +241,9 @@ Implement `Model`, then pass a function that builds it and a deployment to `Poli
 ```python
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.policy import keys as policy_keys
+from positronic.policy.codecs import ChangeEEFrame
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic_model_server.server_wire import ServedHostPort
@@ -235,7 +275,12 @@ def build_my_model():
     return model
 
 
-deployment = PolicyDeployment(local=Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=15)))
+# The model reads and commands poses at the grip point, so the client stack states that frame.
+deployment = PolicyDeployment(
+    local=Sequential(
+        ChangeEEFrame(EEFrame(site=GRIPPER_SITE)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=15)
+    )
+)
 server = PolicyServer(build_my_model, deployment)
 server.serve([WebsocketWire(ServedHostPort('0.0.0.0', 8000))])
 ```

@@ -892,6 +892,7 @@ def plan_of_image(
     org: OrgSlug | None = None,
     sample: Sample | None = None,
     query: SessionQuery | None = None,
+    min_vram_gb: int | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
@@ -900,6 +901,7 @@ def plan_of_image(
     neither. `credential` opens the registry when `image` is not public. The plan is a
     `nebius_competition` run, or a private run for `org` where one is given. `sample` runs a random
     subset of the eval's trials. `query` holds the params the platform puts on each session URL.
+    `min_vram_gb` is the least GPU memory the image needs, which sizes its GPU slice.
     """
     return EvalPlan(
         request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
@@ -912,6 +914,7 @@ def plan_of_image(
                 image=image,
                 image_credential=credential,
                 query=query,
+                min_vram_gb=min_vram_gb,
             )
         ],
         alias=alias,

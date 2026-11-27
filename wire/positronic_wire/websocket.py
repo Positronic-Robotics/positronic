@@ -10,7 +10,8 @@ import ssl
 import stat
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from functools import partial
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
@@ -29,11 +30,18 @@ class WebsocketClientConnection(wire.ClientConnection):
     def __init__(self, websocket: Connection):
         self._websocket = websocket
 
-    def send(self, message: bytes) -> None:
-        try:
-            self._websocket.send(message)
-        except ConnectionClosed as e:
-            raise wire.PeerDisconnected(str(e)) from e
+    def send(self, message: bytes, timeout: float | None = None) -> None:
+        # The socket blocks, so a write to a peer that reads nothing waits until the kernel gives up on the
+        # connection, many minutes later.
+        with _shut_down_after(self._websocket.socket, timeout) as expired:
+            try:
+                self._websocket.send(message)
+            except ConnectionClosed as e:
+                if expired.is_set():
+                    raise TimeoutError(f'The peer took no more of the message within {timeout}s') from e
+                raise wire.PeerDisconnected(str(e)) from e
+        if expired.is_set():
+            raise TimeoutError(f'The peer took the message only after {timeout}s')
 
     def recv(self, timeout: float | None = None) -> bytes:
         try:
@@ -63,7 +71,7 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 
 
 # The resolver's authoritative answers that the host has no address. A resolver that timed out answers
-# ``EAI_AGAIN``, which reads as no answer: a name can start resolving, where a misspelt one never does.
+# ``EAI_AGAIN``, which a later lookup can clear: a name can start resolving, where a misspelt one never does.
 _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 
 
@@ -75,6 +83,8 @@ def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Re
         return wire.Refusal.FINAL
     if isinstance(raised, socket.gaierror) and raised.errno in _NO_SUCH_HOST_ERRNOS:
         return wire.Refusal.FINAL
+    if isinstance(raised, socket.gaierror) and raised.errno == socket.EAI_AGAIN:
+        return wire.Refusal.UNRESOLVED
     if isinstance(raised, InvalidHandshake) and not isinstance(raised, InvalidMessage):
         # An answer that is not a valid upgrade: a backend that is not ready.
         return wire.Refusal.COLD
@@ -295,6 +305,38 @@ def https_connection(address: wire.HostPortAddress, default_port: int, deadline:
     )
 
 
+@contextmanager
+def _shut_down_after(sock: socket.socket, timeout: float | None) -> Iterator[threading.Event]:
+    """Shut ``sock`` down once ``timeout`` seconds pass, which ends a read or a write blocked on it.
+
+    The event says whether the shutdown came. With ``None`` nothing shuts the socket down.
+    """
+    expired = threading.Event()
+    if timeout is None:
+        yield expired
+        return
+
+    def shut_down() -> None:
+        expired.set()
+        try:
+            # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        except OSError as e:
+            # The peer or a close ended the connection first, and with it the read or the write.
+            if e.errno not in (errno.ENOTCONN, errno.EBADF):
+                raise
+
+    timer = threading.Timer(timeout, shut_down)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield expired
+    finally:
+        timer.cancel()
+        # `join` waits out a shutdown already running, so none runs after this returns.
+        timer.join()
+
+
 def post_within(
     connection: HTTPConnection, path: str, headers: Mapping[str, str] | None, deadline: float, max_body_bytes: int
 ) -> tuple[int, bytes]:
@@ -305,30 +347,12 @@ def post_within(
     deadline. A timer shuts the socket down at the deadline instead.
     """
     connection.connect()
-    sock = connection.sock
-
-    def shut_down() -> None:
-        try:
-            # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
-            socket.socket.shutdown(sock, socket.SHUT_RDWR)
-        except OSError as e:
-            # ENOTCONN: the peer ended the connection first, and with it the read.
-            if e.errno != errno.ENOTCONN:
-                raise
-
-    timer = threading.Timer(max(0.0, deadline - time.monotonic()), shut_down)
-    timer.daemon = True
-    timer.start()
-    try:
+    with _shut_down_after(connection.sock, max(0.0, deadline - time.monotonic())):
         connection.request('POST', path, headers=dict(headers or {}))
         # Closed here: the answer holds the socket open past the connection's own close.
         with connection.getresponse() as answer:
             succeeded = HTTPStatus.OK <= answer.status < HTTPStatus.MULTIPLE_CHOICES
             return answer.status, answer.read(max_body_bytes) if succeeded else b''
-    finally:
-        timer.cancel()
-        # `join` waits out a shutdown already running, so none runs after this returns.
-        timer.join()
 
 
 class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):

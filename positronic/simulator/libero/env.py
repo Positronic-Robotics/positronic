@@ -42,6 +42,8 @@ object positions; a ``None`` seed draws one at random.
 
 import argparse
 import builtins
+import fcntl
+import os
 import pathlib
 import random
 from typing import Any
@@ -49,6 +51,7 @@ from typing import Any
 import arm_action  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 import keys
 import mujoco
+import mujoco_ik  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
@@ -59,8 +62,16 @@ from server import EnvProtocol, EnvServer
 # writes the config from LIBERO's own package-relative paths, non-interactively.
 builtins.input = lambda *_args, **_kwargs: 'n'
 
-from libero.libero import benchmark, get_libero_path  # noqa: E402 -- must follow the stdin shim above
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
+# LIBERO's package __init__ checks for, then creates, the config dir and file without a lock, so two servers starting
+# on a fresh config path at once fail with FileExistsError or read a half-written file. Serialize that import only.
+_config_dir = pathlib.Path(os.environ.get(keys.CONFIG_PATH_ENV, '~/.libero')).expanduser()
+_config_dir.parent.mkdir(parents=True, exist_ok=True)
+with _config_dir.with_name(_config_dir.name + '.lock').open('w') as _config_lock:
+    fcntl.flock(_config_lock, fcntl.LOCK_EX)
+    import libero.libero  # noqa: F401  # pyright: ignore[reportMissingImports] -- on PYTHONPATH
+
+from libero.libero import benchmark, get_libero_path  # noqa: E402  # pyright: ignore[reportMissingImports]
+from libero.libero.envs import OffScreenRenderEnv  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 _IK_TOL = 1e-4
 
@@ -305,7 +316,7 @@ class LiberoEnv(EnvProtocol):
         # it does not converge. ``get_pose_error`` returns the world-frame error that matches the world-frame site
         # Jacobian; ``validate.py`` checks the ``_fk(_ik(pose))`` round-trip.
         target_pose = make_pose(target_pos, target_rot)
-        return arm_action.damped_least_squares_ik(
+        return mujoco_ik.damped_least_squares_ik(
             self._model,
             live_qpos=self._sim.data.qpos,
             site_id=self._eef_site_id,

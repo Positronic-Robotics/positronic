@@ -1,7 +1,7 @@
 """Check command conversions against a live MolmoSpaces scene.
 
 Checks FK against the measured grasp-site pose, IK on reachable targets, Cartesian hold,
-conversion of every canonical command type, and the arm error on a pose out of reach.
+conversion of every canonical command type, and the arm error on a refused command.
 
 Requires MolmoSpaces' environment, asset packs and a GL backend.
 Run with the launcher's subprocess environment::
@@ -70,9 +70,10 @@ def _check_ik_roundtrip(sim_env) -> None:
 def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
-    target = env.arm_action.wire_command_to_arm_action(
-        command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=(pos, rot)
+    target, refusal = env.arm_action.arm_targets(
+        command, sim_env._measured_arm_q(), ik=sim_env._ik, read_eef=lambda: (pos, rot)
     )
+    assert refusal is None, f'holding the measured pose was refused: {refusal}'
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
     assert drift.max() < 1e-3, f'holding the measured pose moved the joints by {drift.max()} rad'
     print(f'  cartesian hold: OK (max joint drift {drift.max():.2e} rad)')
@@ -94,9 +95,10 @@ def _check_every_canonical_command_converts(sim_env) -> None:
 
     for kind in protocol.CANONICAL_COMMAND_TYPES:
         command = {protocol.COMMAND_TYPE: kind, **payloads[kind]}
-        target = env.arm_action.wire_command_to_arm_action(
-            command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose()
+        target, refusal = env.arm_action.arm_targets(
+            command, measured, ik=sim_env._ik, read_eef=sim_env._measured_eef_pose
         )
+        assert refusal is None, f'{kind}: refused: {refusal}'
         target = np.asarray(target, dtype=np.float64)
         assert target.shape == measured.shape, f'{kind}: joint targets {target.shape} vs measured {measured.shape}'
         assert np.all(np.isfinite(target)), f'{kind}: non-finite joint targets {target}'
@@ -108,19 +110,23 @@ _OUT_OF_REACH = np.array([3.0, 0.0, 0.5])  # metres in the arm base frame, past 
 _HOLD_ATOL = 1e-2  # radians
 
 
-def _check_an_unreachable_pose_holds_the_arm_and_reports_errors(sim_env) -> None:
+def _check_a_refused_command_holds_the_arm_and_reports_errors(sim_env) -> None:
     measured = np.asarray(sim_env._measured_arm_q(), dtype=np.float64)
     pos, rot = sim_env._measured_eef_pose()
     here = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
     away = {**here, protocol.COMMAND_POSE: np.concatenate([_OUT_OF_REACH, rot.reshape(-1)])}
+    too_wide = {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(measured.size + 1)}
+    not_finite = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.full(measured.size, np.nan)}
     errors = []
-    for command in (away, away, here, away, away, here):
+    for command in (away, away, here, away, too_wide, here, not_finite, here):
         (slot,) = sim_env.step({0: protocol.single_arm_action(command, 0.0)})[protocol.SLOTS]
         errors.append(bool(slot[protocol.FRAME_OBS][protocol.OBS_ARM_ERROR]))
         drift = np.abs(np.asarray(sim_env._measured_arm_q(), dtype=np.float64) - measured).max()
         assert drift < _HOLD_ATOL, f'the arm moved {drift} rad while it held the measured pose'
-    assert errors == [True, True, False, True, True, False], f'arm errors {errors}, expected one on every refused step'
-    print('  unreachable pose: OK (the arm holds, every refusal reports an error)')
+    assert errors == [True, True, False, True, True, False, True, False], (
+        f'arm errors {errors}, expected one on every refused step'
+    )
+    print('  refused commands: OK (pose out of reach, delta too wide, target not finite: the arm holds, with an error)')
 
 
 def main() -> None:
@@ -150,7 +156,7 @@ def main() -> None:
         _check_ik_roundtrip(sim_env)
         _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env)
         _check_every_canonical_command_converts(sim_env)
-        _check_an_unreachable_pose_holds_the_arm_and_reports_errors(sim_env)
+        _check_a_refused_command_holds_the_arm_and_reports_errors(sim_env)
     finally:
         sim_env.close()
     print('all checks passed')

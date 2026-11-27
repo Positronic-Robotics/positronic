@@ -8,9 +8,9 @@ asserts the boundary mechanics. The server answers its own task list. The exact-
 the demo's opening joints and resolves the instruction that the task list states. Every recorded action
 round-trips the socket without a wire error. The demos' grasps show in ``gt_state`` as a gripper contact and a
 done ``object_grabbed`` condition, and a reset frame shows neither.
-Task success is reported but not asserted: the recording RoboLab ships at the pinned commit no longer reaches
-success under replay — its own ``examples/run_recorded.py`` reproduces the failure on the same box — so a
-success oracle needs a policy-driven differential, not a demo log.
+Task success is reported but not asserted. At the pinned commit the demo does not reach success here, and
+RoboLab's own faithful replay of it (``examples/run_recorded.py``, with the recorded env config and initial state)
+does not reach success either. So a success oracle needs a policy-driven differential, not a demo log.
 
 The demos come from a tiny committed ``.npz`` fixture — each demo's action log + initial scene state, not the
 multi-GB recording; ``make_fixture.py`` extracts it once from a RoboLab ``data.hdf5``. Run on a RoboLab-capable
@@ -29,7 +29,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.robolab import keys as robolab_keys
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import RobolabDroidAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # Keep re-sending the last action after the log ends, matching RoboLab's own replay tail: the final placement
@@ -79,6 +79,7 @@ def _replay_episode(
     out = conn.reset({
         robolab_keys.TOKEN_TASK: task,
         robolab_keys.TOKEN_INSTRUCTION_TYPE: _INSTRUCTION_TYPE,
+        robolab_keys.TOKEN_CAMERAS: robolab_keys.WRIST_LEFT,
         robolab_keys.TOKEN_STATE: initial_state,
     })
     resolved = out[protocol.FRAME_META][robolab_keys.META_INSTRUCTION]
@@ -103,7 +104,7 @@ def _replay_episode(
 
 def _check_task_list(conn: EnvConnection, task: str) -> str:
     """Assert the server answers its own task list, as the adapter reads it. Return the task's instruction."""
-    adapter = RobolabAdapter({})
+    adapter = RobolabDroidAdapter({})
     records = conn.tasks(spec(task=task, **{robolab_keys.SELECT_INSTRUCTION_TYPE: _INSTRUCTION_TYPE}))
     params = adapter.task_params(records)
     assert [p[eval_keys.TASK] for p in params] == [task], f'{task} asked for, {params} answered'
@@ -118,7 +119,7 @@ def run_replay(fixture_path: str, *, task: str) -> float:
     episodes = _load_fixture(fixture_path)
     successes = 0
     seen: set[str] = set()
-    with serve_robolab(robolab_keys.WRIST_LEFT) as (host, port):
+    with serve_robolab() as (host, port):
         conn = EnvConnection(host, port)
         try:
             instruction = _check_task_list(conn, task)

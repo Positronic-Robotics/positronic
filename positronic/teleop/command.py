@@ -1,6 +1,7 @@
 """The command ``positronic teleop``: the teleop service, the WebXR page of the headset, and the window."""
 
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -40,6 +41,8 @@ class PageState:
     live: tuple[str, ...] = ()
     shown: str | None = None
     chosen: str | None = None
+    # A sample that tracks a controller came within the silence limit of the service
+    tracked: bool = False
 
 
 # The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
@@ -48,10 +51,24 @@ HEADSET_CAMERA = 'headset_camera'
 # The field of a page input that asks for the text of the view with no camera image, so that a page that shows black
 # as clear shows only the text: true or false.
 TEXT_ONLY = 'headset_text_only'
+# The field of a page input that asks for the view of a running trial with no task: true or false.
+TASK_HIDDEN = 'headset_task_hidden'
 
 
 class _Headset(pimm.ControlSystem):
-    """Pass the samples of the headset to the service, and the view of the service to the headset."""
+    """Pass the samples of the headset to the service, and the view of the service to the headset.
+
+    The bridge sends the view on a new image of the shown camera or a change that the page asks for, and else once each
+    `REFRESH_PERIODS` view periods. It sends at most one view each view period, so a new image that comes sooner waits
+    for the next one, and the view then shows the newest image.
+    """
+
+    # How often the bridge logs the camera feeds that reach the service.
+    FEED_LOG_SEC = 10.0
+    # How often the bridge reads the headset and looks for a new image of the shown camera. It also wakes at each slot.
+    POLL_SEC = 0.005
+    # How many view periods the bridge waits with no new image or page change before it sends the view again.
+    REFRESH_PERIODS = 2
 
     def __init__(self, service: TeleopService, view_fps: float = 30.0):
         check_finite_positive(view_fps, 'view_fps')
@@ -62,12 +79,24 @@ class _Headset(pimm.ControlSystem):
         # What the headset page asks for, as a JSON object
         self.page_input = pimm.ControlSystemReceiver(self)
         self._text_only = False
+        self._task_hidden = False
         self.view = pimm.ControlSystemEmitter(self)
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
 
+    def _log_feeds(self) -> None:
+        feeds = self._service.camera_feeds()
+        if feeds:
+            parts = [f'{name} at {f.rate_hz:.1f} Hz, the last {f.age_sec:.2f} s ago' for name, f in feeds.items()]
+            logger.info('Camera images: %s', '; '.join(parts))
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        next_log = clock.now() + self.FEED_LOG_SEC
+        last_view, sent_count, page_changed = -math.inf, None, False
         while not should_stop.value:
+            if clock.now() >= next_log:
+                next_log = clock.now() + self.FEED_LOG_SEC
+                self._log_feeds()
             positions = pimm.read_updated(self.controller_positions)
             if positions is not None:
                 buttons = self.buttons.read()
@@ -84,14 +113,27 @@ class _Headset(pimm.ControlSystem):
                         logger.warning('The headset page chose no camera: %s', refused)
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
-            self.view.emit(self._service.view(camera=not self._text_only))
-            state, cameras = self._service.state(), self._service.cameras()
-            self.page_state.emit(
-                asdict(
-                    PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen)
-                )
-            )
-            yield pimm.Sleep(self._view_period_sec)
+            if page_input is not None and TASK_HIDDEN in page_input.data:
+                self._task_hidden = page_input.data[TASK_HIDDEN] is True
+            page_changed = page_changed or page_input is not None
+            image_count = self._service.shown_image_count()
+            now = clock.now()
+            changed = image_count != sent_count or page_changed
+            if now >= last_view + self._view_period_sec and (
+                changed or now >= last_view + self.REFRESH_PERIODS * self._view_period_sec
+            ):
+                last_view, sent_count, page_changed = now, image_count, False
+                self._send_view()
+            next_slot = last_view + self._view_period_sec
+            yield pimm.Sleep(min(self.POLL_SEC, next_slot - now) if next_slot > now else self.POLL_SEC)
+
+    def _send_view(self) -> None:
+        self.view.emit(self._service.view(camera=not self._text_only, task=not self._task_hidden))
+        state, cameras = self._service.state(), self._service.cameras()
+        page_state = PageState(
+            state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen, state.tracked
+        )
+        self.page_state.emit(asdict(page_state))
 
 
 class Notice(Protocol):
@@ -199,7 +241,7 @@ def serve(
     notice: Notice | None,
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
-    press_threshold: float = 0.6,
+    hold_threshold: float = 0.6,
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -216,7 +258,14 @@ def serve(
     ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
     teleoperator faces does not count; it puts the axes of the controller in the frame of the headset.
     ``--controller_axes=None`` counts the moves in the axes of the headset.
+    ``webxr.stale_limit`` must not exceed ``silence_limit``: a message that comes later than the silence limit finds
+    control off, so its presses must do nothing.
     """
+    if webxr.stale_limit > silence_limit:
+        raise ValueError(
+            f'the stale_limit of the headset must not exceed silence_limit, got {webxr.stale_limit:g} s and '
+            f'{silence_limit:g} s'
+        )
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
     # lock out `cfg.policy.teleop`, which sends none.
@@ -235,7 +284,7 @@ def serve(
         ready_limit,
         silence_limit,
         hold_sec,
-        press_threshold,
+        hold_threshold,
         auth_token=auth_token,
         cameras=cameras,
         controller_axes=controller_axes,

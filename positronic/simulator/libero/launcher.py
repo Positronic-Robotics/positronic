@@ -13,6 +13,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.libero import keys
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -38,7 +39,7 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     env = {
         **os.environ,
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_ensure_libero_src())]),
-        'LIBERO_CONFIG_PATH': str(_LIBERO_CONFIG),
+        keys.CONFIG_PATH_ENV: str(_LIBERO_CONFIG),
     }
     # Pin the renderer instead of leaving it to robosuite, which reaches for EGL only while its
     # ``MUJOCO_GPU_RENDERING`` macro is on and otherwise falls back to GLFW — and GLFW wants a display no headless

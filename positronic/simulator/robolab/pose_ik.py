@@ -2,9 +2,12 @@
 
 Ports ``solve_pose_ik`` of positronic-franka ``src/pose_ik.hpp``, the IK of the FR3 driver: each joint stays within
 its limits and within ``MAX_JOINT_STEP`` of the measured joints, the move is damped near a singularity, and the null
-space pulls the joints towards ``POSTURE_JOINTS``. Poses are in the ``panda_link0`` frame. Each Gauss-Newton step
-backtracks until it lowers the cost: without that, the steps near the stretched-arm singularity alternate between two
-poses, and so do the joint targets of successive control steps.
+space pulls the joints towards ``POSTURE_JOINTS``. The arm links stay apart by the FR3 capsule model of
+``src/self_collision.hpp``. At each checked point of the move, each checked pair keeps its floor:
+``SELF_COLLISION_CLEARANCE``, or its own clearance at the start of the move when that is less. Between two checked
+points a pair's clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of its floor. Poses are in the
+``panda_link0`` frame. Each Gauss-Newton step backtracks until it lowers the cost: without that, the steps near the
+stretched-arm singularity alternate between two poses, and so do the joint targets of successive control steps.
 
 Two parts are not in the driver. A joint that the physics pushed past a limit gets a target at that limit. The solve
 keeps j4 at or below ``ELBOW_STRETCHED``.
@@ -14,16 +17,19 @@ This module must work in an isolated interpreter without Positronic installed.
 
 import numpy as np
 
-# Mirrors of the positronic-franka IK constants, in src/pose_ik.hpp.
+# Mirrors of the positronic-franka IK constants, in src/pose_ik.hpp and src/self_collision.hpp.
 DAMPING_SINGULAR_VALUE = 0.1
 MAX_JOINT_STEP = 0.5
 POSTURE_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 POSTURE_PULL_PER_STEP = 0.02
-_POSTURE_WEIGHT = 0.1
-_ITERATIONS = 60
-_STEP_TOLERANCE = 1e-9
-_LEVENBERG = 1e-4
-_LINE_SEARCH_STEPS = 20
+# The least clearance between two checked links at each checked point of the move to an answer. The FR3
+# self-collision reflex stopped moves at 0.064 m and less.
+SELF_COLLISION_CLEARANCE = 0.09
+# Below this clearance between two checked links, the solve pushes them apart. It is above SELF_COLLISION_CLEARANCE,
+# so the push holds the answer clear of that floor.
+SELF_COLLISION_PUSH_CLEARANCE = 0.10
+# How far below its floor the clearance may fall between two checked points of a move.
+SELF_COLLISION_PATH_TOLERANCE = 0.001
 _ACTIVE_SET_PASSES = 64
 # The j4 of the longest shoulder-wrist distance: the a = 0.0825 offsets of joints 4 and 5 bend the stretched arm.
 ELBOW_STRETCHED = -(np.arctan(0.0825 / 0.316) + np.arctan(0.0825 / 0.384))
@@ -41,14 +47,25 @@ _DH = np.array([
 ])
 
 
-def _dh_transform(a: float, d: float, alpha: float, theta: float) -> np.ndarray:
+def _dh_transform(a: float, d: float, alpha: float, theta: np.ndarray) -> np.ndarray:
+    """The ``... x 4 x 4`` transforms for the joint angles ``theta`` of shape ``...``."""
     ca, sa, ct, st = np.cos(alpha), np.sin(alpha), np.cos(theta), np.sin(theta)
-    return np.array([
-        [ct, -st, 0.0, a],
-        [st * ca, ct * ca, -sa, -d * sa],
-        [st * sa, ct * sa, ca, d * ca],
-        [0.0, 0.0, 0.0, 1.0],
-    ])
+    t = np.zeros((*np.shape(theta), 4, 4))
+    t[..., 0, 0], t[..., 0, 1], t[..., 0, 3] = ct, -st, a
+    t[..., 1, 0], t[..., 1, 1], t[..., 1, 2], t[..., 1, 3] = st * ca, ct * ca, -sa, -d * sa
+    t[..., 2, 0], t[..., 2, 1], t[..., 2, 2], t[..., 2, 3] = st * sa, ct * sa, ca, d * ca
+    t[..., 3, 3] = 1.0
+    return t
+
+
+def link_frames(q: np.ndarray) -> np.ndarray:
+    """The ``... x 9 x 4 x 4`` poses of link0 to link7 and of the flange at the ``... x 7`` joints ``q``."""
+    frames = np.empty((*q.shape[:-1], 9, 4, 4))
+    frames[..., 0, :, :] = np.eye(4)
+    angles = np.concatenate([q, np.zeros((*q.shape[:-1], 1))], axis=-1)
+    for link, (a, d, alpha) in enumerate(_DH):
+        frames[..., link + 1, :, :] = frames[..., link, :, :] @ _dh_transform(a, d, alpha, angles[..., link])
+    return frames
 
 
 def panda_flange(q: np.ndarray) -> np.ndarray:
@@ -61,14 +78,9 @@ def tool_kinematics(q: np.ndarray, flange_to_tool: np.ndarray) -> tuple[np.ndarr
 
     ``flange_to_tool`` is the tool pose in the flange frame.
     """
-    pose = np.eye(4)
-    axes, origins = [], []
-    for (a, d, alpha), theta in zip(_DH, [*q, 0.0], strict=True):
-        pose = pose @ _dh_transform(a, d, alpha, theta)
-        axes.append(pose[:3, 2].copy())
-        origins.append(pose[:3, 3].copy())
-    tool = pose @ flange_to_tool
-    axes, origins = np.array(axes[:7]), np.array(origins[:7])
+    frames = link_frames(q)
+    tool = frames[8] @ flange_to_tool
+    axes, origins = frames[1:8, :3, 2], frames[1:8, :3, 3]
     linear = np.cross(axes, tool[:3, 3] - origins)
     return tool, np.vstack([linear.T, axes.T])
 
@@ -133,12 +145,182 @@ def minimize_on_box(h: np.ndarray, g: np.ndarray, lo: np.ndarray, hi: np.ndarray
     return d
 
 
+# The FR3 self-collision capsules of franka_description (robots/common/franka_arm.xacro, the *_sc links). Each row is
+# the link (0 is the base), the centre and the unit axis in link axes, the length between the two sphere centres, and
+# the radius, in m. link7's capsules are in axes turned pi/4 about its z axis. The gripper on the flange has no capsule.
+_X, _Z, _LINK7_X = (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (np.cos(np.pi / 4), np.sin(np.pi / 4), 0.0)
+_CAPSULES = (
+    (0, (-0.075, 0.0, 0.06), _X, 0.03, 0.06),
+    (1, (0.0, 0.0, -0.1915), _Z, 0.283, 0.06),
+    (2, (0.0, 0.0, 0.0), _Z, 0.12, 0.06),
+    (3, (0.0, 0.0, -0.145), _Z, 0.15, 0.06),
+    (4, (0.0, 0.0, 0.0), _Z, 0.12, 0.06),
+    (5, (0.0, 0.0, -0.26), _Z, 0.10, 0.06),
+    (5, (0.0, 0.08, -0.13), _Z, 0.14, 0.025),
+    (6, (0.0, 0.0, -0.03), _Z, 0.08, 0.05),
+    (7, (0.0, 0.0, 0.01), _Z, 0.14, 0.04),
+    (7, (0.06 * _LINK7_X[0], 0.06 * _LINK7_X[1], 0.082), _LINK7_X, 0.01, 0.03),
+)
+_CAPSULE_LINK, _CAPSULE_CENTER, _CAPSULE_AXIS, _CAPSULE_LENGTH, _CAPSULE_RADIUS = map(
+    np.array, zip(*_CAPSULES, strict=True)
+)
+_CAPSULE_HALF_AXIS = 0.5 * _CAPSULE_LENGTH[:, None] * _CAPSULE_AXIS  # from the centre to one sphere centre
+# The two sphere centres of each capsule, as homogeneous points in link axes: 10 x 4 x 2.
+_CAPSULE_ENDS = np.ones((len(_CAPSULES), 4, 2))
+_CAPSULE_ENDS[:, :3] = np.stack([_CAPSULE_CENTER - _CAPSULE_HALF_AXIS, _CAPSULE_CENTER + _CAPSULE_HALF_AXIS], axis=-1)
+
+# The arm link pairs that franka_description's SRDF checks.
+SELF_COLLISION_PAIRS = ((0, 5), (0, 6), (0, 7), (1, 5), (1, 6), (1, 7), (2, 5), (2, 7))
+# Each row is the index of a checked pair, a capsule of its first link, and a capsule of its second link.
+_CAPSULE_PAIRS = np.array([
+    (pair, a, b)
+    for pair, (link_a, link_b) in enumerate(SELF_COLLISION_PAIRS)
+    for a in np.flatnonzero(_CAPSULE_LINK == link_a)
+    for b in np.flatnonzero(_CAPSULE_LINK == link_b)
+])
+_ROWS_OF_PAIR = [np.flatnonzero(_CAPSULE_PAIRS[:, 0] == pair) for pair in range(len(SELF_COLLISION_PAIRS))]
+
+
+def _dot(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """The dot products of ``x`` and ``y`` over their last axis."""
+    return np.einsum('...k,...k->...', x, y)
+
+
+def closest_points_of_segments(
+    p1: np.ndarray, q1: np.ndarray, p2: np.ndarray, q2: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The closest points of the ``... x 3`` segments ``[p1, q1]`` and ``[p2, q2]``, of a length above zero.
+
+    Ericson, Real-Time Collision Detection, 5.1.9.
+    """
+    d1, d2, r = q1 - p1, q2 - p2, p1 - p2
+    a, e, f, c, b = _dot(d1, d1), _dot(d2, d2), _dot(d2, r), _dot(d1, r), _dot(d1, d2)
+    denom = a * e - b * b
+    s = np.clip(np.divide(b * f - c * e, denom, out=np.zeros_like(denom), where=denom > 1e-12), 0.0, 1.0)
+    t = (b * s + f) / e
+    s = np.where(t < 0.0, np.clip(-c / a, 0.0, 1.0), np.where(t > 1.0, np.clip((b - c) / a, 0.0, 1.0), s))
+    t = np.clip(t, 0.0, 1.0)
+    return p1 + s[..., None] * d1, p2 + t[..., None] * d2
+
+
+def _capsule_pair_points(frames: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """For each row of ``_CAPSULE_PAIRS``, the closest points of the two capsule axes and the clearance of the capsules.
+
+    ``frames`` is the ``... x 9 x 4 x 4`` output of ``link_frames``.
+    """
+    # The two sphere centres of each capsule in the base frame, each ``... x 10 x 3``.
+    first, second = np.moveaxis(frames[..., _CAPSULE_LINK, :3, :] @ _CAPSULE_ENDS, -1, 0)
+    _, a, b = _CAPSULE_PAIRS.T
+    near_a, near_b = closest_points_of_segments(
+        first[..., a, :], second[..., a, :], first[..., b, :], second[..., b, :]
+    )
+    gap = near_a - near_b
+    clearance = np.sqrt(_dot(gap, gap)) - _CAPSULE_RADIUS[a] - _CAPSULE_RADIUS[b]
+    return near_a, near_b, clearance
+
+
+def _speed_along(frames: np.ndarray, links: np.ndarray, points: np.ndarray, directions: np.ndarray) -> np.ndarray:
+    """How fast each point, fixed to its link in ``links``, moves along its direction, per radian of each joint."""
+    axes, origins = frames[1:8, :3, 2], frames[1:8, :3, 3]
+    speed = np.einsum('pk,pjk->pj', directions, np.cross(axes, points[:, None, :] - origins))
+    return np.where(np.arange(7) < links[:, None], speed, 0.0)
+
+
+def self_collision_clearances(q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The clearance of each pair in ``SELF_COLLISION_PAIRS`` at joints ``q``, and its ``8 x 7`` gradient in the joints.
+
+    The clearance of a pair is that of its closest two capsules. It is negative when the capsules overlap.
+    """
+    frames = link_frames(q)
+    near_a, near_b, clearance = _capsule_pair_points(frames)
+    closest = [rows[np.argmin(clearance[rows])] for rows in _ROWS_OF_PAIR]
+    near_a, near_b = near_a[closest], near_b[closest]
+    _, a, b = _CAPSULE_PAIRS[closest].T
+    gap = near_a - near_b
+    distance = np.linalg.norm(gap, axis=-1, keepdims=True)
+    # Crossed axes give no direction to push apart; the solve keeps 0.09 m, far from that depth.
+    normal = np.divide(gap, distance, out=np.zeros_like(gap), where=distance > 1e-9)
+    speed_a = _speed_along(frames, _CAPSULE_LINK[a], near_a, normal)
+    speed_b = _speed_along(frames, _CAPSULE_LINK[b], near_b, normal)
+    return clearance[closest], speed_a - speed_b
+
+
+def pair_clearances(q: np.ndarray) -> np.ndarray:
+    """The ``... x 8`` clearance of each pair in ``SELF_COLLISION_PAIRS`` at the ``... x 7`` joints ``q``."""
+    clearance = _capsule_pair_points(link_frames(q))[2]
+    return np.stack([clearance[..., rows].min(axis=-1) for rows in _ROWS_OF_PAIR], axis=-1)
+
+
+def _clearance_rate_bounds() -> np.ndarray:
+    """For each joint, the most that the clearance of a checked pair changes per radian of that joint, at any joints.
+
+    A joint turns a point at most its distance from the joint origin per radian. The DH chain from the joint origin to
+    the link origin, plus the farthest capsule end from the link origin, bounds that distance. A joint before both
+    links of a pair turns the two links together and does not change their clearance.
+    """
+    bound = np.zeros(7)
+    for link_a, link_b in SELF_COLLISION_PAIRS:
+        for capsule in np.flatnonzero(_CAPSULE_LINK == link_b):
+            center, half_axis = _CAPSULE_CENTER[capsule], _CAPSULE_HALF_AXIS[capsule]
+            reach = max(np.linalg.norm(center - half_axis), np.linalg.norm(center + half_axis))
+            for j in range(link_b - 1, link_a - 1, -1):  # joint j has its origin at link j + 1
+                bound[j] = max(bound[j], reach)
+                reach += np.hypot(_DH[j, 0], _DH[j, 1])  # from link j + 1 to link j
+    return bound
+
+
+CLEARANCE_RATE_BOUNDS = _clearance_rate_bounds()
+
+
+_LEAST_PATH_SAMPLES = 16
+_PATH_BISECTIONS = 8
+
+
+def stop_before_self_collision(start: np.ndarray, end: np.ndarray) -> np.ndarray:
+    """The point of the move from ``start`` to ``end`` farthest along it up to which each checked pair keeps its floor.
+
+    The floor of a pair is ``SELF_COLLISION_CLEARANCE``, or its own clearance at ``start`` when that is less. Between
+    two checked points a pair's clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of its floor: the points are
+    close enough for the rate bound of each joint (``CLEARANCE_RATE_BOUNDS``).
+    """
+    move = end - start
+    # The most a pair's clearance changes over the whole move. Between two points 1 / samples apart that both keep its
+    # floor, the clearance falls at most change_over_move / (2 * samples) below that floor.
+    change_over_move = CLEARANCE_RATE_BOUNDS @ np.abs(move)
+    samples = max(_LEAST_PATH_SAMPLES, int(np.ceil(change_over_move / (2 * SELF_COLLISION_PATH_TOLERANCE))))
+    floors = np.minimum(SELF_COLLISION_CLEARANCE, pair_clearances(start))
+    parts = np.arange(1, samples + 1) / samples
+    clear = np.all(pair_clearances(start + parts[:, None] * move) >= floors, axis=-1)
+    if clear.all():
+        return end
+    first_blocked = int(np.argmin(clear))
+    safe, blocked = (parts[first_blocked - 1] if first_blocked else 0.0), parts[first_blocked]
+    for _ in range(_PATH_BISECTIONS):
+        mid = 0.5 * (safe + blocked)
+        if np.all(pair_clearances(start + mid * move) >= floors):
+            safe = mid
+        else:
+            blocked = mid
+    return start + safe * move
+
+
+_POSTURE_WEIGHT = 0.1
+# 1 cm inside SELF_COLLISION_PUSH_CLEARANCE costs as much as 20 cm of tool error.
+_COLLISION_WEIGHT = 20.0
+_ITERATIONS = 60
+_STEP_TOLERANCE = 1e-9
+_LEVENBERG = 1e-4
+_LINE_SEARCH_STEPS = 20
+
+
 def joint_targets(
     target: np.ndarray, q0: np.ndarray, flange_to_tool: np.ndarray, lower: np.ndarray, upper: np.ndarray
 ) -> np.ndarray:
-    """Joints that put the tool as close as the bounds allow to the ``4 x 4`` pose ``target``.
+    """Joints that put the tool as close as the bounds and the self-collision clearance allow to the ``4 x 4`` pose
+    ``target``.
 
-    ``q0`` is the measured joints, and ``lower`` and ``upper`` are the joint limits.
+    ``q0`` is the measured joints, and ``lower`` and ``upper`` are the joint limits. The move from ``q0``, or from its
+    nearest point within the bounds, keeps the floor of ``stop_before_self_collision``.
     """
     # Past ELBOW_STRETCHED the shoulder-wrist distance falls as j4 rises. A solve there pins j4 at its upper limit for a
     # target that needs a shorter arm, and the folded elbow reaches every distance that the stretched one does.
@@ -161,19 +343,43 @@ def joint_targets(
     lo = np.clip(q0 - MAX_JOINT_STEP, lower, folded_upper)
     hi = np.clip(q0 + MAX_JOINT_STEP, lower, folded_upper)
 
+    def collision_push(q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """How far each checked pair is inside ``SELF_COLLISION_PUSH_CLEARANCE``, and the gradient of its clearance."""
+        clearance, gradient = self_collision_clearances(q)
+        return np.minimum(0.0, clearance - SELF_COLLISION_PUSH_CLEARANCE), gradient
+
     def cost(q: np.ndarray) -> float:
         e = pose_error(tool_kinematics(q, flange_to_tool)[0], target)
-        return float(e @ e + mu_sq * (q - q0) @ (q - q0) + w_sq * (null_direction @ (q - q0) - posture_target) ** 2)
+        push = collision_push(q)[0]
+        return float(
+            e @ e
+            + mu_sq * (q - q0) @ (q - q0)
+            + w_sq * (null_direction @ (q - q0) - posture_target) ** 2
+            + _COLLISION_WEIGHT**2 * push @ push
+        )
 
-    q = np.clip(q0, lo, hi)
+    start = np.clip(q0, lo, hi)
+    q = start
     q_cost = cost(q)
     eye = np.eye(len(q0))
     for _ in range(_ITERATIONS):
         tool, jacobian = tool_kinematics(q, flange_to_tool)
         e = pose_error(tool, target)
         posture_residual = null_direction @ (q - q0) - posture_target
-        h = jacobian.T @ jacobian + (mu_sq + _LEVENBERG) * eye + w_sq * np.outer(null_direction, null_direction)
-        g = jacobian.T @ e + mu_sq * (q - q0) + w_sq * posture_residual * null_direction
+        push, push_gradient = collision_push(q)
+        pushed = push_gradient[push < 0.0]
+        h = (
+            jacobian.T @ jacobian
+            + (mu_sq + _LEVENBERG) * eye
+            + w_sq * np.outer(null_direction, null_direction)
+            + _COLLISION_WEIGHT**2 * pushed.T @ pushed
+        )
+        g = (
+            jacobian.T @ e
+            + mu_sq * (q - q0)
+            + w_sq * posture_residual * null_direction
+            + _COLLISION_WEIGHT**2 * push @ push_gradient
+        )
         d = minimize_on_box(h, g, lo - q, hi - q)
         if np.linalg.norm(d) < _STEP_TOLERANCE:
             break
@@ -186,4 +392,4 @@ def joint_targets(
         else:
             break
         q, q_cost = trial, trial_cost
-    return q
+    return stop_before_self_collision(start, q)

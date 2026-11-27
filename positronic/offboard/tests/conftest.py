@@ -228,18 +228,21 @@ class FakeClock:
         self.now += after
         return True
 
-    def connection(self, *answers: tuple[float, bytes | Exception]) -> wire.ClientConnection:
-        """A connection whose peer sends each of ``answers`` after its delay, counted from the previous one."""
-        return _ConnectionOnAFakeClock(self, list(answers))
+    def connection(self, *answers: tuple[float, bytes | Exception], send_s: float = 0.0) -> wire.ClientConnection:
+        """A connection whose peer sends each of ``answers`` after its delay, counted from the previous one, and
+        takes ``send_s`` seconds to read each message sent to it."""
+        return _ConnectionOnAFakeClock(self, list(answers), send_s)
 
 
 class _ConnectionOnAFakeClock(wire.ClientConnection):
-    def __init__(self, clock: FakeClock, answers: list[tuple[float, bytes | Exception]]):
+    def __init__(self, clock: FakeClock, answers: list[tuple[float, bytes | Exception]], send_s: float):
         self._clock = clock
         self._answers = answers
+        self._send_s = send_s
 
-    def send(self, message: bytes) -> None:
-        pass
+    def send(self, message: bytes, timeout: float | None = None) -> None:
+        if not self._clock.answer(self._send_s, timeout):
+            raise TimeoutError('the peer read nothing within the timeout')
 
     def recv(self, timeout: float | None = None) -> bytes:
         after, answer = self._answers[0]

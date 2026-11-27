@@ -3,7 +3,7 @@
 import mujoco
 import numpy as np
 
-from positronic.simulator.env_server import arm_action
+from positronic.simulator.env_server import mujoco_ik
 from positronic.simulator.env_server.tests.mujoco_chain import hinge_chain_xml
 
 _JOINTS = 6
@@ -41,7 +41,7 @@ def _solve(model: mujoco.MjModel, data: mujoco.MjData, target_pos: np.ndarray, t
         mujoco.mju_quat2Vel(rotation_error, quat, 1.0)
         return np.concatenate([target_pos - site_pos, rotation_error])
 
-    return arm_action.damped_least_squares_ik(
+    return mujoco_ik.damped_least_squares_ik(
         model,
         live_qpos=data.qpos,
         site_id=mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, 'arm_grasp_site'),

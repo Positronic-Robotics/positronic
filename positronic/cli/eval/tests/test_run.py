@@ -16,7 +16,14 @@ import pos3
 import pytest
 from eval_vocabulary.episode import ABC_REWARD_SIGNAL, SIGNAL_FILE_SUFFIX, SUBTASK_SIGNAL
 from eval_vocabulary.timeline import HARNESS_WORLD
-from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
+from positronic_evals.evals import (
+    MOLMO_EPISODE_INDEX_KEY,
+    MOLMO_SCORING,
+    MOLMO_STRICT_SUCCESS_PROFILE,
+    PUBLIC_EVALS,
+    EvalRef,
+    public_eval,
+)
 from positronic_evals.labels import (
     ABC_LABELER,
     MOLMO_LABELER,
@@ -50,6 +57,7 @@ from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 from positronic.tests.testing_inference import make_embodiment
 
 
@@ -336,6 +344,10 @@ def test_a_public_eval_binds_its_arguments_on_the_installed_positronic(name: str
 
 def test_the_molmo_trial_key_of_a_public_eval_is_the_one_molmo_spaces_reads():
     assert MOLMO_EPISODE_INDEX_KEY == molmo_keys.EPISODE_INDEX
+
+
+def test_the_strict_profile_of_a_public_eval_is_the_one_molmo_spaces_judges_by():
+    assert SuccessProfile(MOLMO_STRICT_SUCCESS_PROFILE) is SuccessProfile.STRICT_V1
 
 
 def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):

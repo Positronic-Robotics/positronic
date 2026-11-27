@@ -104,6 +104,8 @@ class Refusal(Enum):
     FINAL = 'final'  # a permanent refusal; surface at once
     # Nothing answered: no connection, or none before the timeout or the close. Retry to the deadline.
     SILENT = 'silent'
+    # The resolver had no answer for the host name yet. Retry for a limited time, then surface.
+    UNRESOLVED = 'unresolved'
 
 
 def retry_pauses() -> Iterator[float]:
@@ -176,11 +178,11 @@ class ClientConnection(abc.ABC):
     """A client's end of one open session."""
 
     @abc.abstractmethod
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         """Send one message, and return once the wire has written it.
 
-        The caller starts the answer's timeout when this returns, so a send that returns early bills its
-        own upload to that timeout. Raises ``PeerDisconnected`` once the session has ended.
+        Raises ``TimeoutError`` when the wire cannot write it within ``timeout`` seconds, and the session is then
+        unusable. Raises ``PeerDisconnected`` once the session has ended.
         """
 
     @abc.abstractmethod

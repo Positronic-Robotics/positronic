@@ -818,64 +818,6 @@
                 }
             }
         ],
-        "./positronic/data_collection.py": [
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 51,
-                    "endColumn": 59,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 36,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 49,
-                    "endColumn": 54,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 73,
-                    "endColumn": 99,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 33,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 66,
-                    "endColumn": 71,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/dataset/episode.py": [
             {
                 "code": "reportIncompatibleMethodOverride",
@@ -2198,22 +2140,6 @@
         ],
         "./positronic/simulator/libero/env.py": [
             {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 5,
-                    "endColumn": 18,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 5,
-                    "endColumn": 23,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 25,
@@ -2558,40 +2484,6 @@
                 }
             }
         ],
-        "./positronic/tests/test_data_collection.py": [
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 11,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 41,
-                    "endColumn": 56,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 84,
-                    "endColumn": 88,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 84,
-                    "endColumn": 88,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/tests/test_inference_integration.py": [
             {
                 "code": "reportArgumentType",
@@ -2658,16 +2550,6 @@
                 "range": {
                     "startColumn": 34,
                     "endColumn": 39,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/utils/buttons.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 77,
                     "lineCount": 1
                 }
             }

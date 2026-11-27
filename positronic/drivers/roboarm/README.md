@@ -52,7 +52,8 @@ pins the YAM constant to poses of the earlier model.
 | --- | --- | --- |
 | Franka FR3 (`franka.py`) | `gripper` | The driver publishes the flange pose times the 2F-85 grip offset, and solves IK at the flange. The `F_T_EE` setting in Desk changes no pose. |
 | MuJoCo panda (`simulator/mujoco/sim.py`) | `gripper` | The site in `panda.xml` and `franka_table.xml`. The sim adds it to an older scene that lacks it. |
-| RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabDroidAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| RoboLab YAM (`simulator/robolab/yam_spec.py`) | `gripper` | Each arm of the two-arm model carries a `<side>_gripper` link at the site of the i2rt model. The env reports every pose in the world frame of the rig recordings. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
 | LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
 | YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, 40.8 mm off the wrist axis, where the fingertips of the crank gripper meet. The linear gripper of the model closes on the axis. Each mount puts the arm-base frame 9.5 mm below the one of ABC's arm, so the same joints report the same `ee_pose` in both. The single arm is mounted there too, and records its mount. |
@@ -72,9 +73,9 @@ An arm whose controller runs settings of its own emits the values that the contr
 that emitter in `arm_meta_sources`, keyed by the arm's joint signal, and the harness records each key as
 `{key: {joint signal: value}}`.
 
-A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` an
+For a remote benchmark env that measures somewhere else, give `WireCommandAdapter` an
 `env_control_frame` — the transform from `gripper` to what the env uses — and it converts both paths
-(`RobolabAdapter`).
+(`RobolabDroidAdapter`).
 
 An arm mounted away from the world origin reports poses in its own base frame, and the model carries no base
 pose, so nothing downstream can reconcile the two. Keep the report and the URDF in the same frame.

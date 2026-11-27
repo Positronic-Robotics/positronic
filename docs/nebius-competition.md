@@ -315,6 +315,10 @@ plays the competition eval against the server in the image over the network.
   `"compress_images": true` and decodes each `__jpeg__` envelope
   ([Serialization](https://github.com/Positronic-Robotics/positronic/blob/main/docs/connect-your-model.md#serialization)).
   A protocol v3 server ends the client stack that it declares with `component("encode_images", quality=90)`.
+- A server that reads the arm pose or sends pose commands states its end-effector frame as `ee_frames` in its
+  metadata ([State the end-effector frame](https://github.com/Positronic-Robotics/positronic/blob/main/docs/connect-your-model.md#state-the-end-effector-frame)).
+  A server that states no frame gets no `robot_state.ee_pose`. The code that reads the pose then fails with
+  `KeyError('robot_state.ee_pose')`, and the run fails with `policy_inference_crash`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
 - The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
   of the card's compute.
@@ -324,8 +328,9 @@ plays the competition eval against the server in the image over the network.
   for CUDA 12.8 or newer (`cu128`): the PyPI build of torch 2.7.1 stops at `sm_90`. To check, run
   `python -c "import torch; print(torch.cuda.get_arch_list())"` in the image on a machine with a GPU. The
   list must contain `sm_120`.
-- The platform runs the image digest that it found when you submitted. It pulls that digest from your
-  registry when the run starts, and it keeps no copy of the image.
+- The platform runs the image digest that it found when you submitted. It pulls a public image from your
+  registry when the run starts. It copies a private image when you submit, and the run pulls that copy
+  ([A private image](#a-private-image)).
 - The [rules](https://competition.phail.ai/rules#limits) give the other limits on
   the image.
 
@@ -373,17 +378,24 @@ What the platform does with your credential:
 
 - When you submit, the platform reads your image with the credential. If your registry refuses it, the
   submission fails with `image_unpullable`, and the submission counts.
-- The platform keeps the credential as a secret for that one submission. No API response and no log
-  shows the password.
-- When the run starts, the machine that runs your image logs in to your registry with the credential. It
-  pulls the image, and then it logs out. Your container never gets the credential.
-- The platform deletes the credential when the submission ends. The secret store keeps a deleted secret
-  until it purges it.
-- Only the services that start the run, the machine that runs your image and the platform administrators
-  can read the credential.
-- Keep the image and the credential valid until the submission ends. Then you can revoke the token.
+- The platform answers the submission after that read. Then it copies the image into a private registry
+  of its own, with the same credential. The submission stays `pending` while the copy runs, and the run
+  starts after the copy.
+- The copy keeps the digest you pinned. For a multi-platform image, the platform copies every platform.
+- The platform uses the password only at submission and during the copy. It keeps the password in memory
+  only, and discards it when the copy ends. No API response and no log shows the password.
+- The run pulls the copy. It does not use your registry or your credential. Your container never gets a
+  registry credential.
+- The platform deletes the copy after the submission ends. Only the services that start the run, the
+  machine that runs your image and the platform administrators can read the copy.
+- Keep the credential valid until the copy ends, not only at submission. A large image takes longer to
+  copy. A submission is `running` only after its copy ends. Then you can revoke the token or let it expire.
+- If the copy fails, for any reason, the submission ends `errored` with `internal_error`, and it does not
+  count. Submit again with a new transaction key.
 - A retry with the same `--transaction-key` returns the first submission, also with a new credential. To
   use a new credential, use a new transaction key.
+- For an image in Amazon ECR, use the user name `AWS` and a password from `aws ecr get-login-password`:
+  [An image in Amazon ECR](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#an-image-in-amazon-ecr).
 
 ## Build and test on a Nebius VM
 
@@ -592,7 +604,7 @@ your submissions:
 | `image_unpullable` | Is the image public, or does your credential read it? Is the digest correct? |
 | `image_too_large` | the compressed size of the image, against the limit in the rules |
 | `policy_setup_crash` | `policy_log`: the server did not start, or it refused the token of the run |
-| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer |
+| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer. `KeyError('robot_state.ee_pose')` in `reason` means that the server states no end-effector frame |
 | `policy_oom` | `diagnostics.container_oom_killed`, and the size of the model against the memory limits |
 | `latency_budget_exceeded` | the inference time for each step |
 | `wall_clock_exceeded` | the run went past its time limit |

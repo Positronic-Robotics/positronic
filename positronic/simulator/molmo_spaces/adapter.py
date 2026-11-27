@@ -42,7 +42,11 @@ class MolmoAdapter(WireCommandAdapter):
     _DIMENSION_KEYS = dict(zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True))
 
     def __init__(
-        self, cameras: Mapping[str, tuple[str, ...]], with_right_shoulder: bool, with_object_image_points: bool = True
+        self,
+        cameras: Mapping[str, tuple[str, ...]],
+        with_right_shoulder: bool,
+        with_object_image_points: bool = True,
+        hook_file: mapping.HookFile | None = None,
     ):
         # The env measures and drives at the 2F-85 grip point of this model, ``GRIPPER_SITE``, as the rig does.
         self.robot_model = bundled_franka_model()
@@ -50,6 +54,7 @@ class MolmoAdapter(WireCommandAdapter):
         self._cameras = cameras
         self._with_right_shoulder = with_right_shoulder
         self._with_object_image_points = with_object_image_points
+        self._hook_file = hook_file
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
@@ -80,13 +85,32 @@ class MolmoAdapter(WireCommandAdapter):
             ),
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
             mapping.WITH_OBJECT_IMAGE_POINTS: self._with_object_image_points,
+            mapping.TOKEN_SUCCESS_PROFILE: params[molmo_keys.SUCCESS_PROFILE],
+            **(self._hook_file.request() if self._hook_file is not None else {}),
         }
+
+    def check_reset(self, params: dict[str, Any], frame: dict[str, Any]) -> None:
+        meta = frame[protocol.FRAME_META]
+        asked = params[molmo_keys.SUCCESS_PROFILE]
+        stated = meta.get(mapping.META_SUCCESS_PROFILE)
+        if stated != asked:
+            raise RuntimeError(
+                f'The trial asks for success profile {asked!r}, but the env server judges by {stated!r}. '
+                'A server that predates success profiles states none.'
+            )
+        asked_hook = self._hook_file.record if self._hook_file is not None else None
+        ran_hook = meta.get(mapping.META_ENV_HOOK)
+        if ran_hook != asked_hook:
+            raise RuntimeError(
+                f'The trial asks for env hook {asked_hook!r}, but the env server ran {ran_hook!r}. '
+                'A server that takes no hook from the reset token states none.'
+            )
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         grasp_pose = geom.Transform3D(
             raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
-        ee_pose = self._measure(grasp_pose)
+        ee_pose = self._measure(grasp_pose, raw_obs[protocol.OBS_JOINT_POS])
         state = MujocoFrankaState()
         state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
         if raw_obs[protocol.OBS_ARM_ERROR]:

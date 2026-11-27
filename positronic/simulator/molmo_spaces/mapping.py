@@ -17,6 +17,9 @@ MOLMO_GRASP_SITE = 'gripper/grasp_site'
 
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 ASSETS_BENCHMARKS_DIR = 'benchmarks'
+ASSETS_GRASPS_DIR = 'grasps'
+# The lock file that the MolmoSpaces resource manager takes in the assets directory.
+ASSETS_LOCK_FILE = '.lock'
 # Scene sets that MolmoSpaces does not package. MolmoSpaces installs every scene under its own `scenes` directory
 # from an archive, so a scene set there fails to load.
 ASSETS_USER_SCENES_DIR = 'user_scenes'
@@ -124,6 +127,9 @@ WITH_RIGHT_SHOULDER = 'with_right_shoulder'
 # keeps it.
 WITH_OBJECT_IMAGE_POINTS = 'with_object_image_points'
 MOLMO_OBJECT_IMAGE_POINTS_SENSOR = 'object_image_points'
+# In a reset token: the ``success_profile.SuccessProfile`` value that judges the episode. A token without the key
+# judges it by ``molmo_native``.
+TOKEN_SUCCESS_PROFILE = 'success_profile'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
 # The horizon override of a task in seconds, or None when the benchmark sets the horizon.
@@ -131,8 +137,44 @@ TASK_HORIZON_OVERRIDE_SEC = 'task_horizon_override_sec'
 # The hook file that the server runs, as ``<file name>@sha256:<digest of the bytes it ran>``, or None without one.
 TASK_ENV_HOOK = 'env_hook'
 
+
+class HookFile(NamedTuple):
+    """In a selection and a reset token: a hook file on the server's box, and the SHA-256 digest it must have.
+
+    A selection or a token without these keys gets the default hook, which changes nothing.
+    """
+
+    env_hook: Path
+    env_hook_sha256: str
+
+    @classmethod
+    def read(cls, path: Path) -> 'HookFile':
+        """The hook file at ``path``, with the digest of its bytes."""
+        return cls(path, hashlib.sha256(path.read_bytes()).hexdigest())
+
+    @classmethod
+    def of(cls, request: dict[str, Any]) -> 'HookFile | None':
+        if cls._fields[0] not in request:
+            return None
+        path, sha256 = (request[field] for field in cls._fields)
+        return cls(Path(path), sha256)
+
+    def request(self) -> dict[str, str]:
+        """The keys of the hook file in a selection or a reset token, which carries the path as a string."""
+        return {field: str(value) for field, value in self._asdict().items()}
+
+    @property
+    def record(self) -> str:
+        """The ``TASK_ENV_HOOK`` value of the hook file."""
+        return f'{self.env_hook.name}@sha256:{self.env_hook_sha256}'
+
+
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
+# The ``TASK_ENV_HOOK`` value of the hook that the server ran at the reset. A server that predates it states none.
+META_ENV_HOOK = 'env_hook'
+# The ``success_profile.SuccessProfile`` value that judges the episode. A server that predates profiles states none.
+META_SUCCESS_PROFILE = 'success_profile'
 
 MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move group.
 

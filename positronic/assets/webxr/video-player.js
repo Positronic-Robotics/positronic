@@ -2,9 +2,10 @@
  * WebXR Video Player class that displays a video stream on a plane in AR
  */
 
-// How the plane shows the video: as it is, with black clear so that only bright parts float over the room, or not at all
-export const PANEL_MODE = { ON_BLACK: 'on_black', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
-const PANEL_CYCLE = [PANEL_MODE.ON_BLACK, PANEL_MODE.CLEAR_BLACK, PANEL_MODE.HIDDEN];
+// How the plane shows the video: as it is, as it is for a view with no task, with black clear so that only bright parts
+// float over the room, or not at all
+export const PANEL_MODE = { ON_BLACK: 'on_black', NO_TASK: 'no_task', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
+const PANEL_CYCLE = [PANEL_MODE.ON_BLACK, PANEL_MODE.NO_TASK, PANEL_MODE.CLEAR_BLACK, PANEL_MODE.HIDDEN];
 // The height of the plane in meters, 2 m in front of the eyes. The view with the column of the other cameras is wider
 const PANEL_HEIGHT_M = 0.85;
 
@@ -198,7 +199,8 @@ export class WebXRVideoPlayer {
         this.videoMaterial.uniforms.clearBlack.value = this.mode === PANEL_MODE.CLEAR_BLACK ? 1.0 : 0.0;
     }
 
-    // The next mode in PANEL_CYCLE: on black, with black clear, hidden, and on black again. Returns the new mode
+    // The next mode in PANEL_CYCLE: on black, on black with no task, with black clear, hidden, and on black again.
+    // Returns the new mode
     cycleMode() {
         this.mode = PANEL_CYCLE[(PANEL_CYCLE.indexOf(this.mode) + 1) % PANEL_CYCLE.length];
         this.applyMode();

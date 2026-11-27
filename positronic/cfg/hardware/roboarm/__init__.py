@@ -10,6 +10,7 @@ from positronic.drivers.roboarm.models import DROID_EE_FRAME
 
 if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.compensation import Compensation, FrictionFade
+    from positronic.drivers.roboarm.yam.grasp import GraspTuning
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
@@ -133,6 +134,13 @@ def yam_move_tuning(**fields: float) -> 'SettleTuning':
 
 
 @cfn.config()
+def yam_grasp_tuning(**fields: float) -> 'GraspTuning':
+    from positronic.drivers.roboarm.yam.grasp import DEFAULT_GRASP
+
+    return dataclasses.replace(DEFAULT_GRASP, **fields)
+
+
+@cfn.config()
 def yam_compensation(**fields) -> 'Compensation':
     from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION
 
@@ -154,6 +162,8 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
+    grasp_tuning=None,
+    gripper_force_cap_n=None,
 )
 def yam(
     channel: str,
@@ -163,6 +173,8 @@ def yam(
     park_after_idle_s: float | None,
     park_tuning: 'SettleTuning',
     move_tuning: 'SettleTuning',
+    grasp_tuning: 'GraspTuning | None',
+    gripper_force_cap_n: float | None,
 ):
     from positronic.drivers.roboarm.yam.driver import Robot
 
@@ -174,4 +186,6 @@ def yam(
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
+        grasp_tuning=grasp_tuning,
+        gripper_force_cap_n=gripper_force_cap_n,
     )

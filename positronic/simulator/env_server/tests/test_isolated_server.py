@@ -50,6 +50,13 @@ def uv() -> str:
     return found
 
 
+# On a cold host the isolated `uv` environment installs its packages before the server binds.
+BIND_DEADLINE_S = 300.0
+
+# Longer than the bind deadline, so a slow start fails on that deadline and the test body still runs.
+pytestmark = pytest.mark.timeout(BIND_DEADLINE_S + 60)
+
+
 @pytest.fixture
 def oldest_websockets_server_port(uv: str) -> Iterator[int]:
     """The port of an env server that runs on the oldest websockets that a simulator's venv carries."""
@@ -75,7 +82,7 @@ def oldest_websockets_server_port(uv: str) -> Iterator[int]:
     env = {**os.environ, PYTHONPATH_ENV: str(_ENV_SERVER_DIR)}
     server = subprocess.Popen(command, env=env)
     try:
-        _await_bind(server, 'localhost', port, deadline=300.0)
+        _await_bind(server, 'localhost', port, deadline=BIND_DEADLINE_S)
         yield port
     finally:
         terminate(server)

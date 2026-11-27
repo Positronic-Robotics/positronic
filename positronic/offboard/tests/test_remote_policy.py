@@ -5,6 +5,7 @@ import logging
 import math
 import pathlib
 import re
+import socket
 import threading
 import time
 from collections.abc import Mapping
@@ -33,19 +34,23 @@ from positronic.drivers.roboarm.models import (
     parse_ee_frames,
 )
 from positronic.eval import keys as eval_keys
-from positronic.geom import Transform3D
+from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
+    CANCEL_POLL_S,
+    DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DEFAULT_UNRESOLVED_HOST_DEADLINE,
     DOWNLINK_MS,
     STATUS_UPDATE_TIMEOUT_S,
     UPLINK_MS,
     ConnectRetries,
     InferenceClient,
     InferenceSession,
+    SessionOpeningCancelled,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -382,6 +387,119 @@ class TestNewSessionRetriesRefusedConnects:
         assert fake_clock.now <= 60.0
 
 
+class TestAHostNameThatDoesNotResolve:
+    """A resolver with no answer for the host name gets a limit of its own on the retries, not the deadline."""
+
+    def test_a_name_that_never_resolves_fails_at_the_limit_not_at_the_deadline(self, fake_clock):
+        fake = _SlowWire(fake_clock, *[(0.0, _refused(wire.Refusal.UNRESOLVED))] * 40)
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient(fake, _ADDRESS).new_session()
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == DEFAULT_UNRESOLVED_HOST_DEADLINE < DEFAULT_CONNECT_DEADLINE
+
+    def test_a_name_that_resolves_inside_the_limit_still_connects(self, fake_clock):
+        """The name resolves on the attempt at 271 s, the last one before the limit, and the server answers."""
+        refusals = [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 13
+        fake = _SlowWire(fake_clock, *refusals, (0.0, fake_clock.connection((0.0, _ready('resolved')))))
+
+        assert InferenceClient(fake, _ADDRESS).new_session().session_id == 'resolved'
+        assert fake_clock.now == 271.0
+
+    def test_a_name_that_resolved_between_failures_starts_a_new_limit(self, fake_clock):
+        """The name resolves at 241 s to a server still starting, and stops resolving again at 271 s."""
+        answers = [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 12 + [(0.0, _refused(wire.Refusal.COLD))]
+        answers += [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 40
+        fake = _SlowWire(fake_clock, *answers)
+        with pytest.raises(wire.ConnectRefused):
+            InferenceClient(fake, _ADDRESS).new_session()
+
+        assert fake_clock.now == 271.0 + DEFAULT_UNRESOLVED_HOST_DEADLINE
+
+    def test_a_websocket_dial_to_a_name_that_never_resolves_names_the_host(self, fake_clock, monkeypatch):
+        def no_answer_yet(*_args, **_kwargs):
+            raise socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution')
+
+        monkeypatch.setattr(socket, 'getaddrinfo', no_answer_yet)
+        address = _address('policy.example', 8000)
+        with pytest.raises(wire.ConnectRefused, match='policy.example') as refused:
+            InferenceClient(websocket.WebsocketClientWire(), address).new_session()
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == DEFAULT_UNRESOLVED_HOST_DEADLINE
+
+    def test_a_remote_policy_retries_a_name_for_the_limit_it_was_given(self, fake_clock, monkeypatch):
+        """Attempts at 0, 1, 3, 7, 15 and 31 s are refused, and the pause after the last ends at the 60 s limit."""
+
+        def no_answer_yet(*_args, **_kwargs):
+            raise socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution')
+
+        monkeypatch.setattr(socket, 'getaddrinfo', no_answer_yet)
+        policy = RemotePolicy('websocket', _address('policy.example', 8000), unresolved_host_deadline=60.0)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        with pytest.raises(wire.ConnectRefused) as refused:
+            runtime.start(policy)
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == 60.0
+
+
+class TestACancelledSessionOpening:
+    """A caller that gives up on a server ends the opening's retries, in place of waiting out the deadline."""
+
+    def test_a_cancel_before_the_opening_dials_nothing(self):
+        fake = _FakeWire(MagicMock())
+        with patch('positronic.offboard.client.InferenceSession'), pytest.raises(SessionOpeningCancelled):
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: True)
+
+        assert fake.dials == []
+
+    def test_a_cancel_ends_the_pause_it_comes_in_and_no_attempt_follows(self, fake_clock):
+        """Attempts at 0, 1 and 3 s are refused; the cancel comes in the 4 s pause after the third."""
+        fake = _SlowWire(fake_clock, *[(0.0, _refused(wire.Refusal.SILENT))] * 10)
+        cancel_at = 5.05
+        with pytest.raises(SessionOpeningCancelled) as cancelled:
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: fake_clock.now >= cancel_at)
+
+        assert len(fake.dials) == 3
+        assert cancel_at <= fake_clock.now <= cancel_at + CANCEL_POLL_S
+        assert isinstance(cancelled.value.__cause__, wire.ConnectRefused)
+
+    def test_the_cancel_names_the_session_url_once_and_the_last_refusal(self, fake_clock):
+        fake = _SlowWire(fake_clock, (0.0, wire.ConnectRefused(wire.Refusal.SILENT, 'nothing answered')))
+        with pytest.raises(SessionOpeningCancelled) as cancelled:
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: fake_clock.now > 0)
+
+        assert 'nothing answered' in str(cancelled.value)
+        assert str(cancelled.value).count('fake://localhost:8000') == 1
+
+    def test_an_opening_whose_cancel_never_comes_opens_its_session(self):
+        fake = _FakeWire(_refused(wire.Refusal.SILENT), MagicMock())
+        with (
+            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            session = InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: False)
+
+        assert session is mock_session_cls.return_value
+
+    def test_a_cancel_ends_a_remote_run_whose_session_is_still_opening(self, never_accepting_port):
+        """The first dial runs out its open timeout; the cancel then ends the 1 s pause after it."""
+        policy = RemotePolicy('websocket', _address('localhost', never_accepting_port), open_timeout=0.2)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        asked = []
+
+        def cancelled() -> bool:
+            asked.append(True)
+            return len(asked) > 1
+
+        started = time.monotonic()
+        with pytest.raises(SessionOpeningCancelled):
+            runtime.start(policy, cancelled=cancelled)
+
+        assert time.monotonic() - started < 1.0
+
+
 def _ready(
     session_id: str,
     meta: dict | None = None,
@@ -424,6 +542,31 @@ def test_session_reads_capacity_separately_from_metadata(version, limit):
     session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
     assert session.max_in_flight == (1 if limit is None else limit)
     assert protocol.MAX_IN_FLIGHT not in session.metadata
+
+
+class TestTheInferTimeoutCoversTheSend:
+    """A peer that stops reading stalls the write of an observation. The infer timeout counts from before the write."""
+
+    def test_a_send_that_never_ends_fails_the_inference_at_the_infer_timeout(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('stalled')), send_s=_NEVER)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        sent_at = fake_clock.now
+        with pytest.raises(TimeoutError, match='No inference response within 15.0s'):
+            session.infer({})
+        assert fake_clock.now - sent_at == 15.0
+
+    def test_a_slow_send_leaves_the_answer_only_the_rest_of_the_infer_timeout(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('slow')), (6.0, _answer(None)), send_s=10.0)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        sent_at = fake_clock.now
+        with pytest.raises(TimeoutError):
+            session.infer({})
+        assert fake_clock.now - sent_at == 15.0
+
+    def test_a_send_and_an_answer_inside_the_infer_timeout_return_the_answer(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('quick')), (4.0, _answer([{'action': [1]}])), send_s=10.0)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        assert session.infer({}) == [{'action': [1]}]
 
 
 class TestADroppedConnectionReconnects:
@@ -1048,7 +1191,7 @@ def test_a_call_sent_behind_another_gives_no_one_way_times():
     conn.recv.side_effect = recv
     session = InferenceSession(conn)
     session.infer({})
-    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+    conn.send.side_effect = lambda _message, timeout=None: first_waits.is_set() and second_sent.set()
 
     def one_way_times() -> set[str]:
         session.infer({})
@@ -1080,7 +1223,7 @@ def test_each_call_says_whether_it_went_with_no_earlier_call_in_flight():
     session = InferenceSession(conn)
     session.infer({})
     assert session.sent_alone is True  # a server with no timing marks still gets the mark
-    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+    conn.send.side_effect = lambda _message, timeout=None: first_waits.is_set() and second_sent.set()
 
     def sent_alone() -> bool | None:
         session.infer({})
@@ -1664,6 +1807,17 @@ def test_server_metadata_this_client_cannot_use_fails_as_a_policy_command_error_
     session.close.assert_called_once()
 
 
+def test_server_frames_that_do_not_parse_fail_the_run_as_a_policy_command_error_that_quotes_the_parse_error(runtime):
+    # An offset takes a translation and a rotation: seven numbers, not three.
+    unparsable = {roboarm_keys.EE_FRAMES: {keys.EE_POSE: {'site': GRIPPER_SITE, 'offset': [0.0, 0.0, 0.0]}}}
+    policy, session = _mock_remote_policy({**CHUNKED_STACK, **unparsable})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    with pytest.raises(PolicyCommandError, match='Quaternion must be non-zero'):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
 def test_a_server_whose_metadata_repeats_the_frame_of_its_stack_records_that_frame(runtime):
     policy, _ = _v3_policy_framing_each_pose(1, ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}))
     assert _recorded_frames(policy, runtime)[keys.EE_POSE] == GRIPPER_SITE
@@ -1701,6 +1855,26 @@ def test_a_remote_server_that_states_its_frames_gets_the_pose_on_one_session(sid
     client = policy._client
     assert isinstance(client, MagicMock)
     client.new_session.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'version, schedule',
+    [
+        (protocol.ProtocolVersion.V1, spec.component('chunked_schedule', version=1)),
+        (protocol.ProtocolVersion.V2, spec.component('chunked_schedule', version=2, fps=10)),
+    ],
+    ids=['v1', 'v2'],
+)
+def test_a_v1_or_v2_server_whose_client_stack_states_the_frame_gets_the_pose_in_that_frame(version, schedule):
+    frame = ChangeEEFrame(cfg_codecs.franka_hand_frame.instantiate(), keys=(keys.EE_POSE,))
+    policy, session = _mock_remote_policy(
+        {offboard_keys.LOCAL_STACK: spec.sequence(frame.to_spec(), schedule)}, infer_return=[{keys.TARGET_GRIP: 0.5}]
+    )
+    session.protocol_version = version
+
+    assert run_robot_rollout(policy, ticks=5).result()[eval_keys.TERMINATED] is True
+    expected = (Transform3D(np.array([0.1, 0.2, 0.3])) * FRANKA_HAND_FRAME).as_vector(Rotation.Representation.QUAT)
+    np.testing.assert_allclose(session.infer.call_args_list[0].args[0][keys.EE_POSE], expected, atol=1e-6)
 
 
 def test_a_remote_server_that_states_no_frames_gets_no_pose():
@@ -1854,6 +2028,42 @@ def test_an_inference_span_of_a_call_that_never_sent_carries_no_alone_mark(tmp_p
     assert telemetry_keys.ATTR_WIRE_SENT_ALONE not in infer.attrs
 
 
+def _wire_sends(tmp_path) -> list:
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    return sorted((s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND), key=lambda s: s.start_ns)
+
+
+def _connection_marks(send) -> tuple:
+    return (
+        send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION],
+        send.attrs.get(telemetry_keys.ATTR_WIRE_ENDPOINT),
+        telemetry_keys.ATTR_WIRE_CONNECT_MS in send.attrs,
+    )
+
+
+def test_only_the_first_send_on_a_connection_carries_the_dialed_endpoint_and_connect_time(tmp_path):
+    conn = _connection(_ready('only'), _answer({'action_data': [1]}), _answer({'action_data': [2]}))
+    fake = _FakeWire(conn)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-connection'):
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'image': 'a'})
+        session.infer({'image': 'b'})
+    endpoint = fake.session_url(_ADDRESS)
+    assert [_connection_marks(send) for send in _wire_sends(tmp_path)] == [(True, endpoint, True), (False, None, False)]
+
+
+def test_the_first_send_after_a_reconnect_is_on_a_new_connection(tmp_path):
+    dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+    reopened = _connection(_ready('second'), _answer({'action_data': [1]}), _answer({'action_data': [2]}))
+    fake = _FakeWire(dropped, reopened)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-reconnect'):
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'image': 'a'})
+        session.infer({'image': 'b'})
+    marks = [send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION] for send in _wire_sends(tmp_path)]
+    assert marks == [True, True, False]
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
@@ -1974,12 +2184,14 @@ def test_a_client_refuses_a_wire_handed_the_other_wire_address():
         InferenceClient(websocket.WebsocketUnixClientWire(), _ADDRESS)
 
 
-def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
+def test_a_websocket_port_that_never_answers_is_named_once_at_the_deadline():
     """Nothing listens on port 1; the refused connect is a backend that is not ready, and the deadline ends it."""
     address = dataclasses.replace(_ADDRESS, port=1)
     client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
-    with pytest.raises(TimeoutError, match='ws://localhost:1'):
+    with pytest.raises(TimeoutError) as timed_out:
         client.new_session()
+
+    assert str(timed_out.value).count('ws://localhost:1/') == 1
 
 
 # What a wall-clock test grants past a deadline: a thread start and a closed socket, on a loaded machine.

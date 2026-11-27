@@ -57,6 +57,11 @@ ATTR_WIRE_DOWNLINK_MS = 'wire.downlink_ms'
 ATTR_WIRE_NETWORK_MS = 'wire.network_ms'
 # On `policy.infer`: whether the client sent the call with no earlier call in flight (docs/telemetry.md).
 ATTR_WIRE_SENT_ALONE = 'wire.sent_alone'
+# On `wire.send`: whether the send is the first on its connection. The first send also carries the URL that the
+# client dialed and the milliseconds that the dial took.
+ATTR_WIRE_NEW_CONNECTION = 'wire.new_connection'
+ATTR_WIRE_ENDPOINT = 'wire.endpoint'
+ATTR_WIRE_CONNECT_MS = 'wire.connect_ms'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.

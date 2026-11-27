@@ -15,6 +15,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 import pimm
 from pimm.tests.testing import Passive, wire_call
@@ -2420,6 +2421,15 @@ def test_a_run_that_records_the_rig_site_as_it_starts_sees_only_the_poses_it_sta
     assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
     assert keys.JOINTS not in policy.observations[0]
     np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
+
+
+def test_a_rig_whose_frames_do_not_parse_raises_the_parse_error_and_not_a_policy_command_error():
+    unparsable = {signal: {'site': GRIPPER_SITE, 'offset': [0.0, 0.0, 0.0]} for signal in RIG_FRAMES}
+    policy = FramedPolicy(RIG_FRAMES)
+    with pytest.raises(ValidationError, match='Quaternion must be non-zero') as raised:
+        run_robot_rollout(policy, {**ROBOT_STATIC_META, roboarm_keys.EE_FRAMES: unparsable}).result()
+    assert not isinstance(raised.value, PolicyCommandError)
+    assert policy.observations == []
 
 
 def test_a_run_that_records_another_site_as_it_starts_is_refused_before_its_first_observation():

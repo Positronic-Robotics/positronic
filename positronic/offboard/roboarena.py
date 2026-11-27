@@ -9,7 +9,7 @@ from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.client import ConnectOutcome, ConnectRetries, time_left
+from positronic.offboard.client import DEFAULT_UNRESOLVED_HOST_DEADLINE, ConnectOutcome, ConnectRetries, time_left
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,15 @@ class RoboarenaClient:
         port: int = 9000,
         headers: Mapping[str, str] | None = None,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE_S,
+        unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
     ):
         """``headers`` go on every handshake this client opens: ``connect`` and ``probe`` alike.
 
         ``connect_deadline`` bounds one ``connect``: the dial and the config read share it, and neither waits
         more than ``HANDSHAKE_TIMEOUT_S``. A connect makes one attempt.
+
+        ``unresolved_host_deadline`` bounds a run of ``probe`` calls that the resolver has no answer for. A probe
+        that the server answers ends the run.
         """
         self._address = roboarena_wire.RoboarenaAddress(host, port)
         self._headers = headers
@@ -54,7 +58,8 @@ class RoboarenaClient:
         self._wire = registry.client_wire(roboarena_wire.RoboarenaClientWire.NAME)
         self._connection: wire.ClientConnection | None = None
         self._server_config: dict[str, Any] | None = None
-        self._probe_retries = ConnectRetries()
+        self._unresolved_host_deadline = unresolved_host_deadline
+        self._probe_retries = ConnectRetries(unresolved_host_deadline)
 
     def connect(self) -> dict[str, Any]:
         """Open the connection and answer the config the server announces on it."""
@@ -93,7 +98,10 @@ class RoboarenaClient:
         policy surfaces.
         """
         refusal = self._wire.probe(self._address, self._headers, READY_PROBE_TIMEOUT_S)
-        if refusal is not None and self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
+        if refusal is None:
+            # The server answered, so the next refusal starts a new run with a full budget.
+            self._probe_retries = ConnectRetries(self._unresolved_host_deadline)
+        elif self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
             raise wire.ConnectRefused(refusal, f'{self.url} refused the connection')
         return refusal
 
@@ -102,9 +110,10 @@ class RoboarenaClient:
         if self._connection is None:
             self.connect()
         assert self._connection is not None
+        deadline = time.monotonic() + INFER_TIMEOUT_S
         try:
-            self._connection.send(serialize({**observation, ENDPOINT: INFER}))
-            answer = self._connection.recv(timeout=INFER_TIMEOUT_S)
+            self._connection.send(serialize({**observation, ENDPOINT: INFER}), timeout=time_left(deadline))
+            answer = self._connection.recv(timeout=time_left(deadline))
         except BaseException:
             # A reply that arrives after this read gave up stays queued, and the next inference reads it as its own.
             self.close()
@@ -122,9 +131,10 @@ class RoboarenaClient:
         frame: dict[str, Any] = {ENDPOINT: RESET}
         if session_id is not None:
             frame[SESSION_ID] = session_id
+        deadline = time.monotonic() + RESET_TIMEOUT_S
         try:
-            self._connection.send(serialize(frame))
-            self._connection.recv(timeout=RESET_TIMEOUT_S)
+            self._connection.send(serialize(frame), timeout=time_left(deadline))
+            self._connection.recv(timeout=time_left(deadline))
         except roboarena_wire.TextAnswer as e:
             # The peer ends the exchange with any text, so this connection carries nothing more.
             self.close()

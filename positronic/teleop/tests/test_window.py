@@ -2,6 +2,7 @@ import io
 import re
 import socket
 import time
+from unittest.mock import ANY
 
 import httpx
 import numpy as np
@@ -12,7 +13,7 @@ from positronic_model_server.serialization import encode_jpeg
 from positronic_model_server.websocket_wire import ServedUnixSocket
 
 from positronic import geom, keys
-from positronic.drivers.webxr import RIGHT
+from positronic.drivers.webxr import RIGHT, ControllerButtons
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.teleop import protocol
@@ -54,14 +55,34 @@ def waiting(service, socket_path, connect):
 
 
 def test_the_window_says_when_no_trial_waits(window):
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': False,
+    }
+
+
+def _b(down: bool, presses: int) -> ControllerButtons:
+    """The buttons of the right controller with B ``down`` or up, and ``presses`` presses of B."""
+    values, counts = [0.0] * (max(Button) + 1), [0] * (max(Button) + 1)
+    values[Button.B], counts[Button.B] = float(down), presses
+    return ControllerButtons(tuple(values), tuple(counts))
+
+
+def test_the_status_says_whether_the_service_gets_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=60.0, hold_sec=0.2)
+    window = TestClient(window_app(service), base_url='http://127.0.0.1:5006')
+    assert window.get('/status').json()['tracked'] is False
+    service.take_sample({RIGHT: geom.Transform3D()}, {RIGHT: _b(False, 0)})
+    assert window.get('/status').json()['tracked'] is True
 
 
 def _ready_from_the_headset(service, waiting) -> None:
     """Press B on the headset, as only the headset or the phone gives Ready."""
-    buttons = [0.0] * (max(Button) + 1)
-    buttons[Button.B] = 1.0
-    service.take_sample({}, {RIGHT: buttons})
+    service.take_sample({}, {RIGHT: _b(False, 0)})
+    service.take_sample({}, {RIGHT: _b(True, 1)})
     waiting.wait_open()
 
 
@@ -155,19 +176,22 @@ def test_a_policy_that_leaves_mid_trial_leaves_no_old_task_in_the_window(window,
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
         time.sleep(0.005)
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    # The samples of the trial can be younger than the silence limit.
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': ANY,
+    }
 
 
 def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(window, service, waiting):
     _ready_from_the_headset(service, waiting)
-    pressed, released = [0.0] * (max(Button) + 1), [0.0] * (max(Button) + 1)
-    pressed[Button.B] = 1.0
-    service.take_sample({}, {RIGHT: released})
-    service.take_sample({}, {RIGHT: pressed})
-    service.take_sample({}, {RIGHT: released})
-    service.take_sample({}, {RIGHT: pressed})
+    service.take_sample({}, {RIGHT: _b(False, 1)})
+    service.take_sample({}, {RIGHT: _b(True, 2)})
     time.sleep(0.3)
-    service.take_sample({}, {RIGHT: pressed})
+    service.take_sample({}, {RIGHT: _b(True, 2)})
     assert waiting.frame(FRAME_REQUEST)[END] == PolicyEnd.COMPLETE.value
     assert window.get('/status').json()['phase'] == 'ended'
     waiting.close()
@@ -175,7 +199,14 @@ def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(win
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
         time.sleep(0.005)
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    # The samples of the trial can be younger than the silence limit.
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': ANY,
+    }
 
 
 def test_the_window_page_reads_the_fields_of_the_status():

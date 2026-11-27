@@ -4,7 +4,13 @@
 import { SESSION_MODE } from '/session-mode.js';
 import { WebXRButton } from '/webxr-button.js';
 
-export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
+// One controller in a message on `/ws`: its position, its wxyz orientation, the value of each button and the number
+// of presses of each button since the page loaded
+export function controllerSample(position, orientation, buttons, presses) {
+  return { position, orientation, buttons, presses };
+}
+
+export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let websocket = null;
   let xrButton = null;
   let xrRefSpace = null;
@@ -60,12 +66,16 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
 
   function sendControllers(controllers) {
     if (websocket.readyState !== WebSocket.OPEN) return;
-    const payload = { controllers, timestamp: Date.now() };
+    // The timestamp is on the monotonic clock of the page, so that the service can find a message that comes late
+    const payload = { controllers, timestamp: performance.now() };
     websocket.send(JSON.stringify(payload));
   }
 
   function onXRFrame(t, frame) {
     const session = frame.session;
+    // Each frame, also one with no viewer pose, so that the page sees each change of its input. `onFrame` gets what it
+    // returns
+    const everyFrame = typeof onEveryFrame === 'function' ? onEveryFrame({ frame, session, refSpace: xrRefSpace }) : undefined;
     const pose = frame.getViewerPose(xrRefSpace);
     if (pose) {
       const glLayer = session.renderState.baseLayer;
@@ -80,7 +90,7 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
       // Allow page to update scene and compute controllers
       let controllers = null;
       if (typeof onFrame === 'function') {
-        controllers = onFrame({ frame, session, refSpace: xrRefSpace, view, scene, camera, renderer });
+        controllers = onFrame({ frame, session, refSpace: xrRefSpace, view, scene, camera, renderer, everyFrame });
       }
 
       renderer.render(scene, camera);

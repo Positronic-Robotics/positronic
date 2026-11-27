@@ -100,8 +100,8 @@ def watch_sends(monkeypatch):
         sent = threading.Semaphore(0)
         send = session._conn.send
 
-        def send_and_notify(data):
-            send(data)
+        def send_and_notify(data, timeout=None):
+            send(data, timeout)
             sent.release()
 
         monkeypatch.setattr(session._conn, 'send', send_and_notify)

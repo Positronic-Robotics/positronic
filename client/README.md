@@ -214,13 +214,16 @@ policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 scene_seed: spoons-scene-a               # the organization's later plans with this seed replay the recorded parts
-start_pose: droid_reset                  # nominal | droid_reset | abc_init
+start_pose: droid_reset                  # nominal | droid_reset | abc_init | yam_<reach>_<height>
 ```
 
 `start_pose` names where the arm starts each episode: `nominal`, the rig's own pose;
-`droid_reset`, the reset pose of the DROID data collection; or `abc_init`, the start pose of the
-ABC sim. `droid_reset` is a `franka` pose and `abc_init` is a `yam` pose, one per arm. A plan that
-names none takes the pose of each task's catalogue entry.
+`droid_reset`, the reset pose of the DROID data collection; `abc_init`, the start pose of the
+ABC sim; or a `yam_<reach>_<height>` pose. The reach (`near`, `mid`, `far`) says how far forward
+the grippers sit, and the height (`low`, `raised`, `high`) says how high they sit:
+`yam_near_high`, `yam_near_raised`, `yam_mid_low`, `yam_far_low` and `yam_far_raised`.
+`droid_reset` is a `franka` pose. `abc_init` and each `yam_<reach>_<height>` pose are `yam`
+poses, one per arm. A plan that names none takes the pose of each task's catalogue entry.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.
@@ -258,8 +261,8 @@ its `image` states it: a label on a task takes the value of the plan endpoint it
 An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
 bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets
 the published slice of 24192 MiB. A need that no slice of the run's GPU holds is refused at submit,
-and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
-that names its `image` states it.
+and so is a need above the published slice on a `nebius_competition` plan. Only an entry that names
+its `image` states it. `positronic eval run --min-vram-gb` states it beside `--policy-image`.
 
 An `image` endpoint may state `query`, the session params the platform puts on each session URL of
 the image, for example `horizon_sec=0.5`. It holds the grammar of an address `query` (the table
@@ -372,7 +375,9 @@ An `image` endpoint whose registry serves no anonymous caller states `image_cred
 file names the registry user and the FILE the password is in. `positronic eval run --from-file`
 reads it as `EvalPlan[EndpointFile]`, then `plan_with_secrets_read` gives the `EvalPlan`
 a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
-builds that credential.
+builds that credential. The platform copies the image when you file the plan, and the run pulls that
+copy. The plan is `pending` while the copy runs. The password must stay valid until the copy ends
+([A private image](../docs/submit-a-policy-image.md#a-private-image)).
 
 ```yaml
 endpoints:
@@ -517,8 +522,9 @@ place it can take, and the leaderboard lists every row in score order.
 The `submission` of a team row carries `replay`, a page that plays back the camera video of the
 submission, with the task and outcome of each episode. The page opens without a key, and `replay` is
 absent until the platform has built it. A submission that runs in more than one simulator also carries
-`part_replays`: one such page for each part, by the metric key of the part's score. `replay` is then the
-page of the first part.
+`score_replays`: by the metric key of each score, one such page for each part of that score, with the eval
+that the part ran, in part order. `part_replays` holds the page of the first part of each score, by the same
+key. `replay` is then the page of the first part.
 
 `replay.data_url` names the JSON object the page renders from. `about` identifies the submission,
 and each episode carries its values and one absolute URL per camera video. A page on another origin
@@ -608,6 +614,11 @@ container's own output, and a finished or failed run carries it. Each link is a 
 the submitter holds no credential for the bucket. `artifacts` is absent on a run that wrote nothing,
 `diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
 printed nothing.
+
+A running run reads `running_since`. A finished, failed or cancelled run reads the same time as
+`started_at`, and that field is absent where the platform recorded no start. A short run can start
+and finish between two reads, so `started_at` tells a reader that never saw `running` that the run
+did run.
 
 `evals` lists what the view shows for each eval of the submission, as an `EvalView`: the `eval`, its
 `status`, `scores`, `artifacts`, `episodes` and `runs`. A submission of one eval has one entry. A

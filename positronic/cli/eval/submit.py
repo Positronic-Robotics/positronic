@@ -68,6 +68,7 @@ def submit(
     registry_password_file: str | None = None,
     sample: Sample | None = None,
     query: str | None = None,
+    min_vram_gb: int | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -79,8 +80,9 @@ def submit(
     request for that organisation instead of a `nebius_competition` one. An image the platform
     cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
     the file the password is in. `sample` runs a random subset of the eval's trials. `query` holds the
-    params the platform puts on each session URL of the image. With no `eval_name`, the run takes the
-    eval that the leaderboards rank (`leaderboard_eval`).
+    params the platform puts on each session URL of the image. `min_vram_gb` is the least GPU memory
+    the image needs, in GB: a private run gets the smallest slice that holds it. With no `eval_name`,
+    the run takes the eval that the leaderboards rank (`leaderboard_eval`).
     """
     with gateway(platform_url) as client:
         if eval_name is None:
@@ -99,6 +101,7 @@ def submit(
                 org=OrgSlug(org) if org is not None else None,
                 sample=sample,
                 query=query,
+                min_vram_gb=min_vram_gb,
             )
         submission = client.create_submission(plan)
     print(f'submission {submission.submission_id} ({submission.status.name})')

@@ -212,7 +212,9 @@ class _ManualChannel:
         while (message := self._responses.get()) is not None:
             yield message
 
-    def cancel(self) -> None: ...
+    def cancel(self) -> None:
+        """End the call, as a cancel of a real one ends its response stream."""
+        self._responses.put(None)
 
     def close(self) -> None:
         self._responses.put(None)
@@ -286,3 +288,14 @@ def test_a_send_after_a_failed_send_raises_at_once():
     with pytest.raises(wire.PeerDisconnected):
         conn.send(b'again')
     assert time.monotonic() - refused < 1.0, 'the second send waited instead of raising'
+
+
+@pytest.mark.timeout(10.0)
+def test_a_send_grpc_does_not_write_within_its_timeout_raises_a_timeout_and_ends_the_call():
+    channel, conn = _manual_connection()
+    with pytest.raises(TimeoutError):
+        conn.send(b'frame', timeout=0.3)
+    assert channel.taken(timeout=5.0) == b'frame'
+    closing = time.monotonic()
+    conn.close()
+    assert time.monotonic() - closing < 1.0, 'the close waited on a call that the timeout left open'

@@ -534,8 +534,9 @@ action = session.infer(observation)
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays cold.
 The deadline bounds the whole opening: each dial gets `open_timeout` or the time left, whichever is shorter,
-and no status wait lasts past the deadline. `RemotePolicy` takes both settings. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says
-what the server answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session`
+and no status wait lasts past the deadline. `RemotePolicy` takes these settings. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says
+what the server answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal,
+`UNRESOLVED` for a host name the resolver had no answer for during `unresolved_host_deadline` (300 s). `new_session`
 raises no exception of the WebSocket or gRPC library.
 
 `wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`

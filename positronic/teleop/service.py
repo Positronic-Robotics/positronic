@@ -14,7 +14,8 @@ import os
 import stat
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from enum import Enum, IntEnum, StrEnum
@@ -30,7 +31,7 @@ from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWi
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
-from positronic.drivers.webxr import LEFT, RIGHT
+from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons
 from positronic.gui.video_stream import AnnexBDecoder
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
@@ -111,49 +112,67 @@ class ButtonMap:
     - The stick: Cancel while the service waits for Ready. A hold of the stick is Give up.
     - The trigger: the grip.
 
-    It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y.
+    It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y. A press is a step
+    of the press count of the button, and a hold is a value at ``hold_threshold`` or above for ``hold_sec``.
     """
 
     def __init__(
         self,
         hold_sec: float,
-        press_threshold: float = 0.6,
+        hold_threshold: float = 0.6,
         buttons: Sequence[Button] = (Button.STICK, Button.A, Button.B),
     ):
-        if not 0 < press_threshold <= 1:
-            raise ValueError(f'press_threshold must be in (0, 1], got {press_threshold}')
+        if not 0 < hold_threshold <= 1:
+            raise ValueError(f'hold_threshold must be in (0, 1], got {hold_threshold}')
         check_finite_positive(hold_sec, 'hold_sec')
         self._hold_ns = round(hold_sec * 1e9)
-        # A button whose value is at least this is down.
-        self._press_threshold = press_threshold
+        # A button whose value is at least this is down for a hold. A press comes from the press count alone.
+        self._hold_threshold = hold_threshold
         # The time at which each button went down, while it is down.
         self._down_since: dict[Button, int] = {}
         # The buttons whose press did something already, until they go up.
         self._used: set[Button] = set()
+        # The press counts of the previous sample. The first sample sets them, so a page that pressed before it
+        # connected presses nothing.
+        self._presses: tuple[int, ...] | None = None
         self._read = tuple(buttons)
 
-    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
-        """Record the state of the buttons, and return the buttons that went down since the previous sample."""
-        new_presses = set()
+    def _new_presses(self, buttons: ControllerButtons, now_ns: int) -> dict[Button, int]:
+        """Record the state of the buttons, and return the number of presses of each button since the previous
+        sample. A sample with a count that went down, or with another number of counts, is of a page that loaded
+        again: all its counts become the counts to count from, and it presses nothing."""
         for button in self._read:
-            if buttons[button] < self._press_threshold:
+            if buttons.values[button] < self._hold_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
             elif button not in self._down_since:
                 self._down_since[button] = now_ns
-                new_presses.add(button)
-        return new_presses
+        previous, self._presses = self._presses, buttons.presses
+        if previous is None or len(previous) != len(buttons.presses):
+            return {}
+        if any(now < before for now, before in zip(buttons.presses, previous, strict=True)):
+            return {}
+        return {
+            button: buttons.presses[button] - previous[button]
+            for button in self._read
+            if buttons.presses[button] > previous[button]
+        }
 
-    def observe(self, buttons: Sequence[float], now_ns: int) -> None:
-        """Record the state of the buttons, outside a trial. A button that is down here does not press in the next."""
+    def observe(self, buttons: ControllerButtons, now_ns: int) -> None:
+        """Record the state of the buttons, outside a trial. A press here does nothing, and a button that is down here
+        does not hold in the next."""
         self._new_presses(buttons, now_ns)
+        self._used.update(self._down_since)
+
+    def cancel_holds(self) -> None:
+        """Cancel the holds of the buttons that are down. Each of them holds again only after it goes up."""
         self._used.update(self._down_since)
 
     def _is_held(self, button: Button, now_ns: int) -> bool:
         since = self._down_since.get(button)
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
-    def ready_answer(self, buttons: Sequence[float], now_ns: int) -> ReadyAnswer | None:
+    def ready_answer(self, buttons: ControllerButtons, now_ns: int) -> ReadyAnswer | None:
         new_presses = self._new_presses(buttons, now_ns)
         # A button that is down before the trial runs does not hold in it.
         self._used.update(self._down_since)
@@ -163,11 +182,12 @@ class ButtonMap:
             return ReadyAnswer.CANCELLED
         return None
 
-    def events(self, buttons: Sequence[float], now_ns: int) -> list[Event]:
-        new_presses = self._new_presses(buttons, now_ns)
-        events = []
-        if Button.A in new_presses:
-            events.append(Event.CLUTCH)
+    def events(self, buttons: ControllerButtons, now_ns: int) -> list[Event]:
+        """The events of the sample ``buttons``. An odd number of presses of A since the previous sample gives one
+        clutch event. An even number gives two, so control that is on turns off and on again, at the new place of the
+        hand."""
+        presses_of_a = self._new_presses(buttons, now_ns).get(Button.A, 0)
+        events = [Event.CLUTCH] * (0 if presses_of_a == 0 else 1 if presses_of_a % 2 else 2)
         if self._is_held(Button.B, now_ns):
             self._used.add(Button.B)
             events.append(Event.COMPLETE)
@@ -206,6 +226,8 @@ class TrialState:
     task: str
     control: bool
     cameras: tuple[str, ...]
+    # A sample that tracks a controller came within the silence limit
+    tracked: bool
 
 
 # The use of Y on the left controller, at the bottom of the view
@@ -230,13 +252,30 @@ class CameraState:
 
 
 @dataclass(frozen=True)
-class _Sample:
-    """What the headset sent last, by controller, and its number in the order of the samples. A controller that the
-    headset does not track is absent or ``None``."""
+class CameraFeed:
+    """The images of one camera that reached the service: their rate in Hz over the last ``TeleopService.FEED_SEC``,
+    and the seconds since the last one."""
 
-    number: int
+    rate_hz: float
+    age_sec: float
+
+
+@dataclass(frozen=True)
+class _Sample:
+    """What the headset sent last, by controller, and its `time.monotonic_ns()` instant. A controller that the headset
+    does not track is absent or ``None``."""
+
+    taken_ns: int
     poses: Mapping[str, geom.Transform3D | None]
-    buttons: Mapping[str, Sequence[float] | None]
+    buttons: Mapping[str, ControllerButtons]
+
+
+@dataclass(frozen=True)
+class Badge:
+    """A line of the view in black on a box of ``colour``, an RGB colour."""
+
+    text: str
+    colour: tuple[int, int, int]
 
 
 class TeleopService:
@@ -245,9 +284,9 @@ class TeleopService:
     With no ``auth_token``, a host and a port serve open to each peer that reaches them. The Unix socket is in a
     directory of this user only.
 
-    ``take_sample`` takes each sample of the controllers. A frame request waits for the next sample. When none comes
-    within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The preparation of a
-    session waits for Ready or Cancel up to ``ready_limit``.
+    ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
+    When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
+    preparation of a session waits for Ready or Cancel up to ``ready_limit``.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -257,6 +296,10 @@ class TeleopService:
     LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
+    # The span over which `camera_feeds` counts the images of a camera.
+    FEED_SEC = 2.0
+    # The most recent images of one camera that `camera_feeds` counts.
+    FEED_MAX_IMAGES = 512
 
     def __init__(
         self,
@@ -264,7 +307,7 @@ class TeleopService:
         ready_limit: float,
         silence_limit: float,
         hold_sec: float,
-        press_threshold: float = 0.6,
+        hold_threshold: float = 0.6,
         auth_token: str | None = None,
         cameras: Sequence[str] = (),
         controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -280,11 +323,13 @@ class TeleopService:
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = {
-            RIGHT: ButtonMap(hold_sec, press_threshold),
-            LEFT: ButtonMap(hold_sec, press_threshold, (Button.X,)),
+            RIGHT: ButtonMap(hold_sec, hold_threshold),
+            LEFT: ButtonMap(hold_sec, hold_threshold, (Button.X,)),
         }
         self._changed = threading.Condition()
         self._sample = _Sample(0, {}, {})
+        # The `time.monotonic_ns()` instant of the last sample that tracks a controller, or None before the first
+        self._tracked_at_ns: int | None = None
         self._phase = Phase.IDLE
         self._ready: ReadyAnswer | None = None
         # The events since the previous frame, each with the controller that made it
@@ -296,6 +341,11 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
+        # The `time.monotonic()` instants of the last images of each camera, under `_feed_lock`.
+        self._arrivals: dict[str, deque[float]] = {}
+        self._feed_lock = threading.Lock()
+        # The images of the shown camera that the service took. A new one changes the view.
+        self._shown_image_count = 0
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -375,23 +425,31 @@ class TeleopService:
         self._thread.join(timeout=10)
 
     def take_sample(
-        self, poses: Mapping[str, geom.Transform3D | None], buttons: Mapping[str, Sequence[float] | None]
+        self, poses: Mapping[str, geom.Transform3D | None], buttons: Mapping[str, ControllerButtons | None]
     ) -> None:
         """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
         is absent or ``None``."""
         now_ns = time.monotonic_ns()
+        # A controller with fewer button values than the maps read cannot press the clutch, so it drives no arm
+        tracked = {
+            name: state for name, state in buttons.items() if state is not None and len(state.values) > max(Button)
+        }
+        poses = {name: pose for name, pose in poses.items() if name in tracked}
         with self._changed:
-            self._sample = _Sample(self._sample.number + 1, poses, buttons)
+            self._sample = _Sample(now_ns, poses, tracked)
+            if tracked:
+                self._tracked_at_ns = now_ns
             for controller, button_map in self._buttons.items():
-                values = buttons.get(controller)
-                if values is None:
+                state = tracked.get(controller)
+                if state is None:
+                    button_map.cancel_holds()
                     continue
                 if self._phase is Phase.READY_WAIT and self._ready is None:
-                    self._ready = button_map.ready_answer(values, now_ns)
+                    self._ready = button_map.ready_answer(state, now_ns)
                 elif self._phase is Phase.RUNNING:
-                    self._events += [(controller, event) for event in button_map.events(values, now_ns)]
+                    self._events += [(controller, event) for event in button_map.events(state, now_ns)]
                 else:
-                    button_map.observe(values, now_ns)
+                    button_map.observe(state, now_ns)
             self._changed.notify_all()
 
     @property
@@ -404,7 +462,10 @@ class TeleopService:
         with self._changed:
             self._forget_an_old_dropped_trial()
             control = any(tracker.on for tracker in self._trackers.values())
-            return TrialState(self._phase, self._task, control, tuple(self._images))
+            tracked = (
+                self._tracked_at_ns is not None and time.monotonic_ns() - self._tracked_at_ns < self.silence_limit * 1e9
+            )
+            return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
 
     def _forget_an_old_dropped_trial(self) -> None:
         """Show no trial once no session can resume it. Hold the lock."""
@@ -434,6 +495,41 @@ class TeleopService:
         with self._changed:
             return self._images[name]
 
+    def take_images(self, images: Mapping[str, np.ndarray]) -> None:
+        """Take camera images of the run, by camera name. Only a running trial takes them."""
+        now = time.monotonic()
+        # Atomic with the phase check: one entry of each of two dicts for each camera, and one count increment.
+        with self._changed:
+            if self._phase is not Phase.RUNNING:
+                return
+            self._images.update(images)
+            self._seen.update(dict.fromkeys(images, now))
+            if self._shown_camera() in images:
+                self._shown_image_count += 1
+        # One append for each camera, to a deque of at most `FEED_MAX_IMAGES`.
+        with self._feed_lock:
+            for name in images:
+                self._arrivals.setdefault(name, deque(maxlen=self.FEED_MAX_IMAGES)).append(now)
+
+    def shown_image_count(self) -> int:
+        """The count of the images of the shown camera that the service took. It changes with each new one."""
+        with self._changed:  # One int read, ordered with the increment in `take_images`.
+            return self._shown_image_count
+
+    def camera_feeds(self) -> dict[str, CameraFeed]:
+        """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""
+        now = time.monotonic()
+        since = now - self.FEED_SEC
+        # Drops each camera with no image since `since`, then copies at most `FEED_MAX_IMAGES` instants per camera.
+        with self._feed_lock:
+            for name in [name for name, arrivals in self._arrivals.items() if arrivals[-1] <= since]:
+                del self._arrivals[name]
+            recent = {name: tuple(arrivals) for name, arrivals in self._arrivals.items()}
+        return {
+            name: CameraFeed(sum(arrived > since for arrived in arrivals) / self.FEED_SEC, now - arrivals[-1])
+            for name, arrivals in recent.items()
+        }
+
     def cancel_ready_wait(self) -> None:
         """Cancel the trial that waits for Ready, from the window on the station screen.
 
@@ -450,15 +546,59 @@ class TeleopService:
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
 
+    @staticmethod
+    def _badge(view: np.ndarray, origin: tuple[int, int], badge: Badge, scale: float) -> None:
+        (width, height), baseline = cv2.getTextSize(badge.text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+        x, y = origin
+        cv2.rectangle(view, (x - 6, y - height - 5), (x + width + 6, y + baseline), badge.colour, cv2.FILLED)
+        cv2.putText(view, badge.text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2, cv2.LINE_AA)
+
+    @staticmethod
+    def _wrapped(line: str, scale: float, width: int) -> list[str]:
+        """``line`` in at most three rows that each fit in ``width`` pixels at ``scale``. The rows break between words,
+        and a word wider than ``width`` breaks between its characters. A line that needs more rows ends its third row
+        with '...'."""
+        most_rows = 3
+
+        def fits(text: str) -> bool:
+            return cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 4)[0][0] <= width
+
+        def pieces(word: str) -> Iterator[str]:
+            if fits(word):
+                yield word
+                return
+            piece = ''
+            for char in word:
+                if piece and not fits(piece + char):
+                    yield piece
+                    piece = ''
+                piece += char
+            yield piece
+
+        rows = ['']
+        for piece in (part for word in line.split(' ') for part in pieces(word)):
+            joined = f'{rows[-1]} {piece}' if rows[-1] else piece
+            if rows[-1] and not fits(joined):
+                rows.append(piece)
+            else:
+                rows[-1] = joined
+        if len(rows) <= most_rows:
+            return rows
+        last = rows[most_rows - 1]
+        while last and not fits(last + '...'):
+            last = last.rpartition(' ')[0] if ' ' in last else last[:-1]
+        return [*rows[: most_rows - 1], last + '...']
+
     @classmethod
     def _view(
         cls,
         image: np.ndarray | None,
-        lines: Sequence[str],
+        lines: Sequence[str | Badge],
         footer: Sequence[str] = (),
         others: Sequence[tuple[str, np.ndarray | None]] = (),
     ) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+        """``image``, or a black image, with ``lines`` of text or badges at its top and the smaller ``footer`` at its
+        bottom. Each line of text wraps to the width of the main camera.
 
         With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
         the left part of the view size.
@@ -482,16 +622,25 @@ class TeleopService:
         else:
             # A copy: the text goes on the view, not on the image that the service holds.
             view = np.array(image, dtype=np.uint8, order='C')
-        bottom = view.shape[0]
-        for row, line in enumerate(lines):
-            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+        bottom, main_width = view.shape[0], width if others else view.shape[1]
+        rows = [
+            row
+            for line in lines
+            for row in ([line] if isinstance(line, Badge) else cls._wrapped(line, 0.75, main_width - 20))
+        ]
+        for number, row in enumerate(rows):
+            if isinstance(row, Badge):
+                cls._badge(view, (10, 26 + 30 * number), row, 0.75)
+            else:
+                cls._text(view, (10, 26 + 30 * number), row, 0.75)
         for row, line in enumerate(reversed(footer)):
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
-    def view(self, camera: bool = True) -> np.ndarray:
+    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
         """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
-        trial. With more than one camera, a column on the right shows the other cameras."""
+        trial. A running trial shows its task only with ``task``. With more than one camera, a column on the right shows
+        the other cameras."""
         with self._changed:
             state = self.state()
             shown = self._shown_camera()
@@ -510,19 +659,27 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
-        control = self._control_line()
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
+        lines = [*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
+        return self._view(image, [state.task, *lines] if task else lines, footer, others)
 
-    def _control_line(self) -> str:
-        """The state of the clutch of each arm, and the button that changes it."""
-        clutch_labels = {LEFT: 'X', RIGHT: 'A'}
-        parts = []
+    # The RGB colour behind the control line of an arm whose control is on, and off
+    CONTROL_ON_COLOUR = (6, 214, 160)
+    CONTROL_OFF_COLOUR = (255, 209, 102)
+
+    def _control_lines(self) -> list[Badge]:
+        """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
         with self._changed:
-            for arm, tracker in self._trackers.items():
-                name = 'Control' if arm is None else arm.capitalize()
-                clutch = clutch_labels[ARM_CONTROLLERS[arm]]
-                parts.append(f'{name} on ({clutch}: off)' if tracker.on else f'{name} off ({clutch}: on)')
-        return '. '.join(parts)
+            controls = [(arm, tracker.on) for arm, tracker in self._trackers.items()]
+        clutch_labels = {LEFT: 'X', RIGHT: 'A'}
+        lines = []
+        for arm, on in controls:
+            name = 'Control' if arm is None else arm.capitalize()
+            clutch = clutch_labels[ARM_CONTROLLERS[arm]]
+            if on:
+                lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
+            else:
+                lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
+        return lines
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
@@ -559,6 +716,7 @@ class TeleopService:
             self._clear_trial()
             self._phase, self._ready = Phase.READY_WAIT, None
             self._trial_cameras, self._headset_camera = settings.cameras, settings.headset_camera
+            tracked_at_before = self._tracked_at_ns
             while (
                 self._ready is None
                 and not self._stopping
@@ -566,7 +724,7 @@ class TeleopService:
                 and (left := deadline - time.monotonic()) > 0
             ):
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
-            ready = self._ready
+            ready, tracked_in_wait = self._ready, self._tracked_at_ns != tracked_at_before
             if ready is ReadyAnswer.READY:
                 self._phase = Phase.RUNNING
                 self._trackers = {
@@ -580,19 +738,19 @@ class TeleopService:
             raise PreparationCancelled('the session closed before the teleoperator was ready')
         if ready is ReadyAnswer.CANCELLED:
             raise TrialNotStarted('the teleoperator cancelled the trial')
-        raise TrialNotStarted('the teleoperator was not ready within the ready limit of the service')
+        not_ready = 'the teleoperator was not ready within the ready limit of the service'
+        raise TrialNotStarted(not_ready if tracked_in_wait else f'{not_ready}, and no controller data came in the wait')
 
-    def _next_sample(self, seen: int, deadline: float) -> _Sample:
-        """The sample after sample number ``seen``, or a sample with no pose when none comes before ``deadline``. Hold
-        the lock."""
-        while self._sample.number == seen and not self._stopping and (left := deadline - time.monotonic()) > 0:
-            self._changed.wait(left)
-        return self._sample if self._sample.number != seen else _Sample(seen, {}, {})
+    def _newest_sample(self) -> _Sample:
+        """The newest sample, or a sample with no pose when the newest is older than the silence limit. Hold the
+        lock."""
+        if time.monotonic_ns() - self._sample.taken_ns > self.silence_limit * 1e9:
+            return _Sample(self._sample.taken_ns, {}, {})
+        return self._sample
 
-    def next_frame(self, request: Mapping[str, Any], cameras: Sequence[str]) -> dict[str, Any]:
-        """Take the state of the arms and the images of ``cameras`` in ``request``, and answer with the element of the
-        next frame: the target of the teleoperator, with the end of the trial once the teleoperator ends it."""
-        deadline = time.monotonic() + self.silence_limit
+    def next_frame(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Take the state of the arms in ``request``, and answer with the element of the next frame: the target of the
+        teleoperator, with the end of the trial once the teleoperator ends it."""
         with self._changed:
             if self._phase is Phase.ENDED:
                 assert self._end is not None
@@ -600,13 +758,11 @@ class TeleopService:
             if self._phase is not Phase.RUNNING:
                 raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
-            self._images = {name: request[name] for name in cameras}
-            self._seen.update(dict.fromkeys(cameras, time.monotonic()))
             assert self._trackers, 'a running trial has the clutches of its Ready'
             robot = {arm: self._arm_state(request, arm) for arm in self._trackers}
             if not self._hold:
                 self._hold = dict(robot)
-            sample = self._next_sample(self._sample.number, deadline)
+            sample = self._newest_sample()
             events, self._events = self._events, []
             element = self._apply(sample, events, {arm: pose for arm, (pose, _) in robot.items()})
             self._frames += 1
@@ -653,7 +809,7 @@ class TeleopService:
         if target is None and tracker.on:
             tracker.turn_off()
         if tracker.on and target is not None:
-            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons)
+            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons.values)
 
     def _hold_element(self) -> dict[str, Any]:
         """The element that sends the hold targets, arm after arm. Hold the lock."""
@@ -699,8 +855,12 @@ class TeleopSession(Session):
         self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
 
     def infer(self, observation: Any) -> list[dict[str, Any]]:
-        images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
-        return [self._service.next_frame({**observation, **images}, self._cameras)]
+        if self._decoders:
+            images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
+        else:
+            images = {name: observation[name] for name in self._cameras}
+        self._service.take_images(images)
+        return [self._service.next_frame(observation)]
 
     def close(self) -> None:
         self._service.end_session()

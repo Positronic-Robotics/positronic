@@ -1,6 +1,6 @@
 """Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-The driver solves FK/IK against the vendored MJCF (``assets/i2rt_yam/yam.xml``) at ``GRIPPER_SITE``.
+The driver solves FK/IK with ``kinematics.YamKinematics`` on the vendored MJCF at ``GRIPPER_SITE``.
 The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
@@ -12,12 +12,12 @@ polarity, joint ranges, the mount pose (``base_pose``), teleop latency, and the 
 import contextlib
 import functools
 import logging
+import time
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
-import mujoco as mj
 import numpy as np
 
 import pimm
@@ -31,24 +31,22 @@ from positronic.drivers.utils import (
     MoveAbandoned,
     Moves,
     MoveStatus,
+    RecoveryOutcome,
     grip_setpoint,
     log_failure,
 )
-from positronic.utils import check_finite_positive, package_assets_path
+from positronic.utils import check_finite_nonnegative, check_finite_positive
 
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
-from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
+from ..models import YAM_JOINT_NAMES, bundled_yam_model
 from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from .grasp import Grasp, GraspTuning, capped_target
+from .kinematics import YamKinematics
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
 
-# The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
-# TODO(#517): centralise driver kinematics so driver and sim share one module.
-_IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
-_IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
 _PARK_JOINTS = np.zeros(6)
 # The menagerie "home" keyframe, folded up and back.
@@ -62,6 +60,7 @@ _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the ch
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
 _COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
+_LIMIT_GRIPPER_EFFORT = 'limit_gripper_effort'  # the force limit of i2rt's gripper force limiter, in get_robot_info()
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 _LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
 _RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
@@ -146,6 +145,97 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> 
     chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
+class _JointReadings(_JointSpeeds, Protocol):
+    pos: np.ndarray  # per motor; the gripper reads 0 closed and 1 open
+    eff: np.ndarray  # Nm per motor
+
+
+class _MotorSpace(Protocol):
+    """i2rt's ``JointMapper``: it turns the readings of the gripper into motor radians."""
+
+    def to_robot_joint_pos_space(self, command_joint_pos: np.ndarray) -> np.ndarray: ...
+
+    def to_robot_joint_vel_space(self, command_joint_vel: np.ndarray) -> np.ndarray: ...
+
+
+@runtime_checkable
+class _GripperLoop(Protocol):
+    """What the gripper force cap and the grasp read and wrap on i2rt's hardware chain, ``MotorChainRobot``: each
+    ``update`` ends in ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its
+    P-D command. The gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before
+    that call.
+
+    HACK: these members are private to i2rt, which takes a gripper force limit only when it opens the chain.
+    """
+
+    _joint_state: _JointReadings
+    _last_gripper_command_qpos: float
+    remapper: _MotorSpace
+    _update_joint_state: Callable[..., None]
+
+
+# The gripper of i2rt's hardware chain in get_robot_info(): its motor, its (closed, open) motor positions, and the
+# gripper and arm types that select the settings of its gripper force limiter
+_GRIPPER_INDEX, _GRIPPER_LIMITS = 'gripper_index', 'gripper_limits'
+_GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
+# The torque that i2rt's gripper force limiter adds against the friction of a stalled gripper (i2rt robots/utils.py:648)
+_GRIPPER_FRICTION_NM = 0.3
+
+
+def _limit_gripper(
+    chain: Any,
+    grasp_tuning: GraspTuning | None,
+    cap_n: Callable[[], float | None],
+    now: Callable[[], float] = time.monotonic,
+) -> None:
+    """Limit the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
+    ``chain``, after its gripper force limiter. The force cap is the torque at which that limiter holds a stalled
+    gripper with ``cap_n()`` newtons; None sets no cap. With no ``grasp_tuning``, the cap acts at all times. With one,
+    a ``Grasp`` on the clock ``now`` also limits the close rate, and caps the torque as ``Grasp.target`` states. The
+    arm motors and an opening gripper keep the commands of i2rt.
+
+    The control thread of i2rt calls ``cap_n`` and ``now`` once per update. A chain that reports no gripper force
+    limit, such as i2rt's sim chain, has no limiter and keeps the commands of i2rt. A chain that lacks a member of
+    ``_GripperLoop`` raises before anything changes.
+    """
+    with _chain_call():
+        info = chain.get_robot_info()
+    if _LIMIT_GRIPPER_EFFORT not in info:
+        return
+    if not isinstance(chain, _GripperLoop):
+        raise TypeError(
+            f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper force cap and the grasp need'
+        )
+    gripper, (closed, opened) = info[_GRIPPER_INDEX], info[_GRIPPER_LIMITS]
+    closing = np.sign(closed - opened)  # the sign of a closing move in motor radians
+    grasp = None if grasp_tuning is None else Grasp(grasp_tuning, closing, abs(opened - closed))
+    *_, force_to_torque = info[_GRIPPER_TYPE].get_gripper_limiter_params(info[_ARM_TYPE])
+    send = chain._update_joint_state
+
+    def capped_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
+        readings, request, kp = chain._joint_state, joint_commands.pos[gripper], joint_commands.kp[gripper]
+        q = float(chain.remapper.to_robot_joint_pos_space(readings.pos)[gripper])
+        dq = float(chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper])
+        newtons = cap_n()
+        cap_nm = None
+        if newtons is not None:
+            cap_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
+        feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
+            joint_commands.vel[gripper] - dq
+        )
+        if grasp is None:
+            target = capped_target(closing, q, request, kp, feedforward_and_damping, cap_nm)
+        else:
+            effort = float(readings.eff[gripper])
+            target = grasp.target(now(), q, request, effort, kp, feedforward_and_damping, cap_nm)
+        if target != request:
+            joint_commands.pos[gripper] = target
+            chain._last_gripper_command_qpos = joint_commands.pos[gripper]  # the limiter reads the target sent
+        send(motor_torques, joint_commands, *args)
+
+    chain._update_joint_state = capped_send
+
+
 def _connect(channel: str, sim: bool, compensation: Compensation):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
@@ -203,76 +293,6 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[YamState.STATUS_OFFSET] = status.value
 
 
-class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``GRIPPER_SITE``, in the arm-base frame.
-
-    ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
-    """
-
-    def __init__(self):
-        model_path = package_assets_path(YAM_MJCF_PATH)
-        self._model = mj.MjModel.from_xml_path(model_path)
-        self._data = mj.MjData(self._model)
-        site = mj.mjtObj.mjOBJ_SITE
-        self._site_id = mj.mj_name2id(self._model, site, GRIPPER_SITE)
-        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
-        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
-        self._lower, self._upper = ranges[:, 0], ranges[:, 1]
-
-    @property
-    def lower(self) -> np.ndarray:
-        return self._lower.copy()
-
-    @property
-    def upper(self) -> np.ndarray:
-        return self._upper.copy()
-
-    def fk(self, q: np.ndarray) -> geom.Transform3D:
-        self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)
-        quat = np.empty(4)
-        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
-        return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
-
-    @staticmethod
-    def _reach_postures(x: float, y: float) -> list[np.ndarray]:
-        """IK warm starts toward arm-base point (x, y): joint 1 at the target's azimuth, the elbow folded at two
-        heights. The 6-DoF wrist gives LM no null space, so a seed near the goal makes limit-clamped IK reliable."""
-        az = np.arctan2(y, x)
-        return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
-
-    def ik(
-        self, target: geom.Transform3D, current_q: np.ndarray, lower: np.ndarray, upper: np.ndarray
-    ) -> np.ndarray | None:
-        """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Each start's best answer is wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
-        for start in (current_q, *self._reach_postures(*target.translation[:2])):
-            self._data.qpos[:] = 0.0
-            self._data.qpos[self._qpos_ids] = start
-            # The FK check below accepts or refuses the answer: the solver reports success only below an error of 1e-14.
-            qpos, _, _ = qpos_from_site_pose(
-                self._model,
-                self._data,
-                self._site_id,
-                self._dof_ids,
-                target.translation,
-                target.rotation.as_quat,
-                rot_weight=0.5,
-            )
-            q = qpos[self._qpos_ids].copy()
-            # A revolute joint at q ± 2π is the same pose; wrap out-of-range entries back in when they fit.
-            q = np.where((q > upper) & (q - 2 * np.pi >= lower), q - 2 * np.pi, q)
-            q = np.where((q < lower) & (q + 2 * np.pi <= upper), q + 2 * np.pi, q)
-            q = np.clip(q, lower, upper)
-            reached = self.fk(q)
-            rot_err = (reached.rotation.inv * target.rotation).angle
-            rot_err = min(rot_err, 2 * np.pi - rot_err)
-            if np.linalg.norm(reached.translation - target.translation) < _IK_POS_TOL and rot_err < _IK_ROT_TOL:
-                return q
-        return None
-
-
 @runtime_checkable
 class _ControlLoop(Protocol):
     """The CAN motor chain of i2rt, ``DMChainCanInterface``: when a call to a motor fails, its control loop sets
@@ -310,8 +330,13 @@ class _Arm(DriverRun[command.CommandType]):
         clock: pimm.Clock,
         park_tuning: SettleTuning,
         move_tuning: SettleTuning,
-        kinematics: _Kinematics,
+        kinematics: YamKinematics,
         state: YamState,
+        meta_out: pimm.SignalEmitter[dict[str, Any]],
+        ee_mass: float | None,
+        gripper_force_cap_n: float | None,
+        take_gripper_force_cap: Callable[[], float | None],
+        grasp_tuning: GraspTuning | None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -327,6 +352,12 @@ class _Arm(DriverRun[command.CommandType]):
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+        self.meta_out = meta_out
+        self._ee_mass = ee_mass
+        self._force_cap_n = gripper_force_cap_n  # the gripper force cap in force
+        self._take_gripper_force_cap = take_gripper_force_cap
+        self._grasp_tuning = grasp_tuning
+        self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
     @_chain_call()
@@ -340,20 +371,28 @@ class _Arm(DriverRun[command.CommandType]):
         margin = self._CHAIN_LIMIT_MARGIN_RAD
         return limits[:, 0] + margin, limits[:, 1] - margin
 
-    def arm_meta(self, ee_mass: float | None) -> dict[str, Any]:
-        """The settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which it
-        does not report. i2rt's sim chain runs no friction and reports none."""
+    def emit_meta(self) -> None:
+        """Emit the settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which
+        it does not report. A chain with a gripper force limit runs the gripper force cap of this moment and the grasp
+        tuning, and its limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction
+        and no gripper force limit, and reports neither."""
+        self._reported_force_cap_n = self._force_cap_n
         info = self._robot_info
         meta = {
             roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
-            roboarm_keys.EE_MASS: ee_mass,
+            roboarm_keys.EE_MASS: self._ee_mass,
         }
+        if _LIMIT_GRIPPER_EFFORT in info:
+            meta[roboarm_keys.GRIPPER_FORCE_CAP] = self._reported_force_cap_n
+            meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] = float(info[_LIMIT_GRIPPER_EFFORT])
+            tuning = self._grasp_tuning
+            meta[roboarm_keys.GRIPPER_GRASP_TUNING] = None if tuning is None else asdict(tuning)
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
             fade = info.get(_COULOMB_FRICTION_FADE)
             meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
-        return meta
+        self.meta_out.emit(meta)
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
@@ -371,8 +410,9 @@ class _Arm(DriverRun[command.CommandType]):
         return aperture.flip_grip(obs[_GRIPPER_POS][0])
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
-        """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
-        logged, not raised. A shutdown that withholds readings publishes nothing."""
+        """Publish the measured state: ERROR after a failed move, else AVAILABLE, and the arm meta when the gripper
+        force cap changed. Each control step of each move publishes. In shutdown a failed publish is logged, not
+        raised. A shutdown that withholds readings publishes nothing."""
         if self._readings_withheld:
             return
         if status is None:
@@ -383,6 +423,8 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.out.emit(self.state)
             self.grip_out.emit(self.read_grip(obs))
+            if self._force_cap_n != self._reported_force_cap_n:
+                self.emit_meta()
         except Exception:
             if not self._shutting_down:
                 raise
@@ -391,6 +433,10 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def _send(self, joints: np.ndarray, open_width: float) -> None:
+        # The control thread of the chain can take a command at once, so the newest cap goes in force first. The park on
+        # shutdown keeps the cap in force.
+        if not self._shutting_down:
+            self._force_cap_n = self._take_gripper_force_cap()
         with _chain_call():
             self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
@@ -622,8 +668,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
-        that stopped the settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is
-        raised."""
+        or the stop that ended the settle, or None once the arm arrives. On a failure or a stop, hold where the arm
+        stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
@@ -636,7 +682,9 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm did not reach the start pose: {exc}')
             return *self.hold_where_it_stopped(), exc
         if reference is None:
-            return *self.hold_where_it_stopped(), None
+            return *self.hold_where_it_stopped(), InterruptedError(
+                'The driver stopped before the arm reached the start pose'
+            )
         return reference, _OPEN_GRIP, None
 
     def _report_parked(self) -> None:
@@ -815,6 +863,8 @@ class Robot(pimm.ControlSystem):
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
+        grasp_tuning: GraspTuning | None = None,
+        gripper_force_cap_n: float | None = None,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -827,11 +877,20 @@ class Robot(pimm.ControlSystem):
             None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
+        :param grasp_tuning: How the gripper closes on an object on this arm. None keeps the close rate of i2rt and
+            finds no touch. i2rt's sim chain does not run it.
+        :param gripper_force_cap_n: The cap in newtons on the force that the gripper closes with, until the
+            ``gripper_force_cap_n`` input carries another cap. Without a ``grasp_tuning`` it acts at all times; with
+            one, only in the launch of a close and after a touch, and the arm meta names that tuning. None or 0 sets
+            no force cap, but a ``grasp_tuning`` still caps the launch at its ``touch_effort_nm``. i2rt's own limiter
+            still holds a stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
         if park_after_idle_s is not None:
             check_finite_positive(park_after_idle_s, 'park_after_idle_s')
+        # The cap that the control thread of the chain reads. The driver loop writes it from ``gripper_force_cap_n``.
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(gripper_force_cap_n)
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
@@ -842,6 +901,7 @@ class Robot(pimm.ControlSystem):
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning
+        self._grasp_tuning = grasp_tuning
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
@@ -859,13 +919,31 @@ class Robot(pimm.ControlSystem):
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # Answers CLEARED once the arm is at the start pose; an arm with no fault answers at once and does not move.
+        self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         # On until a message says otherwise; the park on shutdown does not read it.
         self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
+        # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
+        # cap. The park on shutdown does not read it.
+        self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
 
     @property
     def base_pose(self) -> geom.Transform3D:
         """The arm-base mount pose in the world frame."""
         return self._base_pose
+
+    @staticmethod
+    def _checked_gripper_force_cap(cap_n: float | None) -> float | None:
+        """``cap_n`` as the cap that the chain runs: None for no cap. Raises ValueError where it is no finite force."""
+        if cap_n is not None:
+            check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
+        return float(cap_n) if cap_n else None
+
+    def _take_gripper_force_cap(self) -> float | None:
+        """Read ``gripper_force_cap_n``, put its cap in force for the chain, and return the cap."""
+        # One reference write: the control thread of the chain reads the old cap or the new one
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(self.gripper_force_cap_n.value)
+        return self._gripper_force_cap_n
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -890,7 +968,7 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         # Built before the chain opens, so nothing can raise between enabling the motors and the protected region.
-        kinematics, state = _Kinematics(), YamState()
+        kinematics, state = YamKinematics(), YamState()
         meta = bundled_yam_model()
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
@@ -901,7 +979,7 @@ class Robot(pimm.ControlSystem):
 
     def _drive_chain(
         self,
-        kinematics: _Kinematics,
+        kinematics: YamKinematics,
         state: YamState,
         meta: dict[str, Any],
         asked: list[pimm.calls.Call[None, None]],
@@ -938,16 +1016,23 @@ class Robot(pimm.ControlSystem):
                 self._move_tuning,
                 kinematics,
                 state,
+                self.arm_meta,
+                self._compensation.ee_mass,
+                self._gripper_force_cap_n,
+                self._take_gripper_force_cap,
+                self._grasp_tuning,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 _set_coulomb_friction(vendor, self._compensation, self._sim)
+                _limit_gripper(vendor, self._grasp_tuning, lambda: self._gripper_force_cap_n)
                 self.robot_meta.emit(meta)
-                self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
+                arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
-                self._answer_ready(asked, missed)
+                self._answer_start_calls(asked, missed)
                 asked = []
-                yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
+                serving = _Serving(joints, grip, missed, idle_since=clock.now())
+                yield from self._serve(arm, serving, should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)
@@ -964,7 +1049,7 @@ class Robot(pimm.ControlSystem):
         return lost
 
     @staticmethod
-    def _answer_ready(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
+    def _answer_start_calls(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
         for call in asked:
             if missed is None:
                 call.set_result(None)
@@ -974,7 +1059,7 @@ class Robot(pimm.ControlSystem):
     def _report_lost(self, lost: ChainFault) -> DeviceFault:
         """Put an error for ``lost`` on the state and the grip, and return it."""
         error = _arm_fault(lost)
-        logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        logger.error(f'{error}; it holds the error until a ready or a recover call opens the chain again')
         self._emit_error(error)
         return error
 
@@ -983,12 +1068,33 @@ class Robot(pimm.ControlSystem):
         self.state.emit(cast(YamState, error))
         self.grip.emit(cast(float, error))
 
+    class _Recovery(pimm.calls.Call[None, None]):
+        """A recover call that the driver answers as a ready call: an answer with no error is ``CLEARED``."""
+
+        def __init__(self, call: pimm.calls.Call[None, RecoveryOutcome]):
+            self._call = call
+
+        @property
+        def request(self) -> None:
+            return None
+
+        def set_result(self, value: None) -> None:
+            self._call.set_result(RecoveryOutcome.CLEARED)
+
+        def set_exception(self, exc: BaseException) -> None:
+            self._call.set_exception(exc)
+
+    def _recoveries(self) -> list[pimm.calls.Call[None, None]]:
+        """The recover calls that wait, each to be answered as a ready call."""
+        return [self._Recovery(call) for call in self.recover.incoming()]
+
     def _hold(
         self, error: DeviceFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
-        """Answer every move with ``error``, which is on the state and the grip already, until a ready call.
+        """Answer every move with ``error``, which is on the state and the grip already, until a ready or a recover
+        call.
 
-        Return the ready calls, or none when the world stops first.
+        Return those calls, or none when the world stops first.
         """
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = (
@@ -999,7 +1105,7 @@ class Robot(pimm.ControlSystem):
             for moves in refused:
                 while isinstance(move := moves.next_request(), pimm.calls.Call):
                     move.set_exception(error)
-            if asked := list(self.ready.incoming()):
+            if asked := [*self.ready.incoming(), *self._recoveries()]:
                 return asked
             yield limiter.wait()
         return []
@@ -1012,7 +1118,11 @@ class Robot(pimm.ControlSystem):
             with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
-                        yield from self._serve_ready(arm, serving, ready, clock)
+                        yield from self._serve_start_calls(
+                            arm, serving, ready, clock, move=serving.failed_move is not None
+                        )
+                    if recoveries := self._recoveries():
+                        yield from self._serve_start_calls(arm, serving, recoveries, clock, move=arm.moves.errored)
                     asked, receipt, q = self._take_request(arm, fingers, serving, clock)
                     taken = yield from self._dispatch(arm, serving, asked, receipt, q, clock)
                     if (step := self._advance_parking(serving)) is None:
@@ -1035,11 +1145,12 @@ class Robot(pimm.ControlSystem):
             fingers.fail(_arm_fault(exc))
             raise
 
-    def _serve_ready(
-        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
+    def _serve_start_calls(
+        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock, *, move: bool
     ) -> Generator[pimm.Command, None, None]:
-        """Answer ``asked``. After a missed start or idle park, move the arm to the start pose first."""
-        if serving.failed_move is not None:
+        """Answer ``asked``. Where ``move`` says so, move the arm to the start pose first, and answer with its miss."""
+        missed = None
+        if move:
             if serving.parking is not None:
                 serving.parking.close()
                 serving.parking = None
@@ -1048,7 +1159,8 @@ class Robot(pimm.ControlSystem):
                     answers.enter_context(self._answer_failed_setup(call))
                 serving.q_target, serving.grip_target, serving.failed_move = yield from arm.go_to_start()
             serving.idle_since = clock.now()
-        self._answer_ready(asked, serving.failed_move)
+            missed = serving.failed_move
+        self._answer_start_calls(asked, missed)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
@@ -1201,7 +1313,7 @@ if __name__ == '__main__':
             pump(0.1)  # the opening move ramps the arm to the start pose over a few seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
-        kin = _Kinematics()
+        kin = YamKinematics()
 
         if fake is not None:
             # State round-trip: the chain at its start pose comes back through the driver's FK.

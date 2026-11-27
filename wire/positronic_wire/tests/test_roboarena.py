@@ -37,7 +37,7 @@ def opened(monkeypatch) -> Iterator[MagicMock]:
         (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.SILENT),
         (ConnectionClosedError(None, None), wire.Refusal.SILENT),
         (InvalidHandshake('dropped'), wire.Refusal.COLD),
-        (socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution'), wire.Refusal.SILENT),
+        (socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution'), wire.Refusal.UNRESOLVED),
         (ssl.SSLCertVerificationError('unknown issuer'), wire.Refusal.FINAL),
         (socket.gaierror(socket.EAI_NONAME, 'Name or service not known'), wire.Refusal.FINAL),
     ],

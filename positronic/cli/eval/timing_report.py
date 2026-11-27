@@ -303,7 +303,9 @@ def _gpu_summary_from_stats(stats: list[dict], windows: list[tuple[int, int]]) -
         # a ``None`` reading drops the sample from that peak alone.
         if len(gpus) != box_devices:
             continue
-        mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
+        # A Jetson's GPU shares the host's memory, so its entry carries no memory reading.
+        if all(gpu.get(GPU_MEM_USED_B) is not None for gpu in gpus):
+            mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
         if all(gpu.get(GPU_PROC_MEM_B) is not None for gpu in gpus):
             proc.append(sum(float(gpu[GPU_PROC_MEM_B]) for gpu in gpus))
     if box_devices == 0:
@@ -316,8 +318,9 @@ def _gpu_summary_from_stats(stats: list[dict], windows: list[tuple[int, int]]) -
         )
     elif not mem:
         logger.warning(
-            "no machine-load sample carried all %d of the box's GPUs (an NVML query refused mid-run?); both "
-            'peaks are unavailable, and mean utilisation covers the %d device(s) that answered',
+            "no machine-load sample carried the memory of all %d of the box's GPUs (an NVML query refused "
+            "mid-run, or a Jetson's shared memory); both peaks are unavailable, and mean utilisation covers the %d "
+            'device(s) that answered',
             box_devices,
             len(seen),
         )

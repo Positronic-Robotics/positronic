@@ -44,7 +44,8 @@ claim, and holds whether or not the constant is right.
 
 | Integration | `env_control_frame` | Checked against the model |
 | --- | --- | --- |
-| RoboLab | `models.ROBOLAB_EE_FRAME` | `robolab/validate.py:_check_flange_to_eef`, against RoboLab's own scene |
+| RoboLab, DROID | `models.ROBOLAB_EE_FRAME` | `robolab/validate.py:_check_flange_to_eef`, against RoboLab's own scene |
+| RoboLab, YAM | identity — the env measures at the `<side>_gripper` link, at the i2rt `gripper` site | `robolab/tests/test_yam_spec.py`, against the i2rt MJCF; `robolab/validate.py:_check_yam_eef_pose`, against the running env |
 | MolmoSpaces | identity — the env drives the 2F-85 grip point | |
 | LIBERO | `models.PANDA_HAND_FRAME` — the grip site is taken to be the panda's `end_effector` | `libero/validate.py:_check_flange_to_eef`, and it diverges: 38.1 mm and 90° ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)) |
 

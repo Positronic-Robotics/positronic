@@ -22,6 +22,12 @@ time limit of one run, its scoring, and the positronic commit that the platform 
 `public_eval(name)` returns one definition, and `PUBLIC_EVALS` names them all. The platform also
 offers evals that it does not publish, and `public_eval` refuses their names.
 
+`molmo.franka_pick_mini_strict` and `molmo.franka_pick_mini_strict_smoke` run the episodes of
+`molmo.franka_pick_mini` and `molmo.franka_pick_mini_smoke` under the `strict_v1` success profile
+(`MOLMO_STRICT_SUCCESS_PROFILE`). The other MolmoSpaces evals take the default profile of the config,
+`molmo_native`, which is MolmoSpaces' own verdict. The two strict evals are for practice on your
+machine.
+
 `positronic eval run` with `--policy` takes a public eval's name as `--eval`, and runs that eval on
 your machine. The run uses the positronic you installed. It warns when that positronic is not the
 commit the definition names, because the two runs can then differ. A local run does not stop at the

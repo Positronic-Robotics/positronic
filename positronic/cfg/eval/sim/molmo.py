@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import random
 from contextlib import AbstractContextManager, nullcontext
@@ -16,6 +15,7 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 
 # Margin for the harness to observe the simulator's terminal signal.
 _TIMEOUT_MARGIN_SEC = 1.0
@@ -28,22 +28,15 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
-def _env_server(env_hook: str | None, env_server: str | None) -> AbstractContextManager[tuple[str, int]]:
-    """The env server of the eval: the server at ``env_server``, or one that the eval launches."""
-    if env_server is not None:
-        if env_hook is not None:
-            raise ValueError(
-                '--eval.env_hook applies to a server that the eval launches, so --eval.env_server must be unset'
-            )
-        return nullcontext(env_server_address(env_server))
-    if env_hook is None:
-        return serve_molmo_spaces()
-    hook = Path(env_hook).expanduser().resolve()
-    return serve_molmo_spaces(hook=hook, hook_sha256=hashlib.sha256(hook.read_bytes()).hexdigest())
-
-
 _EPISODE_CAMERA_KEYS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
 _SHOULDER_ALIASES = frozenset(camera for cameras in SHOULDER_CAMERAS.values() for camera in cameras)
+
+
+def _env_server(env_server: str | None, hook_path: Path | None) -> AbstractContextManager[tuple[str, int]]:
+    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
+    if env_server is not None:
+        return nullcontext(env_server_address(env_server))
+    return serve_molmo_spaces(hook_root=None if hook_path is None else hook_path.parent)
 
 
 def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]) -> dict[str, tuple[str, ...]]:
@@ -80,6 +73,7 @@ def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]
     episode_cameras=None,
     env_hook=None,
     env_server=None,
+    success_profile=SuccessProfile.MOLMO_NATIVE,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -97,6 +91,7 @@ def benchmarks(
     episode_cameras: dict[str, str] | None,
     env_hook: str | None,
     env_server: str | None,
+    success_profile: str,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
@@ -123,18 +118,27 @@ def benchmarks(
     ``with_right_shoulder=False``, and a shoulder camera is refused. Every trial records the map under
     ``molmo.episode_cameras``. A map that replaces ``image.exterior`` records no ``molmo.exterior_sides``.
 
-    ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode:
-    for example a task class, a camera model or a grip scale of its own. A hook can change the robot only within the
-    bundled FR3 joints, kinematics and 2F-85 grasp site, for example its mount or a gripper detail, and the eval
-    records the bundled robot model. The server checks the file against the digest that the eval passes. Every
-    trial records the name and SHA-256 digest of the hook file that the server runs under ``molmo.env_hook``, or
-    None without a hook. A run with a hook or an episode camera is not comparable with stock scores.
+    ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode of
+    the eval: for example a task class, a camera model or a grip scale of its own. ``EnvHook`` states what a hook can
+    change. Each reset token names the file and the SHA-256 digest that the eval reads from it, and the server refuses
+    a file with another digest. The eval and the server read the file at the same path, so a dialed server on another
+    box needs the same file at that path. A server loads only the hook files under the hook root of its operator: the
+    eval launches its server with the directory of ``env_hook``, and a dialed server needs a ``--hook-root`` that holds
+    the file. Every trial records the name and digest of the hook file that the server runs under ``molmo.env_hook``,
+    or None without a hook. A run with a hook or an episode camera is not comparable with stock scores.
 
     ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
-    a server of its own. ``env_hook`` applies only to a server that the eval launches; a dialed server reports its
-    own hook. Start a server to dial with
-    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook <file>]``: it serves eval runs one
+    a server of its own. Start a server to dial with
+    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook-root <dir>]``: it serves eval runs one
     after another, with one episode at a time, until Ctrl-C stops it.
+
+    ``success_profile`` is a ``SuccessProfile`` or its value: how the server judges success and when it ends a trial.
+    ``molmo_native`` is MolmoSpaces' own verdict, and the trial ends at the first step where it is true.
+    ``molmo_native_tail_v1`` takes the same verdict and records 1 s more after it, so its scores equal those of
+    ``molmo_native``. ``strict_v1`` needs its predicate to hold for 1 s, and records 1 s more after the verdict.
+    ``strict_v2`` is ``strict_v1``, but a joint pushed past its closed position reads as closed. Every trial records the
+    profile under ``molmo.success_profile``. A strict score is not comparable with a native one, or with a score of the
+    other strict profile.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
@@ -142,6 +146,7 @@ def benchmarks(
     require_finite_positive('horizon_sec', horizon_sec)
     if episode_paths is not None and not episode_paths:
         raise ValueError('--eval.episode_paths must name at least one episode')
+    profile = SuccessProfile(success_profile)
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]
     if pins is not None:
         names = (*mapping.BenchmarkPath._fields, mapping.SELECT_EPISODES)
@@ -149,14 +154,17 @@ def benchmarks(
         bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
-    serve = _env_server(env_hook, env_server)
+    hook_path = None if env_hook is None else Path(env_hook).expanduser().resolve()
+    serve = _env_server(env_server, hook_path)
+    hook_file = None if hook_path is None else mapping.HookFile.read(hook_path)
+    hook_selection = hook_file.request() if hook_file is not None else {}
     episode_cameras = episode_cameras or {}
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = _cameras(exterior_sides, episode_cameras)
     sides_record = (
         {} if keys.EXTERIOR_IMAGE in episode_cameras else {molmo_keys.EXTERIOR_SIDES: [s.value for s in exterior_sides]}
     )
-    adapter = MolmoAdapter(cameras, with_right_shoulder, with_object_image_points)
+    adapter = MolmoAdapter(cameras, with_right_shoulder, with_object_image_points, hook_file)
     proxy = RemoteEnvControlSystem(adapter, serve)
     embodiment = remote_embodiment(
         proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
@@ -179,6 +187,7 @@ def benchmarks(
                     mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
                     mapping.SELECT_HORIZON_SEC: horizon_sec,
                     mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+                    **hook_selection,
                 },
             )
             for entry in proxy.tasks(selection):
@@ -198,6 +207,7 @@ def benchmarks(
                 mapping.SELECT_EPISODES: episodes,
                 mapping.SELECT_HORIZON_SEC: horizon_sec,
                 mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+                **hook_selection,
             },
         )
         return proxy.tasks(selection)
@@ -210,7 +220,12 @@ def benchmarks(
             params = entry.params
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
             task = Task(instruction=entry.instruction, timeout_sec=deadline)
-            scene = {**params, **sides_record, molmo_keys.EPISODE_CAMERAS: episode_cameras}
+            scene = {
+                **params,
+                **sides_record,
+                molmo_keys.EPISODE_CAMERAS: episode_cameras,
+                molmo_keys.SUCCESS_PROFILE: profile.value,
+            }
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})
                 for t in range(trial_count)

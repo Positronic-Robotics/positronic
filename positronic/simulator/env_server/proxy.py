@@ -39,11 +39,18 @@ class EnvTask:
 
 class RemoteEnvControlSystem(pimm.ControlSystem):
     def __init__(
-        self, adapter: EnvAdapter, serve: AbstractContextManager[tuple[str, int]], batch_size: int | None = None
+        self,
+        adapter: EnvAdapter,
+        serve: AbstractContextManager[tuple[str, int]],
+        batch_size: int | None = None,
+        *,
+        refill: bool = False,
     ):
         self._adapter = adapter
         # How many proxies start each batch of a shared server; ``None`` asks for every slot of the server.
         self._batch_size = batch_size
+        # Whether each reset resets this proxy's slot alone into the batch that runs on a shared server.
+        self._refill = refill
         # The server this proxy talks to: a context manager yielding its ``(host, port)`` and owning its lifetime
         # (a launched subprocess, or an already-running server whose address it just hands back). Entered when the
         # proxy connects, exited after the socket closes — so the server outlives every request and dies last.
@@ -101,10 +108,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         model, a full observation payload and a non-terminal ``done``. Stale commands queued while inactive
         are dropped so the first step doesn't apply them.
         """
+        # A reset that fails leaves no trial live, so the proxy does not step the scene it drew or the one before.
+        self._active = False
         conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = conn.reset(self._adapter.reset_token(params), self._batch_size)
+        self._frame = conn.reset(self._adapter.reset_token(params), self._batch_size, refill=self._refill)
+        self._adapter.check_reset(params, self._frame)
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
         self._emit_payload(self._frame)

@@ -167,8 +167,9 @@ published image as a submission.
 
 ### A private image
 
-Push to a private repository and hand the platform a read-only credential for it. The run pulls
-the image from your registry with that credential.
+Push to a private repository and hand the platform a read-only credential for it. At submission,
+the platform copies the image into a private registry of its own, and the run pulls that copy. The
+platform uses the credential only at submission and for the copy, so a short-lived password works.
 
 Write the password into a file of its own and name the file:
 
@@ -195,27 +196,59 @@ What the platform does with the credential:
 
 1. At submission, the platform reads the image with it. A credential your registry refuses fails
    the submission with `image_unpullable`, charged.
-2. After that read, the platform stores the credential as one secret for this submission. The
-   submission record holds a reference to the secret. No response and no log holds the password.
-3. When the run starts, the platform copies the credential into the run's own secret. The policy
-   VM of that run reads it before it denies the container the network.
-4. The VM writes the credential to a file that only root reads, and logs in to your registry. It
-   deletes the file, pulls the digest, and logs out. The policy container never gets the credential.
-5. When the submission ends, the platform deletes both secrets. The secret store keeps a deleted
-   secret until it purges it.
+2. The platform answers the submission after that read. Then it copies the image from your
+   registry into its own, with the same credential. The submission is `pending` while the copy
+   runs, and the run starts after the copy.
+3. The copy keeps the digest you pinned. For a multi-platform image, the platform copies every
+   platform.
+4. The platform uses the password only at submission and during the copy. It keeps the password
+   in memory only, and discards it when the copy ends. No secret, no record, no response and no
+   log holds the password.
+5. The run pulls the copy with a credential of the platform. It does not use your registry or
+   your password. The policy container never gets a registry credential.
+6. After the submission ends, the platform deletes the copy.
 
-- Only the platform's run services, the policy VM of that run and a platform administrator can
-  read the credential. They can read it until the purge.
-- Keep the image and the credential valid until the submission ends. A run that cannot pull
-  the image fails with `image_unpullable`. Revoke the token after the submission ends.
+- Keep the password valid until the copy ends, not only at submission. A large image takes
+  longer to copy. A submission is `running` only after its copy ends. Then you can revoke the
+  token or let it expire.
+- A copy that fails, for any reason, ends the submission `errored` with `internal_error`, not
+  charged. Submit again with a new transaction key.
+- Only the platform can read the copy: its run services, the VMs that run your image and a
+  platform administrator.
 - A retry with the same transaction key returns the first submission, also with a changed
   credential. To submit with a new credential, use a new transaction key.
+- An `image` endpoint of an [eval plan](../client/README.md#eval-plans) that states
+  `image_credential` gets the same copy when you file the plan. The plan is `pending` while the
+  copy runs, and a copy that fails ends the plan the same way.
+
+#### An image in Amazon ECR
+
+Amazon ECR takes the user name `AWS` and a password from `aws ecr get-login-password`. The password
+is valid for 12 hours, and only in the region that issued it. The copy must end inside those 12
+hours, so make a new password just before you submit:
+
+```bash
+mkdir -p ~/.config/positronic
+install -m 600 /dev/null ~/.config/positronic/registry-password
+aws ecr get-login-password --region <region> > ~/.config/positronic/registry-password
+uv run positronic eval run --eval=<eval> \
+    --policy-image=<account>.dkr.ecr.<region>.amazonaws.com/<repository>@sha256:<digest> \
+    --registry-username=AWS \
+    --registry-password-file=~/.config/positronic/registry-password
+```
+
+- `<region>` is the region of the repository.
+- The password has the permissions of the AWS identity that makes it. Make it as an identity with
+  `ecr:GetAuthorizationToken`, and with `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer` on
+  that one repository.
+- The run pulls the copy, so a run that starts after the 12 hours is not affected.
 
 ## Life of a submission
 
 1. The platform resolves your image reference to a digest at submission and records it as
-   `policy_image_digest`. The run pulls that digest from your registry when its VM starts. The
-   platform keeps no copy of the image.
+   `policy_image_digest`. The run pulls that digest when its VM starts. It pulls a public image
+   from your registry, and a private image from the copy that the platform made at submission
+   ([A private image](#a-private-image)). The platform keeps no copy of a public image.
 2. It refuses an image it cannot pull — anonymously, or with the credential you named
    (`image_unpullable`) — and one whose compressed size, config and layers summed, is over 50 GB
    (`image_too_large`). Both are charged to your quota. The image has two more budgets, in
@@ -371,7 +404,11 @@ bytes. The platform then gives the run the smallest slice that holds it:
 `nvidia-smi` reports MiB. Convert a peak you measured with MiB × 2^20 / 10^9, round up, and add
 headroom. The largest slice depends on the GPU the run is placed on. A need that no slice of that GPU
 holds is refused when you submit. A competition run keeps the published slice: a competition plan
-whose `min_vram_gb` is more than 25 is refused.
+whose `min_vram_gb` is more than 25 is refused. A run that dies when it runs out of GPU memory names
+`min_vram_gb` in its failure.
+
+`positronic eval run --min-vram-gb=40` states it beside `--policy-image`. A plan file states it on
+the image endpoint:
 
 ```yaml
 endpoints:
@@ -468,6 +505,8 @@ uv run positronic eval list
   [A private image](#a-private-image).
 - `--policy-query=horizon_sec=0.5` states the session params of the image; see
   [Session params](#session-params).
+- `--min-vram-gb=40` states the GPU memory the image needs. A private run (`--org`) then gets a
+  larger slice; see [GPU memory](#gpu-memory).
 - Reuse the transaction key on a retry. The same key returns the original submission; a retry
   without one spends quota again. The same key with a different request is refused as a conflict.
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
@@ -477,8 +516,8 @@ uv run positronic eval list
   [Enter the competition](nebius-competition.md#enter-the-competition).
 - `users.me` reports your quota. A competition submission counts against a daily limit:
   [Submissions per day](nebius-competition.md#submissions-per-day). An
-  [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
-  against it.
+  [eval plan](../client/README.md#eval-plans) for the lab rig, a real robot, does not count against
+  it.
 
 ## Read the outcome
 

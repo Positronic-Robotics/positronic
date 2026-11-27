@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
+import subprocess
 import threading
 import time
 import types
@@ -53,7 +55,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import webxr
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
-from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, WebXR
+from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, ControllerButtons, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -114,23 +116,34 @@ ARM_TARGET_GRIPS = {arm: keys.arm_channel(keys.TARGET_GRIP, arm) for arm in keys
 HOLD_SEC = 0.2
 
 
-def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
-    """The values that the headset page sends for a controller."""
+def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0, presses: dict[Button, int] | None = None) -> ControllerButtons:
+    """The buttons that the headset page sends for a controller. With no ``presses``, each button that is down has a
+    press count of 1 and the others of 0. So a sample with a button down after a sample with it up is one press."""
     values = [0.0] * (max(Button) + 1)
     for button, value in ((Button.TRIGGER, trigger), (Button.STICK, stick), (Button.A, a), (Button.B, b)):
         values[button] = value
-    return values
+    counts = [int(value >= 0.5) for value in values] if presses is None else [0] * len(values)
+    for button, count in (presses or {}).items():
+        counts[button] = count
+    return ControllerButtons(tuple(values), tuple(counts))
+
+
+def _map(*args, **kwargs) -> ButtonMap:
+    """A ``ButtonMap`` that took one sample with no button down, as a page sends before the first press."""
+    button_map = ButtonMap(*args, **kwargs)
+    button_map.observe(_buttons(), 0)
+    return button_map
 
 
 class TestButtonMap:
     def test_b_and_the_stick_answer_the_wait_for_ready(self):
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(b=1.0), 0) is ReadyAnswer.READY
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(stick=1.0), 0) is ReadyAnswer.CANCELLED
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(), 0) is None
+        assert _map(HOLD_SEC).ready_answer(_buttons(b=1.0), 0) is ReadyAnswer.READY
+        assert _map(HOLD_SEC).ready_answer(_buttons(stick=1.0), 0) is ReadyAnswer.CANCELLED
+        assert _map(HOLD_SEC).ready_answer(_buttons(), 0) is None
 
     @pytest.mark.parametrize('threshold', [0.0, -0.1, float('nan'), 1.5])
-    def test_a_press_threshold_outside_zero_to_one_is_refused(self, threshold):
-        with pytest.raises(ValueError, match='press_threshold must be in'):
+    def test_a_hold_threshold_outside_zero_to_one_is_refused(self, threshold):
+        with pytest.raises(ValueError, match='hold_threshold must be in'):
             ButtonMap(HOLD_SEC, threshold)
 
     @pytest.mark.parametrize('hold_sec', [0.0, float('nan'), float('inf')])
@@ -139,44 +152,84 @@ class TestButtonMap:
             ButtonMap(hold_sec)
 
     def test_a_turns_control_on_or_off_at_each_press(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(a=1.0), 0) == [Event.CLUTCH]
         assert buttons.events(_buttons(a=1.0), 10) == []
         assert buttons.events(_buttons(), 20) == []
         assert buttons.events(_buttons(a=1.0), 30) == [Event.CLUTCH]
 
     def test_a_hold_of_b_completes_once(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(b=1.0), 0) == []
         assert buttons.events(_buttons(b=1.0), 300_000_000) == [Event.COMPLETE]
         assert buttons.events(_buttons(b=1.0), 600_000_000) == []
 
     def test_the_b_press_of_ready_does_not_complete(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         buttons.ready_answer(_buttons(b=1.0), 0)
         assert buttons.events(_buttons(b=1.0), 1_000_000_000) == []
 
     def test_a_hold_of_the_stick_gives_up_once(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(stick=1.0), 0) == []
         assert buttons.events(_buttons(stick=1.0), 300_000_000) == [Event.GIVE_UP]
         assert buttons.events(_buttons(stick=1.0), 600_000_000) == []
 
-    def test_a_value_below_the_press_threshold_presses_nothing(self):
-        buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
-        assert buttons.events(_buttons(a=0.8), 0) == []
-        assert buttons.events(_buttons(a=0.95), 10) == [Event.CLUTCH]
+    def test_a_value_below_the_hold_threshold_holds_nothing(self):
+        buttons = _map(HOLD_SEC, hold_threshold=0.9)
+        assert buttons.events(_buttons(b=0.8), 0) == []
+        assert buttons.events(_buttons(b=0.8), 300_000_000) == []
+        assert buttons.events(_buttons(b=0.95), 310_000_000) == []
+        assert buttons.events(_buttons(b=0.95), 610_000_000) == [Event.COMPLETE]
+
+    def test_a_press_that_went_down_and_up_between_two_samples_turns_control_on(self):
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
+
+    def test_an_odd_number_of_presses_between_two_samples_is_one_clutch_and_an_even_number_two(self):
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == [Event.CLUTCH] * 2
+        assert buttons.events(_buttons(presses={Button.A: 5}), 10) == [Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 105}), 20) == [Event.CLUTCH] * 2
+
+    def test_the_first_sample_sets_the_press_counts_and_presses_nothing(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.ready_answer(_buttons(presses={Button.B: 7}), 0) is None
+        assert buttons.ready_answer(_buttons(presses={Button.B: 8}), 10) is ReadyAnswer.READY
+
+    def test_a_press_count_that_goes_down_presses_nothing(self):
+        """A page that loads again counts from 0."""
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 0}), 10) == []
+        assert buttons.events(_buttons(presses={Button.A: 1}), 20) == [Event.CLUTCH]
+
+    def test_a_sample_with_any_count_that_went_down_sets_all_the_counts_to_count_from(self):
+        """A page that loads again counts each button from 0, and can count a press of A before its first sample."""
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.TRIGGER: 4}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 1}), 10) == []
+        assert buttons.events(_buttons(presses={Button.A: 2}), 20) == [Event.CLUTCH]
 
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
-        page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+        page = Path(package_assets_path('assets/webxr_phone/index.html')).read_text()
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
     def test_the_trigger_is_the_grip(self):
-        assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
+        assert ButtonMap.grip(_buttons(trigger=0.7).values) == 0.7
+
+    def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(b=1.0), 0) == []
+        buttons.cancel_holds()
+        assert buttons.events(_buttons(b=1.0), 300_000_000) == []
+        assert buttons.events(_buttons(), 310_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 320_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 620_000_000) == [Event.COMPLETE]
 
     def test_the_map_of_the_left_controller_reads_only_x(self):
-        buttons = ButtonMap(HOLD_SEC, buttons=(Button.X,))
+        buttons = _map(HOLD_SEC, buttons=(Button.X,))
         assert buttons.ready_answer(_buttons(b=1.0), 0) is None
         assert buttons.ready_answer(_buttons(stick=1.0), 10) is None
         assert buttons.events(_buttons(a=1.0, b=1.0, stick=1.0), 20) == [Event.CLUTCH]
@@ -207,24 +260,52 @@ def _client(socket_path: Path, query: str = '') -> InferenceClient:
     return InferenceClient(registry.client_wire('websocket_unix'), address, infer_timeout=5, connect_deadline=5)
 
 
-def _take(service: TeleopService, buttons: list[float]) -> None:
+def _take(service: TeleopService, buttons: ControllerButtons) -> None:
     """Pass one sample of the right controller at ``HAND`` with ``buttons`` to ``service``."""
     service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: buttons})
 
 
+def _pressed_after(previous: ControllerButtons, buttons: ControllerButtons) -> ControllerButtons:
+    """The values of ``buttons`` with the press counts that a page sends after ``previous``: each button that goes down
+    counts one press more."""
+    if len(buttons.values) != len(previous.values):
+        return buttons
+    counts = tuple(
+        count + int(value >= 0.5 > before)
+        for count, value, before in zip(previous.presses, buttons.values, previous.values, strict=True)
+    )
+    return ControllerButtons(buttons.values, counts)
+
+
 class _Headset:
-    """A headset that sends one sample of both controllers every 10 ms, with the poses and the buttons that a test
-    sets. ``pose`` and ``buttons`` are of the right controller."""
+    """A headset that sends one sample of both controllers every 10 ms, with the poses and the button values that a
+    test sets. It counts the presses as the page does. ``pose`` and ``buttons`` are of the right controller."""
 
     def __init__(self, service: TeleopService):
         self._service = service
         self.pose: geom.Transform3D | None = HAND
-        self.buttons = _buttons()
+        self._buttons = _buttons()
         self.left_pose: geom.Transform3D | None = LEFT_HAND
-        self.left_buttons = _buttons()
+        self._left_buttons = _buttons()
         self.sent = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send, daemon=True)
+
+    @property
+    def buttons(self) -> ControllerButtons:
+        return self._buttons
+
+    @buttons.setter
+    def buttons(self, buttons: ControllerButtons) -> None:
+        self._buttons = _pressed_after(self._buttons, buttons)
+
+    @property
+    def left_buttons(self) -> ControllerButtons:
+        return self._left_buttons
+
+    @left_buttons.setter
+    def left_buttons(self, buttons: ControllerButtons) -> None:
+        self._left_buttons = _pressed_after(self._left_buttons, buttons)
 
     def _send(self) -> None:
         while not self._stop.is_set():
@@ -249,16 +330,16 @@ class _Headset:
             assert time.monotonic() < deadline, 'the headset sent no sample'
             time.sleep(0.005)
 
-    def press(self, **buttons: float) -> None:
-        """Press ``buttons`` of the right controller for a few samples, and release them."""
-        self.buttons = _buttons(**buttons)
+    def press(self, trigger=0.0, stick=0.0, a=0.0, b=0.0) -> None:
+        """Press the buttons of the right controller for a few samples, and release them."""
+        self.buttons = _buttons(trigger, stick, a, b)
         self._samples(3)
         self.buttons = _buttons()
         self._samples(3)
 
-    def press_left(self, **buttons: float) -> None:
-        """Press ``buttons`` of the left controller for a few samples, and release them. X is at the index of A."""
-        self.left_buttons = _buttons(**buttons)
+    def press_left(self, trigger=0.0, stick=0.0, a=0.0, b=0.0) -> None:
+        """Press the buttons of the left controller for a few samples, and release them. X is at the index of A."""
+        self.left_buttons = _buttons(trigger, stick, a, b)
         self._samples(3)
         self.left_buttons = _buttons()
         self._samples(3)
@@ -361,6 +442,24 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
+def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
+    service, socket_path, runtime
+):
+    def colours() -> set[str]:
+        view = service.view()
+        shown = {'on': TeleopService.CONTROL_ON_COLOUR, 'off': TeleopService.CONTROL_OFF_COLOUR}
+        return {name for name, colour in shown.items() if (view == colour).all(axis=-1).any()}
+
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive_until(run, _is_move)
+        assert colours() == {'off'}
+        headset.press(a=1.0)
+        _drive_until(run, lambda _: service.state().control)
+        assert colours() == {'on'}
+        run.close()
+
+
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
@@ -382,6 +481,24 @@ def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_targe
         assert _moves(steps)
         for step in _moves(steps):
             np.testing.assert_allclose(_target(step).translation, _target(moved).translation, atol=1e-6)
+        run.close()
+
+
+def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        headset.press(a=1.0)
+        headset.buttons = _buttons(trigger=0.8)
+        held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
+        headset.buttons = ControllerButtons((), ())
+        headset.pose = _raised(HAND)
+        _drive_until(run, lambda _: not service.state().control)
+        headset._samples(3)
+        steps, end = _drive(run, 0.3)
+        assert end is None and _moves(steps)
+        for step in _moves(steps):
+            np.testing.assert_allclose(_target(step).translation, _target(held).translation, atol=1e-6)
+            assert step.commands[keys.TARGET_GRIP] == pytest.approx(0.8)
         run.close()
 
 
@@ -507,6 +624,43 @@ def test_no_ready_within_the_ready_limit_fails_the_run(socket_path, runtime):
         _until_cleared(service)
 
 
+def test_the_end_of_the_ready_limit_says_when_no_controller_data_came_in_the_wait(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=0.1, hold_sec=HOLD_SEC)
+    with pytest.raises(service_module.TrialNotStarted, match='ready limit.*no controller data came in the wait'):
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    with _Headset(service), pytest.raises(service_module.TrialNotStarted, match='ready limit') as raised:
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    assert 'controller data' not in str(raised.value)
+
+
+def test_the_state_says_whether_a_sample_came_within_the_silence_limit(socket_path):
+    silence_limit = 0.5
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, silence_limit, HOLD_SEC)
+    assert not service.state().tracked
+    before_sample = time.monotonic()
+    _take(service, _buttons())
+    assert service.state().tracked
+    deadline = before_sample + silence_limit + 5.0
+    while service.state().tracked:
+        assert time.monotonic() < deadline, 'the state stays tracked long after the silence limit'
+        time.sleep(0.01)
+    assert time.monotonic() - before_sample >= silence_limit
+
+
+def test_a_sample_that_tracks_no_controller_is_no_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=60.0, hold_sec=HOLD_SEC)
+    no_controller = {webxr.LEFT: None, webxr.RIGHT: None}
+    service.take_sample(no_controller, no_controller)
+    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: ControllerButtons((1.0,), (0,))})
+    assert not service.state().tracked
+    headset = _Headset(service)
+    headset.pose = headset.left_pose = None
+    headset.buttons = headset.left_buttons = ControllerButtons((), ())
+    with headset, pytest.raises(service_module.TrialNotStarted) as raised:
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    assert 'no controller data came in the wait' in str(raised.value)
+
+
 def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket_path, runtime):
     """The wait for Ready is the preparation of the session, so the infer timeout does not bound it."""
     with TeleopService(
@@ -565,7 +719,7 @@ class _ReadyWaitOnAFakeClock(wire.ClientConnection):
         self._next_waiting = clock.now
         self._sent: list[bytes] = []
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         assert self._clock.now >= self._ready_at, 'the opening sends nothing before Ready'
         self._sent.append(message)
 
@@ -843,6 +997,7 @@ def _raw_session(service: TeleopService, socket_path: Path):
     """A websocket on the service whose session the teleoperator readied, and the ID of its session."""
     websocket = _raw_connection(socket_path)
     _until_phase(service, Phase.READY_WAIT)
+    _take(service, _buttons())
     _take(service, _buttons(b=1.0))
     _take(service, _buttons())
     while (message := deserialise(websocket.recv(5)))[STATUS] != ServerStatus.READY:
@@ -957,6 +1112,7 @@ def _readied_connection(service: TeleopService, socket_path: Path, connect, quer
     """A test session with ``query`` that the teleoperator readied from the headset."""
     connection = connect(socket_path, query)
     _until_phase(service, Phase.READY_WAIT)
+    _take(service, _buttons())
     _take(service, _buttons(b=1.0))
     _take(service, _buttons())
     connection.wait_open()
@@ -991,6 +1147,68 @@ def test_each_frame_reply_has_a_target_from_the_first(service, socket_path, conn
     np.testing.assert_allclose(first[ACTION], [*OBS[keys.EE_POSE], OBS[keys.GRIP]])
 
 
+def test_a_frame_answers_at_once_with_the_newest_sample(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        started = time.monotonic()
+        connection.frame(FRAME_REQUEST)
+        assert time.monotonic() - started < 1.0
+        assert served.state().control
+        connection.close()
+
+
+def test_a_press_of_a_that_went_down_and_up_between_two_samples_turns_control_on(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        # No sample shows A down: only the press count of A steps
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
+def test_a_press_of_a_while_the_controller_is_not_tracked_turns_control_on_when_it_is_tracked_again(
+    socket_path, connect
+):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        served.take_sample({webxr.RIGHT: None}, {webxr.RIGHT: None})
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
+def test_two_presses_of_a_between_two_samples_take_control_again_from_the_new_place_of_the_hand(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        # A goes off and on again while the hand moves 5 cm
+        moved = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
+        served.take_sample({webxr.RIGHT: moved}, {webxr.RIGHT: _buttons(presses={Button.A: 3})})
+        reply = connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        np.testing.assert_allclose(reply[ACTION][:3], OBS[keys.EE_POSE][:3], atol=1e-6)
+        connection.close()
+
+
+def test_a_frame_with_no_sample_within_the_silence_limit_has_no_pose_and_turns_control_off(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=1.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        time.sleep(served.silence_limit + 0.05)
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control
+        connection.close()
+
+
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
@@ -1000,6 +1218,23 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
         service.view()
         np.testing.assert_array_equal(stored, before)
         run.close()
+
+
+def test_the_service_takes_no_camera_image_outside_a_running_trial(service):
+    service.take_images({keys.EXTERIOR_IMAGE: OBS[keys.EXTERIOR_IMAGE]})
+    assert service.state().cameras == () and service.camera_feeds() == {}
+
+
+def test_the_camera_feeds_count_the_images_of_the_last_feed_span(service, socket_path, connect, monkeypatch):
+    _readied_connection(service, socket_path, connect, session_query(cameras=[keys.EXTERIOR_IMAGE]))
+    for _ in range(4):
+        service.take_images({keys.EXTERIOR_IMAGE: OBS[keys.EXTERIOR_IMAGE]})
+    [(name, feed)] = service.camera_feeds().items()
+    assert name == keys.EXTERIOR_IMAGE and service.state().cameras == (keys.EXTERIOR_IMAGE,)
+    assert feed.rate_hz == 4 / TeleopService.FEED_SEC and 0 <= feed.age_sec < 1
+    monkeypatch.setattr(TeleopService, 'FEED_SEC', 0.05)
+    time.sleep(0.1)
+    assert service.camera_feeds() == {}
 
 
 @pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
@@ -1186,6 +1421,21 @@ def test_a_view_with_no_camera_shows_the_text_on_black(socket_path, connect):
         connection.close()
 
 
+def test_a_view_with_no_task_shows_the_control_line_and_not_the_task(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: 'Pick the cube.'})
+    with_task, no_task = service.view(), service.view(task=False)
+    other_task = {**FRAME_REQUEST, protocol.TASK: 'Open the drawer and put the cup in it.'}
+    connection.frame(other_task)
+    assert not np.array_equal(service.view(), with_task), 'the view with the task shows the new task'
+    np.testing.assert_array_equal(service.view(task=False), no_task, 'the view with no task shows no task')
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(other_task)
+    assert service.state().control
+    assert not np.array_equal(service.view(task=False), no_task), 'the view with no task shows the control line'
+
+
 def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, connect):
     query = session_query(cameras=[keys.WRIST_IMAGE])
     width, height = VIEW_SIZE
@@ -1198,6 +1448,40 @@ def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, c
     # One line of the hint while no camera shows, and the camera above it while one does
     assert idle[height - 26 :].any() and not idle[height - 48 : height - 30].any()
     assert running[height - 48 : height - 30].any()
+
+
+def test_a_long_task_wraps_to_the_width_of_the_main_camera(service, socket_path, connect):
+    def text_bottom(view: np.ndarray) -> int:
+        """The lowest row of the text at the top of a view on black."""
+        return int(np.flatnonzero(view[: view.shape[0] // 2].any(axis=(1, 2))).max())
+
+    task = 'Pick each cube from the left bin and place it in the right bin, then close the lid of the box.'
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: 'Pick the cube.'})
+    short = service.view()
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    long = service.view()
+    assert not long[:, -8:].any(), 'no text reaches the right margin of the view'
+    assert text_bottom(long) > text_bottom(short), 'the long task takes more rows'
+
+
+# A word of 43 letters just fits a row, so a row of it with '...' after it does not
+@pytest.mark.parametrize(
+    'task', ['Pick the ' + 'a' * 120 + ' cube.', ' '.join(['a' * 43] * 5)], ids=['a long word', 'a long line']
+)
+def test_each_row_of_a_long_task_fits_the_width_of_the_main_camera(service, socket_path, connect, task):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    assert not service.view()[:, -8:].any(), 'no text reaches the right margin of the view'
+
+
+def test_a_task_of_many_rows_leaves_the_state_of_the_trial_at_the_top_of_the_view(service, socket_path, connect):
+    task = ' '.join(['Pick each cube from the left bin and place it in the right bin.'] * 6)
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    view = service.view()
+    middle = view.shape[0] // 2
+    assert not view[middle : middle + 30].any(), 'the task, the control line and the line of the ends stay at the top'
 
 
 def test_a_camera_of_the_run_that_the_station_does_not_name_stays_listed_and_live_between_trials(socket_path, connect):
@@ -1229,10 +1513,15 @@ def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(
         assert service.cameras().live == ()
 
 
-def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(socket_path, monkeypatch):
+def test_the_headset_bridge_takes_the_view_that_the_page_asks_for(socket_path, monkeypatch):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
     asked = []
-    monkeypatch.setattr(service, 'view', lambda camera=True: asked.append(camera) or np.zeros((2, 2, 3), np.uint8))
+
+    def view(camera: bool = True, task: bool = True) -> np.ndarray:
+        asked.append((camera, task))
+        return np.zeros((2, 2, 3), np.uint8)
+
+    monkeypatch.setattr(service, 'view', view)
     bridge = command._Headset(service)
     bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
     bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
@@ -1240,14 +1529,101 @@ def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(sock
     bridge.buttons._bind(ManualCommandReceiver())
     page_input = ManualCommandReceiver()
     bridge.page_input._bind(page_input)
-    stop = types.SimpleNamespace(value=False)
-    loop = bridge.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
     next(loop)
-    page_input.push({command.TEXT_ONLY: True})
-    next(loop)
-    page_input.push({command.TEXT_ONLY: False})
-    next(loop)
-    assert asked == [True, False, True]
+    for text_only, task_hidden in ((False, True), (True, False), (False, False)):
+        page_input.push({command.TEXT_ONLY: text_only, command.TASK_HIDDEN: task_hidden})
+        now[0] += 1 / 16
+        next(loop)
+    assert asked == [(True, True), (True, False), (False, True), (True, True)]
+
+
+def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path, monkeypatch, caplog):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    monkeypatch.setattr(service, 'view', lambda camera=True, task=True: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(service, 'camera_feeds', lambda: {keys.EXTERIOR_IMAGE: service_module.CameraFeed(9.5, 0.04)})
+    bridge = command._Headset(service)
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    for receiver in (bridge.controller_positions, bridge.buttons, bridge.page_input):
+        receiver._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    with caplog.at_level(logging.INFO, logger=command.__name__):
+        next(loop)
+        now[0] = command._Headset.FEED_LOG_SEC
+        next(loop)
+        next(loop)
+    assert [record.getMessage() for record in caplog.records] == [
+        f'Camera images: {keys.EXTERIOR_IMAGE} at 9.5 Hz, the last 0.04 s ago'
+    ]
+
+
+def _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps):
+    """A headset bridge at ``view_fps`` on a fake clock, the time of that clock, the count of the images of the shown
+    camera, and the views that the bridge sends."""
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    image_count = [0]
+    monkeypatch.setattr(service, 'shown_image_count', lambda: image_count[0])
+    bridge = command._Headset(service, view_fps=view_fps)
+    views = RecordingEmitter[np.ndarray]()
+    bridge.view._bind(views, clock=SystemClock())
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    for receiver in (bridge.controller_positions, bridge.buttons, bridge.page_input):
+        receiver._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    return loop, now, image_count, views
+
+
+def test_the_headset_bridge_sends_a_new_image_of_the_shown_camera_at_the_next_view_slot(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
+    sent = []
+    # One view period is 1/8 s, and the bridge sends the view again after two periods with no new image.
+    for at, new_image in [(0, 0), (10, 1), (11, 1), (14, 0), (18, 0), (25, 0), (33, 0), (34, 0)]:
+        now[0] = at / 64
+        image_count[0] += new_image
+        next(loop)
+        sent.append(len(views.emitted))
+    assert sent == [1, 2, 2, 2, 3, 3, 3, 4]
+
+
+def test_the_headset_bridge_sends_at_most_one_view_each_view_period_under_a_burst_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
+    for poll in range(256):
+        now[0] = poll / 256
+        image_count[0] += 1
+        next(loop)
+    assert len(views.emitted) == 8
+
+
+def test_the_headset_bridge_sends_the_view_at_the_view_rate_under_a_steady_stream_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=30.0)
+    sent_at = []
+    sleep = next(loop)
+    while now[0] < 1.0:
+        now[0] += sleep.seconds
+        image_count[0] += 1
+        sleep = next(loop)
+        if len(views.emitted) > len(sent_at) + 1:
+            sent_at.append(now[0])
+    assert len(sent_at) >= 29
+    np.testing.assert_allclose(np.diff(sent_at), 1 / 30)
+
+
+def test_the_service_counts_only_the_images_of_the_shown_camera(service, socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE], headset_camera=keys.WRIST_IMAGE)
+    _readied_connection(service, socket_path, connect, query)
+    image = OBS[keys.EXTERIOR_IMAGE]
+    before = service.shown_image_count()
+    service.take_images({keys.EXTERIOR_IMAGE: image})
+    assert service.shown_image_count() == before
+    service.take_images({keys.EXTERIOR_IMAGE: image, keys.WRIST_IMAGE: image})
+    assert service.shown_image_count() == before + 1
 
 
 def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
@@ -1333,16 +1709,12 @@ class _PagePassingASampleAtEachPoll:
             positions, buttons = webxr.parse_controller_message(self._latest)
             right = buttons[webxr.RIGHT]
             if self._passes(right):
-                values = {
-                    side: None if side_buttons is None else side_buttons.tolist()
-                    for side, side_buttons in buttons.items()
-                }
-                self._service.take_sample(positions, values)
+                self._service.take_sample(positions, buttons)
         state = self._service.state()
         self._answered(state.phase)
         return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
 
-    def _passes(self, buttons: np.ndarray | None) -> bool:
+    def _passes(self, buttons: ControllerButtons | None) -> bool:
         return True
 
     def _answered(self, phase: Phase) -> None:
@@ -1359,8 +1731,8 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         # The answers of the next Ready wait still to show before a release of B passes, or 0 when it passes.
         self._ready_waits_to_miss = 0
 
-    def _passes(self, buttons: np.ndarray | None) -> bool:
-        return not (self._ready_waits_to_miss and buttons is not None and buttons[Button.B] == 0.0)
+    def _passes(self, buttons: ControllerButtons | None) -> bool:
+        return not (self._ready_waits_to_miss and buttons is not None and buttons.values[Button.B] == 0.0)
 
     def _answered(self, phase: Phase) -> None:
         if self._phase is Phase.RUNNING and phase is not Phase.RUNNING:
@@ -1368,6 +1740,20 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         elif self._ready_waits_to_miss and phase is Phase.READY_WAIT:
             self._ready_waits_to_miss -= 1
         self._phase = phase
+
+
+# A station asks for a frame about every 33 ms. A frame request answers at once, so a loop with no pause only
+# competes with the headset for the service.
+STATION_FRAME_SEC = 1 / 30
+
+
+def _frames_until_end(service: TeleopService) -> list[dict]:
+    """The elements of the frames of one trial, asked for at the pace of a station, the end element last."""
+    elements = [service.next_frame(FRAME_REQUEST)]
+    while END not in elements[-1]:
+        time.sleep(STATION_FRAME_SEC)
+        elements.append(service.next_frame(FRAME_REQUEST))
+    return elements
 
 
 @pytest.mark.timeout(30)
@@ -1378,10 +1764,9 @@ def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(soc
             scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
         )
         service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
-        moves = []
-        while END not in (element := service.next_frame(FRAME_REQUEST, [])):
-            moves.append(element[ACTION][:3])
+        *frames, element = _frames_until_end(service)
         trials.result(timeout=10)
+    moves = [frame[ACTION][:3] for frame in frames]
     assert element[END] == PolicyEnd.COMPLETE.value
     assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
@@ -1396,24 +1781,225 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
         ends = []
         for _ in range(2):
             service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
-            while END not in (element := service.next_frame(FRAME_REQUEST, [])):
-                pass
-            ends.append(element[END])
+            ends.append(_frames_until_end(service)[-1][END])
         trials.result(timeout=10)
     assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
 
 
 def test_the_phone_page_reads_fields_of_the_page_state():
-    page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+    page = Path(package_assets_path('assets/webxr_phone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
     assert set(re.findall(r"'(\w+)'", fields)) <= set(command.PageState.__dataclass_fields__)
 
 
 def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_fields_of_the_service():
     page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY]
+    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY, command.TASK_HIDDEN]
     contract = [*routes_and_inputs, *command.PageState.__dataclass_fields__]
     assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
+
+
+# The part of the travel of a Quest 3 trigger that reads 0
+DEAD_ZONE = 0.17
+QUEST_3 = ['meta-quest-touch-plus', 'oculus-touch-v3', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']
+needs_node = pytest.mark.skipif(shutil.which('node') is None, reason='node runs the modules of the headset page')
+
+
+def _run_page_module(module: str, script: str, data: list) -> list:
+    """The JSON that ``script`` prints under node for ``data`` on its input, with the URL of page ``module`` as its
+    first argument."""
+    url = Path(package_assets_path(f'assets/webxr/{module}')).as_uri()
+    node = subprocess.run(
+        ['node', '--input-type=module', '-e', script, url],
+        input=json.dumps(data),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(node.stdout)
+
+
+def _bend_quest_trigger(cases: list[dict]) -> list[list[float]]:
+    script = """
+    const { bendQuestTrigger } = await import(process.argv[1]);
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    console.log(JSON.stringify(JSON.parse(input).map(c => bendQuestTrigger(c.buttons, c.profiles))));
+    """
+    return _run_page_module('quest-trigger.js', script, cases)
+
+
+def _press_counts(frames: list[list[bool]]) -> list[list[int]]:
+    """The press counts that the headset page sends for a controller whose buttons are down as in each of ``frames``."""
+    script = """
+    const { PressCounter } = await import(process.argv[1]);
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const counter = new PressCounter();
+    console.log(JSON.stringify(JSON.parse(input).map(pressed => counter.count(pressed))));
+    """
+    return _run_page_module('press-count.js', script, frames)
+
+
+@needs_node
+def test_the_headset_page_counts_each_press_of_a_button_once():
+    frames = [[False, False], [True, False], [True, False], [False, True], [True, True], [False, False]]
+    assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
+
+
+def _presses_in_frames(frames: list[tuple[list[bool], str]]) -> list[list[int] | None]:
+    """The press counts that the headset page sends for a right controller in each of ``frames``, or ``None`` for a
+    frame that sends no controller. Each frame gives the state of each button, and ``'pose'``, ``'no_grip_pose'`` (the
+    controller has no pose) or ``'no_viewer_pose'`` (the headset has no pose, so the page draws no frame).
+
+    The frame loop of ``startXRApp`` in ``core.js`` runs each frame, in a fake XR session with a fake WebSocket. The
+    page hooks are those of the headset page."""
+    script = """
+    import { register } from 'node:module';
+    const coreUrl = process.argv[1];
+    // The server serves these two modules of core.js; the test has a stand-in for each
+    const served = {
+      '/session-mode.js': 'export const SESSION_MODE = "immersive-ar";',
+      '/webxr-button.js':
+        'export class WebXRButton { constructor(o) { globalThis.xrButton = o; this.domElement = {} } setSession() {} }',
+    };
+    register('data:text/javascript,' + encodeURIComponent(`
+      const served = ${JSON.stringify(served)};
+      export async function resolve(specifier, context, next) {
+        if (specifier in served) {
+          return { url: 'data:text/javascript,' + encodeURIComponent(served[specifier]), shortCircuit: true };
+        }
+        return next(specifier, context);
+      }`));
+
+    const sent = [];
+    globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send(text) { sent.push(JSON.parse(text)); } };
+    const element = () => ({ appendChild() {}, classList: { add() {}, remove() {} } });
+    globalThis.window = { location: { protocol: 'http:', host: 'page' }, innerWidth: 1, innerHeight: 1 };
+    globalThis.document = { body: element(), createElement: element, querySelector: () => null };
+    const matrix = () => ({ fromArray() {} });
+    globalThis.THREE = {
+      Scene: class { add() {} },
+      AmbientLight: class {},
+      PerspectiveCamera: class { matrix = matrix(); projectionMatrix = matrix(); updateMatrixWorld() {} },
+      WebGLRenderer: class {
+        xr = { setSession() {} };
+        domElement = {};
+        setSize() {}
+        setPixelRatio() {}
+        render() {}
+        getContext() { return { bindFramebuffer() {}, viewport() {} }; }
+      },
+    };
+    let nextFrame = null;
+    const session = {
+      inputSources: [],
+      renderState: { baseLayer: { getViewport: () => ({ x: 0, y: 0, width: 1, height: 1 }) } },
+      addEventListener() {},
+      requestReferenceSpace: async () => ({}),
+      requestAnimationFrame: callback => { nextFrame = callback; },
+    };
+    const xr = { isSessionSupported: async () => true, requestSession: async () => session };
+    Object.defineProperty(globalThis, 'navigator', { value: { xr }, configurable: true });
+
+    const { controllerSample, startXRApp } = await import(coreUrl);
+    const { PressCounter, controllerInFrame, countPresses } = await import(new URL('press-count.js', coreUrl));
+    const counters = { left: new PressCounter(), right: new PressCounter() };
+    startXRApp({
+      onEveryFrame: ({ session }) => countPresses(session, counters),
+      onFrame: ({ session, frame, refSpace, everyFrame: presses }) => {
+        const controllers = { left: null, right: null };
+        for (const inputSource of session.inputSources) {
+          const controller = controllerInFrame(inputSource, frame, refSpace);
+          if (controller === null) continue;
+          const hand = inputSource.handedness;
+          controllers[hand] = controllerSample([0, 0, 0], [1, 0, 0, 0], controller.values, presses[hand]);
+        }
+        return controllers;
+      },
+    });
+    await globalThis.xrButton.onRequestSession();
+    await new Promise(resolve => setTimeout(resolve));
+
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+    const view = { transform: { matrix: [] }, projectionMatrix: [] };
+    const read = JSON.parse(input).map(([pressed, pose]) => {
+      const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
+      session.inputSources = [{ gamepad, gripSpace: {}, handedness: 'right', profiles: [] }];
+      const before = sent.length;
+      nextFrame(0, {
+        session,
+        getViewerPose: () => (pose === 'no_viewer_pose' ? null : { views: [view] }),
+        getPose: () => (pose === 'pose' ? { transform: identity } : null),
+      });
+      const right = sent.length > before ? sent.at(-1).controllers.right : null;
+      return right === null ? null : right.presses;
+    });
+    console.log(JSON.stringify(read));
+    """
+    return _run_page_module('core.js', script, frames)
+
+
+def test_the_teleop_command_refuses_a_stale_limit_of_the_headset_above_its_silence_limit():
+    # A message that comes later than the silence limit finds control off, so its presses must do nothing
+    command_with = command.serve.override(silence_limit=0.1, open_window=False, notice=None)
+    with pytest.raises(ValueError, match='stale_limit of the headset must not exceed silence_limit'):
+        command_with.instantiate()
+
+
+@needs_node
+def test_the_headset_page_sends_a_press_from_a_frame_with_no_pose_with_the_next_pose():
+    # A press while the controller has no pose, and one while the headset has none, each released with a pose
+    frames = [
+        ([False], 'pose'),
+        ([True], 'no_grip_pose'),
+        ([False], 'pose'),
+        ([True], 'no_viewer_pose'),
+        ([False], 'pose'),
+    ]
+    assert _presses_in_frames(frames) == [[0], None, [1], None, [2]]
+
+
+def _quest_grip(raw_values: list[float]) -> list[float]:
+    return [buttons[0] for buttons in _bend_quest_trigger([{'buttons': [v], 'profiles': QUEST_3} for v in raw_values])]
+
+
+@needs_node
+@pytest.mark.parametrize(('raw_value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
+def test_the_headset_page_sends_a_quest_trigger_press_linear_in_the_travel_past_the_dead_zone(raw_value, travel):
+    assert _quest_grip([raw_value]) == [pytest.approx((travel - DEAD_ZONE) / (1 - DEAD_ZONE), abs=0.04)]
+
+
+@needs_node
+def test_the_headset_page_sends_a_released_and_a_full_quest_trigger_as_is_and_clamps_values_out_of_range():
+    assert _quest_grip([0.0, 1.0, -0.1, 1.2]) == [0.0, 1.0, 0.0, 1.0]
+
+
+@needs_node
+def test_the_headset_page_sends_a_deeper_quest_trigger_as_a_closer_grip():
+    grips = _quest_grip([i / 20 for i in range(21)])
+    assert all(a < b for a, b in zip(grips, grips[1:], strict=False))
+
+
+@needs_node
+@pytest.mark.parametrize(
+    ('case', 'bent'),
+    [
+        ({'profiles': QUEST_3}, True),
+        ({'profiles': ['oculus-touch-v3', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']}, True),
+        ({'profiles': ['oculus-touch', 'generic-trigger-squeeze']}, False),
+        ({'profiles': ['hp-mixed-reality', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']}, False),
+        ({'profiles': ['valve-index']}, False),
+        ({'profiles': []}, False),
+        ({}, False),
+    ],
+)
+def test_the_headset_page_bends_only_the_trigger_of_a_quest_controller(case, bent):
+    [buttons] = _bend_quest_trigger([{'buttons': [0.255, 0.255, 0.5], **case}])
+    trigger = pytest.approx((0.5 - DEAD_ZONE) / (1 - DEAD_ZONE), abs=0.04) if bent else 0.255
+    assert buttons == [trigger, 0.255, 0.5]
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
@@ -1427,7 +2013,36 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     stop = types.SimpleNamespace(value=False)
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
-    assert state == {'phase': Phase.IDLE, 'control': False, 'cameras': (), 'live': (), 'shown': None, 'chosen': None}
+    assert state == {
+        'phase': Phase.IDLE,
+        'control': False,
+        'cameras': (),
+        'live': (),
+        'shown': None,
+        'chosen': None,
+        'tracked': False,
+    }
+
+
+def test_the_headset_bridge_sends_whether_the_service_gets_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 60.0, HOLD_SEC)
+    bridge = command._Headset(service)
+    sent = RecordingEmitter[dict]()
+    bridge.page_state._bind(sent, clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    positions, buttons = ManualCommandReceiver(), ManualCommandReceiver()
+    bridge.controller_positions._bind(positions)
+    bridge.buttons._bind(buttons)
+    bridge.page_input._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    next(loop)
+    positions.push({webxr.RIGHT: HAND})
+    buttons.push({webxr.RIGHT: _buttons()})
+    now[0] += 1.0
+    next(loop)
+    assert [state['tracked'] for _, state in sent.emitted] == [False, True]
 
 
 def _until_served(url: str, seconds: float = 10.0) -> None:

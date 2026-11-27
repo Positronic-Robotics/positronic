@@ -17,7 +17,7 @@ from positronic_evals.slug import Name
 
 
 class EvalRef(Name, described_as='an eval name'):
-    """The name of an eval the platform offers, as a validated `str`."""
+    """The name of an eval, as a validated `str`."""
 
     __slots__ = ()
 
@@ -59,11 +59,17 @@ MOLMO_CONFIG = '.sim.molmo.benchmarks'
 MOLMO_TASK = 'franka_pick_droid_mini'
 MOLMO_EPISODE_INDEX_KEY = 'molmo.episode_index'
 MOLMO_SCORING = Scoring(labelers=(MOLMO_LABELER,), primary=MeanEpisodeScore())
-MOLMO_POSITRONIC_REVISION = 'a7cbf6bffd48f7e37c36e2ffc2fcdb0408c1c0b5'
+MOLMO_POSITRONIC_REVISION = 'fcec6e5812cd93a2d0ed568edece887486e42ea7'
+# `SuccessProfile.STRICT_V1` of `positronic/simulator/molmo_spaces/success_profile.py`, at that revision.
+MOLMO_STRICT_SUCCESS_PROFILE = 'strict_v1'
 
 
-def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
-    """`episodes` of the one benchmark the MolmoSpaces evals run, once each."""
+def _franka_pick_mini(episodes: list[int], success_profile: str | None = None) -> EvalDefinition:
+    """`episodes` of the one benchmark the MolmoSpaces evals run, once each, under `success_profile`.
+
+    With no `success_profile`, the config's default judges each episode: MolmoSpaces' own verdict.
+    """
+    profile_args: dict[str, JsonValue] = {} if success_profile is None else {'success_profile': success_profile}
     return EvalDefinition(
         config=MOLMO_CONFIG,
         # Each key must name a parameter of positronic's `benchmarks` config.
@@ -74,6 +80,7 @@ def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
             'benchmark': 'FrankaPickDroidMiniBench_json_benchmark_20251231',
             'episodes': list(episodes),
             'trial_count': 1,
+            **profile_args,
         },
         tasks=[EvalTask(name=MOLMO_TASK, trials=[{MOLMO_EPISODE_INDEX_KEY: i} for i in episodes])],
         time_limit_s=7200,
@@ -163,10 +170,18 @@ def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
     )
 
 
+# Episode 6 hides the start grasp site from the right shoulder camera; the sim server refuses it.
+_PICK_MINI_EPISODES = [*range(6), *range(7, 21)]
+_PICK_MINI_SMOKE_EPISODES = [0, 1, 2, 3, 4]
+
 _PUBLIC_EVALS: dict[EvalRef, EvalDefinition] = {
-    # Episode 6 hides the start grasp site from the right shoulder camera; the sim server refuses it.
-    EvalRef('molmo.franka_pick_mini'): _franka_pick_mini([*range(6), *range(7, 21)]),
-    EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini([0, 1, 2, 3, 4]),
+    EvalRef('molmo.franka_pick_mini'): _franka_pick_mini(_PICK_MINI_EPISODES),
+    EvalRef('molmo.franka_pick_mini_smoke'): _franka_pick_mini(_PICK_MINI_SMOKE_EPISODES),
+    # The two above under the strict success profile, for practice on a local machine.
+    EvalRef('molmo.franka_pick_mini_strict'): _franka_pick_mini(_PICK_MINI_EPISODES, MOLMO_STRICT_SUCCESS_PROFILE),
+    EvalRef('molmo.franka_pick_mini_strict_smoke'): _franka_pick_mini(
+        _PICK_MINI_SMOKE_EPISODES, MOLMO_STRICT_SUCCESS_PROFILE
+    ),
     EvalRef('abc.yam_bimanual'): _abc(ABC_SCORED_TASKS, time_limit_s=6 * 3600),
     EvalRef('abc.yam_bimanual_multitask'): _abc(ABC_MULTITASK_TASKS, time_limit_s=2 * 3600),
 }

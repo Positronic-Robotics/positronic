@@ -20,6 +20,7 @@ from positronic.simulator.molmo_spaces.adapter import (
     ShoulderSide,
     camera_dict,
 )
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 
 FIXTURE = Path(__file__).parent / 'droid_obs.npz'
 _LEFT_FIRST = (ShoulderSide.LEFT, ShoulderSide.RIGHT)
@@ -147,6 +148,8 @@ def test_terminal_reports_success_only_when_done():
 
 _BENCH = mapping.BenchmarkPath('molmospaces-bench-v1', 'procthor-10k', 'FrankaPickDroidMiniBench', 'pick_20251231')
 _BENCH_PARAMS = dict(zip(molmo_keys.BENCHMARK_DIMENSIONS, _BENCH, strict=True))
+# The trial param that the eval config adds to the env's task params.
+_NATIVE = {molmo_keys.SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value}
 
 
 def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
@@ -167,7 +170,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
             molmo_keys.ENV_HOOK: 'site_hook.py@sha256:ab12',
         }
     ]
-    assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
+    assert adapter.reset_token({**adapter.task_params([record])[0], **_NATIVE})[mapping.TOKEN_EPISODE_INDEX] == 3
 
 
 def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
@@ -182,7 +185,7 @@ def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
     }
     [params] = adapter.task_params([record])
     assert params[molmo_keys.TASK_HORIZON] == params[molmo_keys.TASK_HORIZON_OVERRIDE] == 120.0
-    assert adapter.reset_token(params)[mapping.TOKEN_HORIZON_SEC] == 120.0
+    assert adapter.reset_token({**params, **_NATIVE})[mapping.TOKEN_HORIZON_SEC] == 120.0
 
 
 def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
@@ -197,7 +200,7 @@ def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
     }
     [params] = adapter.task_params([record])
     assert molmo_keys.TASK_HORIZON_OVERRIDE not in params
-    assert mapping.TOKEN_HORIZON_SEC not in adapter.reset_token(params)
+    assert mapping.TOKEN_HORIZON_SEC not in adapter.reset_token({**params, **_NATIVE})
 
 
 def test_reset_token_carries_benchmark_episode_and_seed():
@@ -208,15 +211,83 @@ def test_reset_token_carries_benchmark_episode_and_seed():
         mapping.TOKEN_SEED: 7,
         mapping.WITH_RIGHT_SHOULDER: True,
         mapping.WITH_OBJECT_IMAGE_POINTS: True,
+        mapping.TOKEN_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
     }
-    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
-    assert adapter.reset_token({**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 2}) == {
+    assert adapter.reset_token({**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 3, eval_keys.SEED: 7}) == expected
+    assert adapter.reset_token({**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 2}) == {
         **_BENCH._asdict(),
         mapping.TOKEN_EPISODE_INDEX: 2,
         mapping.TOKEN_SEED: None,
         mapping.WITH_RIGHT_SHOULDER: True,
         mapping.WITH_OBJECT_IMAGE_POINTS: True,
+        mapping.TOKEN_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
     }
+
+
+def test_reset_token_carries_the_success_profile_of_the_trial():
+    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3, molmo_keys.SUCCESS_PROFILE: SuccessProfile.STRICT_V1.value}
+    assert _adapter().reset_token(params)[mapping.TOKEN_SUCCESS_PROFILE] == SuccessProfile.STRICT_V1.value
+
+
+def _reset_frame(meta: dict) -> dict:
+    return {protocol.FRAME_META: {mapping.META_TASK: 'open the drawer', **meta}}
+
+
+@pytest.mark.parametrize(
+    ('asked', 'stated'),
+    [
+        (SuccessProfile.STRICT_V1, {mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value}),
+        (SuccessProfile.MOLMO_NATIVE, {mapping.META_SUCCESS_PROFILE: SuccessProfile.STRICT_V1.value}),
+        # A server that predates success profiles states none.
+        (SuccessProfile.STRICT_V1, {}),
+        (SuccessProfile.MOLMO_NATIVE, {}),
+    ],
+)
+def test_a_reset_that_states_another_profile_or_none_is_refused(asked, stated):
+    with pytest.raises(RuntimeError, match=asked.value):
+        _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: asked.value}, _reset_frame(stated))
+
+
+@pytest.mark.parametrize('profile', list(SuccessProfile))
+def test_a_reset_that_states_the_profile_of_the_trial_is_accepted_beside_fields_it_does_not_know(profile):
+    frame = _reset_frame({mapping.META_SUCCESS_PROFILE: profile.value, 'a_later_field': 1})
+    _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: profile.value}, frame)
+
+
+_HOOK_FILE = mapping.HookFile(Path('/hooks/site_hook.py'), 'ab12')
+
+
+def _hooked_adapter() -> MolmoAdapter:
+    return MolmoAdapter(camera_dict(_LEFT_FIRST), with_right_shoulder=True, hook_file=_HOOK_FILE)
+
+
+def test_reset_token_names_the_hook_file_and_its_digest_only_when_the_eval_has_a_hook():
+    params = {**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 3}
+    token = _hooked_adapter().reset_token(params)
+    assert mapping.HookFile.of(token) == _HOOK_FILE
+    assert mapping.HookFile.of(_adapter().reset_token(params)) is None
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'ran'),
+    [
+        (_hooked_adapter, None),  # A server that takes no hook from the token states none.
+        (_hooked_adapter, 'site_hook.py@sha256:cd34'),
+        (_adapter, _HOOK_FILE.record),
+    ],
+)
+def test_a_reset_under_another_hook_than_the_eval_asks_is_refused(adapter, ran):
+    frame = _reset_frame({mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value, mapping.META_ENV_HOOK: ran})
+    with pytest.raises(RuntimeError, match='env hook'):
+        adapter().check_reset(_NATIVE, frame)
+
+
+def test_a_reset_under_the_hook_that_the_eval_asks_is_accepted():
+    frame = _reset_frame({
+        mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
+        mapping.META_ENV_HOOK: 'site_hook.py@sha256:ab12',
+    })
+    _hooked_adapter().check_reset(_NATIVE, frame)
 
 
 @pytest.mark.parametrize('exterior_sides', [[ShoulderSide.LEFT], list(ShoulderSide)])
@@ -224,13 +295,13 @@ def test_reset_token_carries_benchmark_episode_and_seed():
 def test_reset_token_asks_for_the_right_shoulder_as_the_adapter_is_told_whatever_its_cameras(
     exterior_sides, with_right_shoulder
 ):
-    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    params = {**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 3}
     adapter = MolmoAdapter(camera_dict(exterior_sides), with_right_shoulder=with_right_shoulder)
     assert adapter.reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is with_right_shoulder
 
 
 def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
-    params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
+    params = {**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 3}
     dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_right_shoulder=True, with_object_image_points=False)
     assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False
 

@@ -16,7 +16,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, bundled_panda_model
 from positronic.geom import Transform3D
 from positronic.simulator.mujoco.sim import SCENE_XML, MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
-from positronic.tests.testing_coutils import drive_scheduler
+from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 MODEL = 'positronic/assets/mujoco/franka_table.xml'
 
@@ -319,3 +319,63 @@ def test_a_recorded_scene_with_no_gripper_site_reports_at_the_gripper_site():
     assert unnamed != sim.scene_xml, 'the scene carries no gripper site to delete'
     sim.load_state({**sim.save_state(), SCENE_XML: unnamed})
     _assert_reports_the_gripper_site_of_the_recorded_model(sim)
+
+
+@pytest.mark.parametrize(
+    'mode',
+    [
+        roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6),
+        roboarm_command.PositionControl(),
+    ],
+    ids=['impedance', 'position_control'],
+)
+def test_mujoco_runs_a_command_that_pins_a_control_mode(mode):
+    """The actuators run their own law, so what a command pins makes no difference to what it does."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    target = np.asarray(sim.initial_ctrl[:7], dtype=np.float64).copy()
+    target[0] += 0.1
+    cmd = roboarm_command.JointPosition(positions=target, mode=mode)
+
+    with pimm.World(virtual_time=True) as world:
+        commands = world.pair(sim.commands)
+        driver = ManualDriver([(lambda: commands.emit(cmd), 0.1)])
+        scheduler = world.start([sim, driver])
+        drive_scheduler(scheduler, steps=50)
+
+    np.testing.assert_allclose(sim.data.ctrl[:7], target)
+
+
+def test_mujoco_grip_one_is_closed():
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+
+    def finger_qpos() -> float:
+        """Physical finger travel: 0 = fingers together (closed), 0.04 m = fully apart (open)."""
+        return sim.data.joint('finger_joint1_ph').qpos.item()
+
+    # The pose the scene is built in leaves the gripper open.
+    assert finger_qpos() > 0.03
+
+    snapshots = {}
+    with pimm.World(virtual_time=True) as world:
+        target_grip = world.pair(sim.target_grip)
+        grip = world.pair(sim.grip)
+
+        def grip_value() -> float:
+            message = grip.read()
+            assert message is not None
+            return message.data
+
+        driver = ManualDriver([
+            (lambda: target_grip.emit(1.0), 0.5),
+            (lambda: snapshots.update(closed=finger_qpos(), closed_grip=grip_value()), 0.0),
+            (lambda: target_grip.emit(0.0), 0.5),
+            (lambda: snapshots.update(opened=finger_qpos(), opened_grip=grip_value()), 0.0),
+        ])
+
+        scheduler = world.start([sim, driver])
+        drive_scheduler(scheduler, steps=2000)
+
+    assert snapshots['closed'] < 0.005
+    assert snapshots['closed_grip'] > 0.9
+    assert snapshots['opened'] > 0.035
+    assert snapshots['opened_grip'] < 0.1

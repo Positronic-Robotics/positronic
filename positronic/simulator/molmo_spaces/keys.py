@@ -11,3 +11,5 @@ EXTERIOR_SIDES = 'molmo.exterior_sides'  # The shoulder in each exterior slot, `
 EPISODE_CAMERAS = 'molmo.episode_cameras'
 # The file name and content digest of the hook file that the env server runs, or None without a hook.
 ENV_HOOK = 'molmo.env_hook'
+# The ``success_profile.SuccessProfile`` value that the env server judges the trial by.
+SUCCESS_PROFILE = 'molmo.success_profile'

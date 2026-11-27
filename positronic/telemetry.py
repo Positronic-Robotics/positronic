@@ -125,6 +125,10 @@ _active_span: ContextVar[Span | None] = ContextVar('positronic_active_span', def
 # may have configured OTel's global provider, and an untimed run must not export spans through it.
 _NOOP_TRACER = trace.NoOpTracer()
 
+# The load of a Tegra integrated GPU (a Jetson), in tenths of a percent, at its path on an Orin. Other Jetson models
+# put the file elsewhere, so `StatsSampler` takes the path as an argument.
+TEGRA_GPU_LOAD_PATH = Path('/sys/devices/platform/gpu.0/load')
+
 # NVML's uint64 "value not available" sentinel. On a driver that cannot attribute a process's GPU memory, the
 # query succeeds and pynvml surfaces this raw value in ``usedGpuMemory`` rather than ``None``.
 _NVML_VALUE_NOT_AVAILABLE = 2**64 - 1
@@ -589,6 +593,44 @@ class _Nvml:
                 pass
 
 
+class _TegraGpu:
+    """The load of a Jetson's integrated GPU, from sysfs. Absent on any other box. The GPU shares the host's memory and
+    has no power sensor of its own, so only its load is a reading."""
+
+    def __init__(self, path: Path) -> None:
+        self._path: Path | None = path if os.access(path, os.R_OK) else None
+        self._warned = False
+
+    @property
+    def device_count(self) -> int:
+        return 0 if self._path is None else 1
+
+    def sample(self) -> list[dict[str, Any]]:
+        if self._path is None:
+            return []
+        try:
+            load = int(self._path.read_text())
+        except (OSError, ValueError) as error:
+            # A stats sample must not stop the run it measures; one error per process keeps the log readable.
+            if not self._warned:
+                logger.error(
+                    'telemetry: Tegra GPU load at %s unreadable (%r); GPU sample left empty', self._path, error
+                )
+                self._warned = True
+            return []
+        return [
+            {
+                GPU_INDEX: 0,
+                GPU_UTIL_PCT: load / 10.0,
+                GPU_MEM_USED_B: None,
+                GPU_MEM_TOTAL_B: None,
+                GPU_POWER_W: None,
+                GPU_PROC_MEM_B: None,
+                GPU_PROC_UTIL_PCT: None,
+            }
+        ]
+
+
 class StatsSampler:
     """A daemon thread sampling host CPU/memory, this process tree's CPU/memory, and per-GPU load at ``hz``,
     writing one JSON line per sample to ``out_path`` (flushed per line, so a crash keeps every prior sample).
@@ -599,10 +641,17 @@ class StatsSampler:
 
     Each sample also lists every process of the tree by name. ``process_names`` maps a pid to a name for it; a pid
     it omits takes the OS process name. It is called from the sampler thread, so it reads only state that is safe
-    to read from another thread."""
+    to read from another thread.
+
+    A box with a readable ``tegra_gpu_load_path`` is a Jetson: its GPU sample comes from that file, because a
+    Jetson's NVML refuses every utilisation query. Every other box samples its GPUs through NVML."""
 
     def __init__(
-        self, out_path: Path | str, hz: float = 1.0, process_names: Callable[[], Mapping[int, str]] | None = None
+        self,
+        out_path: Path | str,
+        hz: float = 1.0,
+        process_names: Callable[[], Mapping[int, str]] | None = None,
+        tegra_gpu_load_path: Path = TEGRA_GPU_LOAD_PATH,
     ) -> None:
         global psutil, pynvml
         try:  # the sampler's probes ship in the optional `telemetry` extra
@@ -615,6 +664,7 @@ class StatsSampler:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name='telemetry-stats', daemon=True)
         self._nvml = _Nvml()
+        self._tegra = _TegraGpu(tegra_gpu_load_path)
         self._self = psutil.Process(os.getpid())
         self._proc_cache: dict[int, psutil.Process] = {}
         self._process_names = process_names
@@ -671,8 +721,8 @@ class StatsSampler:
             STAT_MEM_SYS_USED_B: int(psutil.virtual_memory().used),
             STAT_CPU_PROC_PCT: sum(proc[PROC_CPU_PCT] for proc in procs),
             STAT_RSS_PROC_B: sum(proc[PROC_RSS_B] for proc in procs),
-            STAT_GPU_COUNT: self._nvml.device_count,
-            STAT_GPUS: self._nvml.sample(tree_pids),
+            STAT_GPU_COUNT: self._tegra.device_count or self._nvml.device_count,
+            STAT_GPUS: self._tegra.sample() if self._tegra.device_count else self._nvml.sample(tree_pids),
             STAT_PROCS: procs,
         }
 

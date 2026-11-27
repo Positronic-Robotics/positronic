@@ -48,7 +48,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     remote_stack_cubes_eval,
 )
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import RobolabDroidAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
 
@@ -433,14 +433,14 @@ class TestChannelMapAction:
         action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
         np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
 
-    def test_a_delta_fires_once_on_its_own_channel_only(self):
+    def test_a_cartesian_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
-            'robot_command.left': roboarm_command.JointDelta(np.ones(6)),
+            'robot_command.left': roboarm_command.CartesianDelta(geom.Transform3D(np.array([0.0, 0.0, 0.01]))),
             'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
         })
         action = adapter.action(commands)
-        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_DELTA
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.CARTESIAN_DELTA
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
         action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD
@@ -572,7 +572,7 @@ class TestEnvControlFrame:
             _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
 
     def test_a_one_arm_adapter_composes_a_delta_at_the_pose_its_observation_measured(self):
-        adapter = RobolabAdapter(camera_dict={})
+        adapter = RobolabDroidAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         adapter.observations({
             protocol.OBS_EEF_POS: eef.translation,
@@ -591,7 +591,7 @@ class TestEnvControlFrame:
         np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
-        adapter = RobolabAdapter(camera_dict={})
+        adapter = RobolabDroidAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         raw = {
             protocol.OBS_EEF_POS: eef.translation,
@@ -766,6 +766,46 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
 
         drive_scheduler(scheduler, steps=3)  # free-run: the env steps even with no command delivered
         assert obs_rx.read().data[0] >= 1
+
+
+class _RefusingAdapter(_CountdownAdapter):
+    def check_reset(self, params, frame):
+        raise ValueError(f'the env answered seed {params.get(eval_keys.SEED)} with another judge')
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_answer_that_the_adapter_refuses_fails_the_reset_and_publishes_nothing():
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_RefusingAdapter(), nullcontext((host, port)))
+        obs_rx = world.pair(proxy.observations['value'])
+        world.start([proxy])
+
+        with pytest.raises(ValueError, match='another judge'):
+            proxy.reset({eval_keys.SEED: 0})
+        assert obs_rx.read() is None
+
+
+class _RefusingSeedOneAdapter(_CountdownAdapter):
+    def check_reset(self, params, frame):
+        if params.get(eval_keys.SEED) == 1:
+            raise ValueError('the env answered seed 1 with another judge')
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refused_reset_during_a_live_trial_leaves_the_proxy_stepping_nothing():
+    env = _CountdownEnv()
+    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_RefusingSeedOneAdapter(), nullcontext((host, port)))
+        scheduler = world.start([proxy])
+
+        proxy.reset({eval_keys.SEED: 0})
+        drive_scheduler(scheduler, steps=3)
+        assert env._steps >= 1
+
+        with pytest.raises(ValueError, match='another judge'):
+            proxy.reset({eval_keys.SEED: 1})
+        drive_scheduler(scheduler, steps=3)
+        assert env._steps == 0, 'the proxy stepped the scene of the refused reset'
 
 
 @pytest.mark.timeout(60.0)

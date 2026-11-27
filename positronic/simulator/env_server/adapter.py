@@ -8,7 +8,7 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, final
+from typing import Any, NamedTuple, final
 
 import numpy as np
 
@@ -31,6 +31,10 @@ class EnvAdapter(ABC):
 
         Called at each trial start; clear any per-trial command state here.
         """
+
+    def check_reset(self, params: dict[str, Any], frame: dict[str, Any]) -> None:
+        """Raise when the env's reset answer ``frame`` does not serve the trial ``params``. Any answer serves here."""
+        return None
 
     @abstractmethod
     def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
@@ -114,30 +118,38 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
     return wire
 
 
+class _Measured(NamedTuple):
+    """What the env last measured of one arm, in the frame it measures and drives."""
+
+    pose: geom.Transform3D
+    joints: np.ndarray
+
+
 class WireCommandAdapter(EnvAdapter):
     """An adapter whose action is one wire payload per command channel.
 
     The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
-    arrives and fires a relative delta once. All action *encoding* — how the tagged command becomes the env's
-    native action — stays server-side with the env's own model. Subclasses implement ``_reset_token`` (the
-    base clears the per-trial command state around it) and keep the task, observation and terminal mappings
-    to themselves.
+    arrives. A joint delta becomes the absolute target ``q + delta`` at the measured joints and is held the same
+    way, as the arm's driver holds it. A Cartesian delta fires once. All action *encoding* — how the tagged
+    command becomes the env's native action — stays server-side with the env's own model. Subclasses implement
+    ``_reset_token`` (the base clears the per-trial command state around it) and keep the task, observation and
+    terminal mappings to themselves.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):
         """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
         ``GRIPPER_SITE``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
         self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
-        self._measured: dict[str, geom.Transform3D] = {}  # the last pose the env measured, per command channel
+        self._measured: dict[str, _Measured] = {}  # per command channel
         self._reset_command_state()
 
-    def _measure(self, env_pose: geom.Transform3D, arm: str | None = None) -> geom.Transform3D:
-        """The pose the env measures for ``arm``, at ``GRIPPER_SITE``. It also anchors that arm's next Cartesian
-        delta.
+    def _measure(self, env_pose: geom.Transform3D, joints: np.ndarray, arm: str | None = None) -> geom.Transform3D:
+        """The pose the env measures for ``arm``, at ``GRIPPER_SITE``. The pose and ``joints`` also anchor that
+        arm's next delta.
 
         ``arm`` is None on a one-arm robot, whose command channel has the bare name.
         """
-        self._measured[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = env_pose
+        self._measured[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = _Measured(env_pose, np.array(joints))
         return env_pose * self.env_control_frame.inv
 
     def _reset_command_state(self) -> None:
@@ -158,14 +170,30 @@ class WireCommandAdapter(EnvAdapter):
                 self._held[name] = msg.data
         return {name: self._channel_payload(name) for name in commands}
 
+    @staticmethod
+    def _joint_target(measured: _Measured | None, delta: np.ndarray) -> np.ndarray:
+        """The absolute joint target of ``delta`` applied at the measured joints."""
+        if measured is None:
+            raise ValueError('a JointDelta needs the measured joints first')
+        delta = np.asarray(delta, dtype=np.float64)
+        if delta.shape != measured.joints.shape:
+            raise ValueError(f'joint delta {delta.shape} vs measured joints {measured.joints.shape}')
+        return measured.joints + delta
+
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):
             return self._held.get(name, 0.0)
-        # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
-        # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
-        # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
-        # one step the arm holds its measured pose.
+        # The server maps the held command into its controller's action. Re-sending a stale delta would
+        # re-compose it against the moving arm every tick, so a delta is never held as a delta.
         cmd = self._held.get(name)
-        if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
-            self._held.pop(name)
-        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, self._measured.get(name)))
+        measured = self._measured.get(name)
+        match cmd:
+            case roboarm_command.JointDelta(velocities, mode):
+                # The driver's target ``q + delta`` holds until the next command, so a gap between commands
+                # does not move the arm under a torque the target does not balance.
+                cmd = self._held[name] = roboarm_command.JointPosition(self._joint_target(measured, velocities), mode)
+            case roboarm_command.CartesianDelta():
+                # A one-shot relative motion, forwarded once then dropped: after it the arm holds its measured pose.
+                self._held.pop(name)
+        pose = None if measured is None else measured.pose
+        return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, pose))

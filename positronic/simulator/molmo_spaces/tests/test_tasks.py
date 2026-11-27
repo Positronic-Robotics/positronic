@@ -1,8 +1,8 @@
 """MolmoSpaces trial construction and evaluation through the policy harness."""
 
-import hashlib
 import logging
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -26,6 +26,7 @@ from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import ShoulderSide, camera_dict
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 from positronic.simulator.molmo_spaces.tests.make_fixture import build_payload
 
 _SUITE, _SCENE_DATASET, _TASK_CONFIG, _BENCHMARK = molmo_keys.BENCHMARK_DIMENSIONS
@@ -283,6 +284,12 @@ def test_an_explicit_timeout_replaces_the_backstop_and_warns(asked, caplog):
     assert len(caplog.records) == 2
 
 
+def _hook_record(request: dict[str, Any]) -> str | None:
+    """The record of the hook file that a selection or a reset token names, as the server states it."""
+    hook_file = mapping.HookFile.of(request)
+    return hook_file.record if hook_file is not None else None
+
+
 class _MolmoObservationEnv(EnvProtocol):
     BENCHMARK = mapping.BenchmarkPath(
         'molmospaces-bench-v1', 'procthor-10k', 'FrankaPickDroidMiniBench', 'pick_20251231'
@@ -293,9 +300,8 @@ class _MolmoObservationEnv(EnvProtocol):
     CONTROL_DT = 0.1
     HORIZON_STEPS = 5
 
-    def __init__(self, done_after: int | None, hook_record: str | None = None):
+    def __init__(self, done_after: int | None):
         self._done_after = done_after
-        self._hook_record = hook_record
         self.selections = []
         self.tokens = []
         self.actions = []
@@ -318,7 +324,7 @@ class _MolmoObservationEnv(EnvProtocol):
                 mapping.TASK_NAME: self.INSTRUCTION,
                 protocol.TASK_INSTRUCTION: self.INSTRUCTION,
                 mapping.TASK_HORIZON_SEC: self.HORIZON_STEPS * self.CONTROL_DT,
-                mapping.TASK_ENV_HOOK: self._hook_record,
+                mapping.TASK_ENV_HOOK: _hook_record(spec),
             }
         ]
 
@@ -327,7 +333,11 @@ class _MolmoObservationEnv(EnvProtocol):
         self.actions.clear()
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self.observation}],
-            protocol.FRAME_META: {mapping.META_TASK: self.RESET_TASK},
+            protocol.FRAME_META: {
+                mapping.META_TASK: self.RESET_TASK,
+                mapping.META_SUCCESS_PROFILE: token[mapping.TOKEN_SUCCESS_PROFILE],
+                mapping.META_ENV_HOOK: _hook_record(token),
+            },
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }
@@ -357,7 +367,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
     joints = env.observation[protocol.OBS_JOINT_POS]
     policy = StubPolicy(command=JointPosition(joints), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None, hook_sha256=None: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, seed=seed, timeout=timeout).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
@@ -371,6 +381,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
             mapping.TOKEN_SEED: seed,
             mapping.WITH_RIGHT_SHOULDER: True,
             mapping.WITH_OBJECT_IMAGE_POINTS: True,
+            mapping.TOKEN_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
         }
     ]
     assert policy.observations
@@ -412,22 +423,38 @@ def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(mo
     env = _MolmoObservationEnv(done_after=2)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None, hook_sha256=None: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, with_object_image_points=False).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
     assert [token[mapping.WITH_OBJECT_IMAGE_POINTS] for token in env.tokens] == [False]
 
 
-def _no_launch(hook=None, hook_sha256=None):
+@pytest.mark.timeout(60.0)
+def test_an_eval_asks_each_reset_for_its_success_profile_and_records_it(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, success_profile='strict_v1').instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
+
+    assert [token[mapping.TOKEN_SUCCESS_PROFILE] for token in env.tokens] == [SuccessProfile.STRICT_V1.value]
+    assert LocalDataset(tmp_path)[0].static[molmo_keys.SUCCESS_PROFILE] == SuccessProfile.STRICT_V1.value
+
+
+def test_an_eval_refuses_a_success_profile_that_it_does_not_know():
+    with pytest.raises(ValueError, match='strict_v0'):
+        benchmarks.override(success_profile='strict_v0').instantiate()
+
+
+def _no_launch(hook_root):
     raise AssertionError('the eval launched an env server')
 
 
 @pytest.mark.timeout(60.0)
-def test_an_eval_with_an_env_server_dials_it_launches_none_and_records_the_hook_that_the_server_runs(
-    monkeypatch, tmp_path
-):
-    env = _MolmoObservationEnv(done_after=2, hook_record='site_hook.py@sha256:ab12')
+def test_an_eval_with_an_env_server_dials_it_and_launches_none(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', _no_launch)
     with serve_env(env) as (host, port), pos3.mirror():
@@ -436,7 +463,46 @@ def test_an_eval_with_an_env_server_dials_it_launches_none_and_records_the_hook_
 
     assert len(env.tokens) == 1
     assert len(env.actions) == 2
-    assert LocalDataset(tmp_path)[0].static[molmo_keys.ENV_HOOK] == 'site_hook.py@sha256:ab12'
+    assert LocalDataset(tmp_path)[0].static[molmo_keys.ENV_HOOK] is None
+
+
+@pytest.mark.timeout(60.0)
+def test_an_eval_with_a_hook_names_it_in_each_selection_and_reset_token_of_a_dialed_server_and_records_it(
+    monkeypatch, tmp_path
+):
+    hook = tmp_path / 'site_hook.py'
+    hook.write_text('HOOK = None\n')
+    hook_file = mapping.HookFile.read(hook)
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', _no_launch)
+    with serve_env(env) as (host, port), pos3.mirror():
+        ev = benchmarks.override(
+            **env.BENCHMARK._asdict(), episodes=3, env_hook=str(hook), env_server=f'{host}:{port}'
+        ).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path / 'run')
+
+    assert [mapping.HookFile.of(selection) for selection in env.selections] == [hook_file]
+    assert [mapping.HookFile.of(token) for token in env.tokens] == [hook_file]
+    assert LocalDataset(tmp_path / 'run')[0].static[molmo_keys.ENV_HOOK] == hook_file.record
+
+
+@pytest.mark.timeout(60.0)
+def test_an_eval_with_a_hook_launches_its_server_with_the_directory_of_the_hook_as_its_hook_root(monkeypatch, tmp_path):
+    hook = tmp_path / 'hooks' / 'site_hook.py'
+    hook.parent.mkdir()
+    hook.write_text('HOOK = None\n')
+    hook_roots: list[Path | None] = []
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(
+            molmo_cfg, 'serve_molmo_spaces', lambda hook_root: hook_roots.append(hook_root) or nullcontext(address)
+        )
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, env_hook=str(hook)).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path / 'run')
+
+    assert hook_roots == [hook.parent.resolve()]
 
 
 @pytest.mark.parametrize('env_server', ['localhost', 'localhost:port', ':8765'])
@@ -456,7 +522,7 @@ def test_an_episode_camera_serves_that_camera_under_its_image_key_and_the_trial_
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     episode_cameras = {keys.EXTERIOR_IMAGE_2: _EPISODE_CAMERA}
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None, hook_sha256=None: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(
             **env.BENCHMARK._asdict(), episodes=3, with_right_shoulder=False, episode_cameras=episode_cameras
         ).instantiate()
@@ -496,22 +562,11 @@ def test_an_episode_camera_for_a_key_other_than_the_wrist_and_the_exteriors_is_r
         benchmarks.override(episode_cameras={'image.top': _EPISODE_CAMERA}).instantiate()
 
 
-def test_an_env_hook_beside_an_env_server_is_refused():
-    with pytest.raises(ValueError, match='env_server must be unset'):
-        benchmarks.override(env_hook='hook.py', env_server='localhost:1').instantiate()
-
-
-def test_the_launched_server_gets_the_env_hook_with_its_digest(asked, monkeypatch, tmp_path):
+def test_the_listing_of_an_eval_with_a_hook_names_the_hook_file_with_the_digest_of_its_bytes(asked, tmp_path):
     hook = tmp_path / 'hook.py'
     hook.write_text('HOOK = None\n')
-    launches = []
-
-    def launch(hook=None, hook_sha256=None):
-        launches.append((hook, hook_sha256))
-        return nullcontext()
-
-    monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', launch)
 
     benchmarks.override(env_hook=str(hook)).instantiate().tasks()
 
-    assert launches == [(hook, hashlib.sha256(hook.read_bytes()).hexdigest())]
+    (selection,) = asked
+    assert mapping.HookFile.of(selection) == mapping.HookFile.read(hook)

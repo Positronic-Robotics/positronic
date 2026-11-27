@@ -68,7 +68,8 @@ leaves out on the members that carry one.
 - `dial(address, headers, open_timeout)` — a client's end of one session. It raises
   `ConnectRefused` when the session does not open, whatever refused it. The `refusal` on the
   exception says what the caller does next: `COLD` (a backend still starting) and `SILENT`
-  (nothing answered) retry, `FORBIDDEN` retries a few times, `FINAL` surfaces at once.
+  (nothing answered) retry, `UNRESOLVED` (no answer yet for the host name) retries for a limited time,
+  `FORBIDDEN` retries a few times, `FINAL` surfaces at once.
 - `probe(address, headers, open_timeout)` — whether a server answers at the address, without opening
   a session. It carries the same `headers` as `dial`, so an edge that authenticates on them lets the
   probe through to the server behind it: the probe wakes what a session would reach. `None` when a
@@ -156,10 +157,12 @@ they ignore a proxy the environment names, where `dial` goes through it.
 | `COLD` | an answer that asks for a retry: a 5xx, a 429 |
 | `FINAL` | an answer no retry changes: any other status, a 200 without the keepalive answer, a host with no address |
 | `SILENT` | no answer: no connection, or none before the timeout or the close |
+| `UNRESOLVED` | no address yet: the resolver had no answer for the host name (`EAI_AGAIN`) |
 
 `COLD` and `SILENT` mean the server is not up yet. `roboarena` raises `KeepaliveUnsupported` without a
 dial, and its `probe` raises `TextAnswer` where the server announces a failure. The gRPC members read
-`SILENT` off the details gRPC writes for a connect nothing answered, and off `DEADLINE_EXCEEDED`.
+`SILENT` off the details gRPC writes for a connect nothing answered, and off `DEADLINE_EXCEEDED`. They read
+a name lookup that timed out as `SILENT` too, and never answer `UNRESOLVED`.
 
 The libraries cap what a call reads: `websockets` reads at most 128 headers of 8 KiB and 1 MiB of a
 refused upgrade's body, and `http.client` at most 100 headers of 64 KiB. The websocket members read at

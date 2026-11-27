@@ -25,7 +25,7 @@ from websockets.sync.connection import Connection
 
 from pimm.logging import init_logging
 from positronic import geom
-from positronic.drivers.webxr import CONTROLLER_PATH, RIGHT, STATE_PATH, controller_message
+from positronic.drivers.webxr import CONTROLLER_PATH, RIGHT, STATE_PATH, ControllerButtons, controller_message
 from positronic.utils import check_finite_nonnegative, check_finite_positive, check_positive_int
 
 from .command import PageState
@@ -64,7 +64,7 @@ class _Hand:
         self._hold_sec = max(min_hold_sec, 2 * self._period_sec, 2 / view_fps)
         self._radius = radius
         self._circle_sec = circle_sec
-        self.buttons = _buttons()
+        self._buttons = ControllerButtons(_buttons(), (0,) * len(_buttons()))
         # The `time.monotonic()` instant at which the hand started its circle, or `None` while it rests.
         self.moving_since: float | None = None
         # The instant at which the hand stopped on its circle, or `None` while it moves or rests.
@@ -72,6 +72,20 @@ class _Hand:
         self._stop = threading.Event()
         self._error: Exception | None = None
         self._thread = threading.Thread(target=self._send, name='scripted-headset', daemon=True)
+
+    @property
+    def buttons(self) -> tuple[float, ...]:
+        return self._buttons.values
+
+    @buttons.setter
+    def buttons(self, values: tuple[float, ...]) -> None:
+        """Set the button values, and count a press of each button that goes down, as the page does."""
+        previous = self._buttons
+        presses = tuple(
+            count + (value > 0.5 and was <= 0.5)
+            for count, value, was in zip(previous.presses, values, previous.values, strict=True)
+        )
+        self._buttons = ControllerButtons(values, presses)
 
     def __enter__(self) -> '_Hand':
         self._thread.start()
@@ -92,7 +106,7 @@ class _Hand:
         next_send = time.monotonic()
         try:
             while not self._stop.is_set():
-                message = controller_message({RIGHT: self._pose(time.monotonic())}, {RIGHT: self.buttons})
+                message = controller_message({RIGHT: self._pose(time.monotonic())}, {RIGHT: self._buttons})
                 self._websocket.send(json.dumps(message))
                 next_send += self._period_sec
                 now = time.monotonic()

@@ -1,42 +1,18 @@
-"""On-box validation for ``RobolabEnv``'s command transform — runs inside RoboLab's own venv.
+"""On-box checks of ``DroidEnv``, and with ``--robot yam`` of ``YamEnv``, in RoboLab's own venv.
 
-positronic cannot import isaaclab/robolab, so the joint-target mapping and the differential-IK path in
-``env.py`` cannot be unit-tested in positronic's suite. This script builds the real env, drives it directly
-(no sockets), and checks:
-
-- the wire observation contract: keys, shapes, dtypes, quat normalization, grip range;
-- ``gt_state``: a pose and a contact flag for every object, and bool progress. On a reset frame, no contact and
-  no condition done;
-- grip: the binary gripper term reaches both closure extremes;
-- ``joint_pos`` pass-through: the applied action is bit-identical to the commanded joints (the leaderboard
-  equivalence claim) and the arm converges onto the target;
-- ``joint_vel``: the joint targets anchor on the measured joints (``q + dq``), exactly;
-- the eef_frame <-> base_link offset: un-offsetting the observed eef quat recovers the base_link body quat;
-- eef_frame against ``models.ROBOLAB_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
-  ``RobolabAdapter`` converts with says it is;
-- Cartesian tracking, the ``examples/run_abs_ik_demo.py`` protocol: ±5 cm translations and ±20° world-axis
-  rotations held 30 steps each, pass at 5 mm / 2°; the demo's own known-divergent ``translate +x`` case is
-  reported but not fatal;
-- ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
-  target tracks end-to-end;
-- the episode length: a token's length rebuilds the scene with only ``episode_length_s`` changed, and a token
-  without one rebuilds the scene with RoboLab's budget;
-- with ``--max-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
-  command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
-  episode, and a one-scene recorded state restores into every clone;
-- a NaN command: a joint target or a pose holds the measured joints, and a grip keeps the last grip;
-- a fault: a clone whose arm state stops being finite ends alone, as a failure with ``fault``. This runs on the
-  single clone and on the batch.
-
-The transform checks all drive a single clone, whatever ``--max-envs`` asks for; the batch check builds its
-own env, because a clone count is fixed at ``create_env``.
+positronic's suite cannot import Isaac Lab, so this script builds the real env and drives it with no sockets. It
+prints one line per check, and ``ALL CHECKS PASSED`` only when every check passes. With ``--max-envs`` above one it
+also checks a batch of clones, in an env of its own.
 
 Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLauncher flags apply)::
 
     PYTHONPATH=positronic/simulator/env_server \
         uv run --extra isaac50 --project <robolab clone> positronic/simulator/robolab/validate.py --headless
+
+A YAM run takes ``--robot yam``, and ``--cameras`` names the camera set of the resets.
 """
 
+import argparse
 import math
 import sys
 from typing import Any
@@ -45,17 +21,22 @@ import keys
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports]
 import torch
+import yam_spec
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
-from env import RobolabEnv, args, simulation_app
+from env import DroidEnv, RobolabEnv, YamEnv, args, simulation_app
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
+from pxr import Usd, UsdPhysics  # pyright: ignore[reportMissingImports]
 
 from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[reportMissingImports]
     get_batch_contact_sensor,
 )
 from robolab.robots.droid import EEF_OFFSET_ROT
 
-_TOKEN = {keys.TOKEN_TASK: 'BananaInBowlTask', keys.TOKEN_INSTRUCTION_TYPE: 'default'}
+_camera_parser = argparse.ArgumentParser(add_help=False)
+_camera_parser.add_argument('--cameras', help='a camera set of the robot; keys.DEFAULT_CAMERA_SETS without it')
+_CAMERAS = _camera_parser.parse_known_args()[0].cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
+_TOKEN = {keys.TOKEN_TASK: 'BananaInBowlTask', keys.TOKEN_INSTRUCTION_TYPE: 'default', keys.TOKEN_CAMERAS: _CAMERAS}
 _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 _HOLD_STEPS = 30
 _SETTLE_STEPS = 10
@@ -78,13 +59,13 @@ _FLANGE_TO_EEF_QUAT = (-0.707106781, 0.0, 0.0, -0.707106781)
 _FRAME_POS_TOL = 1e-4  # m — float32 body poses, so well above round-off and far below a real geometry change
 _FRAME_ROT_TOL = math.radians(0.05)
 
-# The cameras follow ``--cameras``, so a run of any set checks the set that run renders.
+# The cameras follow ``_CAMERAS``, so a run of any set checks the set that run renders.
 _OBS_SPECS = {
     protocol.OBS_JOINT_POS: ((7,), np.float32),
     protocol.OBS_JOINT_VEL: ((7,), np.float32),
     protocol.OBS_EEF_POS: ((3,), np.float32),
     protocol.OBS_EEF_QUAT: ((4,), np.float32),
-    **dict.fromkeys(keys.CAMERA_SETS[args.cameras], ((720, 1280, 3), np.uint8)),
+    **dict.fromkeys(keys.camera_set(args.robot, _CAMERAS), ((720, 1280, 3), np.uint8)),
     keys.SUBTASK: ((4,), np.float32),
 }
 
@@ -119,7 +100,7 @@ def _step(env: RobolabEnv, action: dict) -> dict:
     return protocol.slot_frame(env.step({0: action}), 0)
 
 
-def _check_obs_contract(env: RobolabEnv) -> None:
+def _check_obs_contract(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     control_dt = out[protocol.FRAME_CONTROL_DT]
     assert abs(control_dt - 1 / 15) < 1e-6, f'control_dt {control_dt} != 1/15'
@@ -137,7 +118,7 @@ def _check_obs_contract(env: RobolabEnv) -> None:
                 f'{key}: {type(arr).__name__} shape={getattr(arr, "shape", None)} dtype={getattr(arr, "dtype", None)}'
             )
         rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
-        assert rendered == set(keys.CAMERA_SETS[args.cameras]), f'rendered cameras {sorted(rendered)}'
+        assert rendered == set(keys.CAMERA_SETS[_CAMERAS]), f'rendered cameras {sorted(rendered)}'
         grip = obs[protocol.OBS_GRIP]
         assert isinstance(grip, float) and 0.0 <= grip <= 1.0, f'grip {grip!r}'
         quat = obs[protocol.OBS_EEF_QUAT]
@@ -173,11 +154,12 @@ def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> 
     for name in env._objects:
         pos, quat = env._world.get_pose(name, is_relative=True, env_id=slot)
         own = torch.cat([pos, quat]).cpu().numpy()
+        own[:3] += env._ENV_IN_WORLD
         recorded = obs[keys.GT_STATE][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}']
         assert np.allclose(recorded, own, atol=1e-5), f'clone {slot} reports {recorded} for {name}, not its own {own}'
 
 
-def _check_gt_state_contract(env: RobolabEnv) -> None:
+def _check_gt_state_contract(env: DroidEnv) -> None:
     sensor = get_batch_contact_sensor(env._env.scene, env._gripper)
     assert sensor is not None, f'the scene has no batch contact sensor for {env._gripper}'
     filtered = sensor.data.force_matrix_w.shape[2]
@@ -192,7 +174,7 @@ def _check_gt_state_contract(env: RobolabEnv) -> None:
     print(f'  gt_state: OK ({len(env._objects)} objects with pose and contact; bool progress; reset frame clean)')
 
 
-def _check_grip(env: RobolabEnv) -> None:
+def _check_grip(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     for _ in range(_HOLD_STEPS):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
@@ -205,7 +187,7 @@ def _check_grip(env: RobolabEnv) -> None:
     print('  grip: OK (closed > 0.9, open < 0.1)')
 
 
-def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
+def _check_joint_pos_passthrough(env: DroidEnv) -> None:
     _reset(env, _TOKEN)
     q0 = env._measured_q()[0].cpu().numpy()
     target = q0 + np.array([0.1, -0.1, 0.1, -0.1, 0.1, -0.1, 0.1], dtype=np.float32)
@@ -220,7 +202,7 @@ def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
     print(f'  joint_pos: OK (bit-identical pass-through; converged to {err:.4f} rad)')
 
 
-def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
+def _check_joint_vel_anchoring(env: DroidEnv) -> None:
     _reset(env, _TOKEN)
     dq = np.full(7, 0.01, dtype=np.float32)
     expected = env._measured_q()[0] + torch.as_tensor(dq, device=env._env.device)
@@ -231,7 +213,7 @@ def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
     print('  joint_vel: OK (targets anchor on measured q + dq, exactly)')
 
 
-def _check_eef_offset(env: RobolabEnv) -> None:
+def _check_eef_offset(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]).reshape(1, 4)
     base_quat = env._robot.data.body_quat_w[:1, env._body_idx].cpu()
@@ -241,7 +223,7 @@ def _check_eef_offset(env: RobolabEnv) -> None:
     print('  eef offset: OK (obs eef_quat un-offsets to the base_link body quat)')
 
 
-def _check_flange_to_eef(env: RobolabEnv) -> None:
+def _check_flange_to_eef(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     robot, sim = env._robot, env._env
     assert robot is not None and sim is not None, 'reset builds both'
@@ -262,7 +244,7 @@ def _check_flange_to_eef(env: RobolabEnv) -> None:
     print(f'  flange -> eef_frame: OK ({pos_err * 1000:.4f} mm / {math.degrees(rot_err):.4f} deg)')
 
 
-def _reset_and_settle(env: RobolabEnv) -> tuple[torch.Tensor, torch.Tensor]:
+def _reset_and_settle(env: DroidEnv) -> tuple[torch.Tensor, torch.Tensor]:
     """Reset and settle the environment, then read its end-effector position and quaternion."""
     _reset(env, _TOKEN)
     out = _step(env, _HOLD)
@@ -272,7 +254,7 @@ def _reset_and_settle(env: RobolabEnv) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.as_tensor(obs[protocol.OBS_EEF_POS]), torch.as_tensor(obs[protocol.OBS_EEF_QUAT])
 
 
-def _run_cartesian_cases(env: RobolabEnv) -> int:
+def _run_cartesian_cases(env: DroidEnv) -> int:
     """The run_abs_ik_demo protocol over the wire ``cartesian`` path; returns the count of non-known failures."""
     init_pos, init_quat = _reset_and_settle(env)
     zero = torch.zeros(3)
@@ -326,7 +308,7 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
     return failures
 
 
-def _check_cartesian_delta(env: RobolabEnv) -> None:
+def _check_cartesian_delta(env: DroidEnv) -> None:
     cur_pos, cur_quat = _reset_and_settle(env)
     dpos = torch.tensor([0.0, 0.0, -0.05])
     dquat = _quat_about_axis(math.radians(10.0), 2)
@@ -351,7 +333,7 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
     print(f'  cartesian_delta: OK ({pos_err * 1000:.2f} mm / {math.degrees(rot_err):.2f} deg)')
 
 
-def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
+def _check_a_clone_that_ends_first(env: DroidEnv) -> None:
     """Clone 0 times out alone, then clone 1 makes subtask progress while clone 0 stays frozen.
 
     RoboLab freezes a clone at the end of its episode. On a later step where a running clone makes subtask
@@ -405,7 +387,7 @@ def _first_clone(state: Any) -> Any:
     return state[:1].cpu().numpy()
 
 
-def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
+def _check_a_recorded_state_reaches_every_clone(env: DroidEnv) -> None:
     """A reset with a one-scene recorded state restores that state into every clone."""
     recorded = _first_clone(env._env.scene.get_state(is_relative=True))
     out = env.reset({**_TOKEN, keys.TOKEN_STATE: recorded})
@@ -417,7 +399,7 @@ def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
     print(f'  batch: OK (a recorded state restores into all {env.num_slots} clones)')
 
 
-def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
+def _check_an_episode_length_replaces_the_budget(env: DroidEnv) -> None:
     """A token's episode length rebuilds the scene with only that length changed, and a token without one rebuilds
     the scene with RoboLab's budget."""
     length_s = 240.0
@@ -436,7 +418,48 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
-def _check_a_clone_that_faults(env: RobolabEnv) -> None:
+def _check_each_camera_set_renders_its_own_cameras(env: DroidEnv) -> None:
+    """A token with another camera set rebuilds the scene with that set, and a token back to the first set
+    renders the first set again."""
+    other = next(name for name in (keys.WRIST_LEFT, keys.WRIST_RIGHT) if name != _CAMERAS)
+    for cameras in (other, _CAMERAS):
+        obs = _reset(env, {**_TOKEN, keys.TOKEN_CAMERAS: cameras})[protocol.FRAME_OBS]
+        rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+        assert rendered == set(keys.CAMERA_SETS[cameras]), f'{cameras}: rendered cameras {sorted(rendered)}'
+    print(f'  camera sets: OK ({other}, then {_CAMERAS}, each renders its own cameras)')
+
+
+def _check_the_listing_refuses_an_unknown_phrasing(env: DroidEnv) -> None:
+    """A phrasing that the task does not have fails at the task listing, before any scene is built, and a phrasing
+    that the task has still lists."""
+    task = _TOKEN[keys.TOKEN_TASK]
+    for phrasing in ('default', 'vague', 'specific'):
+        (record,) = env.tasks({'task': task, keys.SELECT_INSTRUCTION_TYPE: phrasing})
+        assert record[keys.RECORD_INSTRUCTION_TYPE] == phrasing and record[protocol.TASK_INSTRUCTION]
+    try:
+        env.tasks({'task': task, keys.SELECT_INSTRUCTION_TYPE: 'vauge'})
+    except ValueError as e:
+        print(f'  listing: OK (default, vague and specific list; a typo is refused: {e})')
+        return
+    raise AssertionError('the listing accepted the phrasing vauge')
+
+
+def _check_the_orange1_stem_does_not_collide(env: DroidEnv) -> None:
+    """A scene that holds RoboLab's orange1 builds with its stem collider out of the physics."""
+    stem = '/Orange_01/OrangeStem'
+    _reset(env, {**_TOKEN, keys.TOKEN_TASK: 'FruitsMovingOrangeOrLimeTask'})
+    found = [
+        prim
+        for prim in Usd.PrimRange(env._env.sim.stage.GetPrimAtPath(env._env.scene.env_ns))
+        if str(prim.GetPath()).endswith(stem)
+    ]
+    assert found, f'the scene holds no {stem}'
+    colliding = [str(p.GetPath()) for p in found if UsdPhysics.CollisionAPI(p).GetCollisionEnabledAttr().Get()]
+    assert not colliding, f'these colliders still collide: {colliding}'
+    print(f'  orange1 stem: OK ({len(found)} out of the physics)')
+
+
+def _check_a_clone_that_faults(env: DroidEnv) -> None:
     """The arm state of the last clone stops being finite in a step. That frame ends the clone alone, as a failure
     with ``fault``. The other clones go on with finite state through a stretch of pose solves that include the faulted
     clone. After a reset, the faulted clone steps again with no fault.
@@ -486,7 +509,7 @@ def _check_batch(num_envs: int) -> None:
     whose observed joints are another clone's. Builds its own env: the clone count is fixed at ``create_env``,
     so this cannot share the single-clone env the checks above drive.
     """
-    env = RobolabEnv(num_envs)
+    env = DroidEnv(num_envs)
     out = env.reset(_TOKEN)
     assert len(out[protocol.SLOTS]) == num_envs, f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} answered'
     held = num_envs - 1
@@ -522,7 +545,7 @@ def _check_batch(num_envs: int) -> None:
     env.close()
 
 
-def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
+def _check_a_command_that_is_not_finite_holds(env: DroidEnv) -> None:
     """A NaN joint target, a NaN pose and a NaN grip hold, as the rig's driver does. No fault, and the joints stay
     finite."""
     env.reset(_TOKEN)
@@ -545,8 +568,293 @@ def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
     print(f'  NaN command: OK ({" and ".join(commands)} held the measured joints, a NaN grip kept the last grip)')
 
 
+# ---- the YAM robot ----
+
+_YAM_ARM_SPECS = {
+    protocol.OBS_JOINT_POS: (len(yam_spec.ARM_JOINTS),),
+    protocol.OBS_JOINT_VEL: (len(yam_spec.ARM_JOINTS),),
+    protocol.OBS_EEF_POS: (3,),
+    protocol.OBS_EEF_QUAT: (4,),
+}
+
+
+def _yam_action(left: dict, right: dict, grips: tuple[float, float] = (0.0, 0.0)) -> dict:
+    action = {}
+    for side, command, grip in zip(yam_spec.SIDES, (left, right), grips, strict=True):
+        action[protocol.arm_channel(protocol.ROBOT_COMMAND, side)] = command
+        action[protocol.arm_channel(protocol.TARGET_GRIP, side)] = grip
+    return action
+
+
+_ARM_HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
+_YAM_HOLD = _yam_action(_ARM_HOLD, _ARM_HOLD)
+
+
+def _check_yam_obs_contract(env: YamEnv) -> None:
+    out = _reset(env, _TOKEN)
+    control_dt = out[protocol.FRAME_CONTROL_DT]
+    assert abs(control_dt - 1 / 15) < 1e-6, f'control_dt {control_dt} != 1/15'
+    step = _step(env, _YAM_HOLD)
+    for obs in (out[protocol.FRAME_OBS], step[protocol.FRAME_OBS]):
+        for side in yam_spec.SIDES:
+            for field, shape in _YAM_ARM_SPECS.items():
+                arr = obs[protocol.arm_channel(field, side)]
+                assert isinstance(arr, np.ndarray) and arr.shape == shape and arr.dtype == np.float32, (
+                    f'{field}.{side}: {type(arr).__name__} {getattr(arr, "shape", None)} {getattr(arr, "dtype", None)}'
+                )
+            quat = obs[protocol.arm_channel(protocol.OBS_EEF_QUAT, side)]
+            assert abs(float(np.linalg.norm(quat)) - 1.0) < 1e-3, f'eef_quat.{side} norm {quat}'
+            grip = obs[protocol.arm_channel(protocol.OBS_GRIP, side)]
+            assert isinstance(grip, float) and 0.0 <= grip <= 1.0, f'grip.{side} {grip!r}'
+        cameras = keys.camera_set(keys.YAM, _CAMERAS)
+        rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+        assert rendered == set(cameras), f'rendered cameras {sorted(rendered)}'
+        for camera in cameras:
+            image = obs[camera]
+            assert image.shape == (yam_spec.CAMERA_HEIGHT, yam_spec.CAMERA_WIDTH, 3) and image.dtype == np.uint8, (
+                f'{camera}: {image.shape} {image.dtype}'
+            )
+    _check_gt_state(env, out[protocol.FRAME_OBS], reset=True)
+    print(f'  obs contract: OK (per arm joints, velocities, eef pose and grip; {len(cameras)} cameras)')
+
+
+_YAM_JOINT_OFFSET = np.array([0.15, 0.10, -0.10, 0.05, 0.10, 0.15], dtype=np.float32)
+
+
+def _check_yam_joint_pos_passthrough(env: YamEnv) -> None:
+    _reset(env, _TOKEN)
+    terms = list(env._env.action_manager.active_terms)
+    assert terms == [name for name, _ in yam_spec.ACTION_TERMS], f'the action terms are {terms}'
+    measured = env._measured_q()[0].cpu().numpy().reshape(len(yam_spec.SIDES), -1)
+    left, right = measured[0] + _YAM_JOINT_OFFSET, measured[1] - _YAM_JOINT_OFFSET
+    left_command, right_command = (
+        {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q} for q in (left, right)
+    )
+    action = _yam_action(left_command, right_command)
+    out = _step(env, action)
+    applied = env._env.action_manager.action[0].cpu().numpy()
+    expected = np.concatenate([left, [0.0], right, [0.0]]).astype(np.float32)
+    assert np.array_equal(applied, expected), f'the 14 values are {applied.tolist()}, not {expected.tolist()}'
+    for _ in range(59):
+        out = _step(env, action)
+    errors = [
+        float(np.max(np.abs(out[protocol.FRAME_OBS][protocol.arm_channel(protocol.OBS_JOINT_POS, side)] - target)))
+        for side, target in zip(yam_spec.SIDES, (left, right), strict=True)
+    ]
+    assert max(errors) < 0.05, f'joint_pos convergence errors {errors} rad'
+    print(f'  joint_pos: OK (terms {terms}; bit-identical 14 values; converged to {max(errors):.4f} rad)')
+
+
+def _check_yam_refused_delta_holds(env: YamEnv) -> None:
+    _reset(env, _TOKEN)
+    measured = env._measured_q()[0].cpu().numpy().reshape(len(yam_spec.SIDES), -1)
+    delta = {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(7, dtype=np.float32)}
+    _step(env, _yam_action(delta, _ARM_HOLD))
+    applied = env._env.action_manager.action[0, : len(yam_spec.ARM_JOINTS)].cpu().numpy()
+    assert np.array_equal(applied, measured[0]), f'a 7-value delta was applied as {applied.tolist()}'
+    print('  refused command: OK (a 7-value joint delta held the measured joints)')
+
+
+def _finger_joints(env: YamEnv, side: str) -> tuple[float, float]:
+    names, q = env._robot.data.joint_names, env._robot.data.joint_pos[0]
+    finger = float(q[names.index(f'{side}_{yam_spec.FINGER_JOINT}')])
+    return finger, float(q[names.index(f'{side}_{yam_spec.FINGER_MIMIC_JOINT}')])
+
+
+_FINGER_TOL = 2e-3  # m
+
+
+def _check_yam_grip(env: YamEnv) -> None:
+    """Each grip reading follows its command, and joint8 follows joint7 as the grip moves."""
+    out = _reset(env, _TOKEN)
+    readings, worst_mimic = {}, 0.0
+    for grip, low, high in ((1.0, 0.9, 1.0), (0.5, 0.4, 0.6), (0.0, 0.0, 0.1)):
+        for _ in range(_HOLD_STEPS):
+            out = _step(env, _yam_action(_ARM_HOLD, _ARM_HOLD, (grip, grip)))
+            for side in yam_spec.SIDES:
+                q7, q8 = _finger_joints(env, side)
+                worst_mimic = max(worst_mimic, abs(q8 - q7))
+        for side in yam_spec.SIDES:
+            reading = out[protocol.FRAME_OBS][protocol.arm_channel(protocol.OBS_GRIP, side)]
+            readings[(grip, side)] = round(reading, 3)
+            assert low <= reading <= high, f'grip {grip} reads {reading} on the {side} arm'
+    assert worst_mimic < _FINGER_TOL, f'joint8 is {worst_mimic} m from joint7'
+    print(f'  grip: OK (readings {readings}; joint8 within {worst_mimic:.1e} m of joint7)')
+
+
+def _check_yam_eef_pose(env: YamEnv) -> None:
+    """The eef pose of each arm is the pose of its ``<side>_gripper`` link in the env, plus ``ROOT_IN_RIG_WORLD``."""
+    out = _reset(env, _TOKEN)
+    for _ in range(_SETTLE_STEPS):
+        out = _step(env, _YAM_HOLD)
+    data, origin = env._robot.data, env._env.scene.env_origins[0]
+    root = (data.root_pos_w[0] - origin).cpu().numpy()
+    assert np.allclose(root, 0.0, atol=1e-4), f'the robot root is at {root.tolist()} in the env, not at its origin'
+    for side in yam_spec.SIDES:
+        body = data.body_names.index(f'{side}_{yam_spec.GRIPPER_SITE}')
+        pos = (data.body_pos_w[0, body] - origin).cpu().numpy() + np.asarray(yam_spec.ROOT_IN_RIG_WORLD)
+        quat = data.body_quat_w[0, body].cpu().numpy()
+        obs = out[protocol.FRAME_OBS]
+        reported_pos = obs[protocol.arm_channel(protocol.OBS_EEF_POS, side)]
+        reported_quat = obs[protocol.arm_channel(protocol.OBS_EEF_QUAT, side)]
+        assert np.allclose(reported_pos, pos, atol=_FRAME_POS_TOL), f'{side} eef_pos {reported_pos} vs {pos}'
+        assert abs(abs(float(np.dot(reported_quat, quat))) - 1.0) < 1e-5, f'{side} eef_quat {reported_quat} vs {quat}'
+    print('  eef pose: OK (each <side>_gripper link plus ROOT_IN_RIG_WORLD)')
+
+
+# The object that the contact check puts between the fingers of a hand.
+_CONTACT_OBJECT = 'banana'
+
+
+def _grasp_point(env: YamEnv, side: str) -> torch.Tensor:
+    """The world point between the pads of ``side``'s hand, at the middle of the pads."""
+    data = env._robot.data
+    body = data.body_names.index(f'{side}_{yam_spec.WRIST_LINK}')
+    in_wrist = torch.tensor([yam_spec.PAD_MIDDLE_IN_WRIST], dtype=torch.float32, device=data.body_pos_w.device)
+    return data.body_pos_w[0, body] + quat_apply(data.body_quat_w[0:1, body], in_wrist)[0]
+
+
+def _put_at_rest(env: YamEnv, name: str, point: torch.Tensor) -> None:
+    """Moves the centre of the bounding box of object ``name`` in clone 0 to the world point ``point``, at rest."""
+    rl_env = env._env
+    obj = rl_env.scene[name]
+    pos, _quat = env._world.get_pose(name, is_relative=True, env_id=0)
+    centre = torch.as_tensor(env._world.get_centroid(name, env_id=0), dtype=torch.float32, device=rl_env.device)
+    pose = obj.data.root_state_w[0:1, :7].clone()
+    pose[0, :3] = point - (centre - pos.to(rl_env.device))
+    clone_0 = torch.tensor([0], device=rl_env.device)
+    obj.write_root_pose_to_sim(pose, env_ids=clone_0)
+    obj.write_root_velocity_to_sim(torch.zeros(1, 6, device=rl_env.device), env_ids=clone_0)
+
+
+def _fingers_in_contact(env: YamEnv, name: str) -> set[str]:
+    """The finger labels whose contact sensors sense object ``name`` in clone 0."""
+    return {
+        label
+        for side in yam_spec.SIDES
+        for label in yam_spec.CONTACT_GRIPPER[side]
+        if name in env._world.get_objects_in_contact_with(label, env._objects, env_id=0)
+    }
+
+
+def _check_yam_finger_contact(env: YamEnv) -> None:
+    """Each hand closes on the banana; ``gt_state`` reads the contact, and only fingers of that hand sense it.
+
+    Before each step the banana goes back between the pads of the hand at rest, so gravity does not take it away
+    before the fingers close.
+    """
+    every_finger = set(yam_spec.CONTACT_GRIPPER[yam_spec.CONTACT_GRIPPERS])
+    missing = sorted(f for f in every_finger if get_batch_contact_sensor(env._env.scene, f) is None)
+    assert not missing, f'the scene has no batch contact sensor for the fingers {missing}'
+    contact_key = f'.{keys.GT_STATE_OBJECTS}.{_CONTACT_OBJECT}.{keys.GT_STATE_GRIPPER_CONTACT}'
+    sensed = {}
+    for side, grips in zip(yam_spec.SIDES, ((1.0, 0.0), (0.0, 1.0)), strict=True):
+        _reset(env, _TOKEN)
+        for _ in range(_HOLD_STEPS):
+            _step(env, _YAM_HOLD)
+        other = every_finger - set(yam_spec.CONTACT_GRIPPER[side])
+        contact_steps, fingers_seen = 0, set()
+        for _ in range(_HOLD_STEPS):
+            _put_at_rest(env, _CONTACT_OBJECT, _grasp_point(env, side))
+            out = _step(env, _yam_action(_ARM_HOLD, _ARM_HOLD, grips))
+            assert not out[protocol.FRAME_DONE], f'the episode ended while the {side} hand closed on the banana'
+            obs = out[protocol.FRAME_OBS]
+            _check_gt_state(env, obs, reset=False)
+            fingers = _fingers_in_contact(env, _CONTACT_OBJECT)
+            assert not fingers & other, f'the {side} hand holds the banana, but the fingers {fingers & other} sense it'
+            assert obs[keys.GT_STATE][contact_key] == bool(fingers), (
+                f'gt_state reads contact {obs[keys.GT_STATE][contact_key]}, but the fingers {fingers} sense the banana'
+            )
+            contact_steps += bool(fingers)
+            fingers_seen |= fingers
+        assert contact_steps > 0, f'the {side} hand closed on the banana, but no step read a contact'
+        sensed[side] = (contact_steps, sorted(fingers_seen))
+    print(f'  gripper contact: OK (per hand, the steps with a contact and the fingers that sensed it: {sensed})')
+
+
+def _joint_pos(q: np.ndarray) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
+
+
+def _check_yam_batch(num_envs: int) -> None:
+    """Every clone answers its own frame and takes the command addressed to it.
+
+    Each clone but the last moves both arms to targets of its own and sets grips of its own, and the last gets no
+    command, so it holds its joints and its grips. Builds its own env, because the clone count is fixed at
+    ``create_env``.
+    """
+    env = YamEnv(num_envs)
+    out = env.reset(_TOKEN)
+    assert len(out[protocol.SLOTS]) == num_envs, f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} answered'
+    arms = len(yam_spec.SIDES)
+    held = num_envs - 1
+    start = env._measured_q().cpu().numpy().reshape(num_envs, arms, -1)
+    signs = np.array([[1.0], [-1.0]], dtype=np.float32)
+    targets = {slot: start[slot] + (1 + slot / num_envs) * signs * _YAM_JOINT_OFFSET for slot in range(held)}
+    grips = {slot: (1.0, 0.0) if slot % 2 == 0 else (0.0, 1.0) for slot in range(held)}
+
+    actions = {
+        slot: _yam_action(_joint_pos(targets[slot][0]), _joint_pos(targets[slot][1]), grips[slot])
+        for slot in range(held)
+    }
+    before = start
+    for _ in range(_HOLD_STEPS):
+        before = env._measured_q().cpu().numpy().reshape(num_envs, arms, -1)
+        out = env.step(actions)
+    applied = env._env.action_manager.action.cpu().numpy()
+    for slot in range(held):
+        (left, right), (left_grip, right_grip) = targets[slot], grips[slot]
+        expected = np.concatenate([left, [left_grip], right, [right_grip]]).astype(np.float32)
+        assert np.array_equal(applied[slot], expected), (
+            f'clone {slot} took {applied[slot].tolist()}, not its own command'
+        )
+    held_expected = np.concatenate([before[held][0], [0.0], before[held][1], [0.0]]).astype(np.float32)
+    hold_err = float(np.max(np.abs(applied[held] - held_expected)))
+    assert hold_err < 1e-6, f'clone {held} had no command and was commanded {hold_err:.6f} off its joints and grips'
+    measured = env._measured_q().cpu().numpy().reshape(num_envs, -1)
+    assert len(out[protocol.SLOTS]) == num_envs, f'the step answered {len(out[protocol.SLOTS])} of {num_envs} clones'
+    for slot, frame in enumerate(out[protocol.SLOTS]):
+        assert frame.keys() == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}, sorted(frame)
+        obs = frame[protocol.FRAME_OBS]
+        observed = np.concatenate([obs[protocol.arm_channel(protocol.OBS_JOINT_POS, side)] for side in yam_spec.SIDES])
+        nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
+        assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
+        commanded = grips.get(slot, (0.0, 0.0))
+        for side, grip in zip(yam_spec.SIDES, commanded, strict=True):
+            reading = obs[protocol.arm_channel(protocol.OBS_GRIP, side)]
+            assert abs(reading - grip) < 0.1, f'slot {slot} reads grip {reading} on the {side} arm, not its own {grip}'
+        _check_gt_state(env, obs, reset=False)
+        _check_gt_state_is_the_clones_own(env, obs, slot)
+    for slot in range(held):
+        err = float(np.max(np.abs(measured[slot] - targets[slot].reshape(-1))))
+        assert err < 0.05, f'clone {slot} is {err:.4f} rad from its own targets'
+    drift = float(np.max(np.abs(measured[held] - start[held].reshape(-1))))
+    assert drift < 0.02, f'clone {held} had no command and moved {drift:.4f} rad'
+    env.close()
+    print(f'  batch: OK ({num_envs} clones read their own joints, grips and gt_state; clone {held} held)')
+
+
+def _validate_yam() -> None:
+    env = YamEnv()
+    _check_yam_obs_contract(env)
+    _check_yam_joint_pos_passthrough(env)
+    _check_yam_refused_delta_holds(env)
+    _check_yam_grip(env)
+    _check_yam_eef_pose(env)
+    _check_yam_finger_contact(env)
+    env.close()
+    if args.max_envs > 1:
+        _check_yam_batch(args.max_envs)
+    print('ALL CHECKS PASSED', flush=True)
+    simulation_app.close()
+
+
 def main() -> None:
-    env = RobolabEnv()
+    if args.robot == keys.YAM:
+        _validate_yam()
+        return
+    env = DroidEnv()
+    _check_the_listing_refuses_an_unknown_phrasing(env)
     _check_obs_contract(env)
     _check_gt_state_contract(env)
     _check_grip(env)
@@ -557,7 +865,9 @@ def main() -> None:
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
+    _check_each_camera_set_renders_its_own_cameras(env)
     _check_a_command_that_is_not_finite_holds(env)
+    _check_the_orange1_stem_does_not_collide(env)
     _check_a_clone_that_faults(env)
     env.close()
     if args.max_envs > 1:

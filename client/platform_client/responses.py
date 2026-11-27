@@ -510,6 +510,8 @@ class ErroredSubmissionView(_TaggedView):
     id: SubmissionId
     reason_code: Slugged[ReasonCode] | None = None
     reason: str | None = None
+    # When the run started. None where the platform recorded no start.
+    started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.errored
 
     @property
@@ -531,6 +533,8 @@ class FinishedSubmissionView(_TaggedView):
     replay: ReplayLink | None = None
     report: ReportLink | None = None
     outcome: PlanOutcome | None = None
+    # When the run started. None where the platform recorded no start.
+    started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
 
     @model_validator(mode='after')
@@ -555,6 +559,8 @@ class CancelledSubmissionView(_TaggedView):
 
     id: SubmissionId
     cancelled_at: AwareDatetime | None = None
+    # When the run started. None where the platform recorded no start.
+    started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
 
 
