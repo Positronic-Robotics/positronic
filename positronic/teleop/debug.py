@@ -302,11 +302,11 @@ class ArmControl(pimm.ControlSystem):
             presses, grip = self._read_buttons(buttons, clock.now_ns(), silent)
             self._check_availability(hand, silent)
 
-            if Button.A in presses:
+            if Button.STICK in presses:  # the start move turns control off, so it wins over A in the same sample
+                yield from self._go_to_start(should_stop, clock)
+            elif Button.A in presses:
                 for _ in range(ButtonMap.clutches(presses[Button.A])):
                     self._toggle_control(hand)  # a silent headset gives no press
-            elif Button.STICK in presses:
-                yield from self._go_to_start(should_stop, clock)
             elif self._tracker.on and positions.updated and hand is not None:
                 target = self._tracker.update(hand)
                 self.robot_commands.emit(command.CartesianPosition(target))

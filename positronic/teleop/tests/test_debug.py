@@ -207,6 +207,22 @@ def test_the_stick_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_
     assert marks['after'] == marks['at_start'], 'control is off at the start pose'
 
 
+def test_a_press_of_the_stick_and_of_a_in_one_sample_moves_the_arm_to_its_start_pose_with_control_off(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(more={Button.A: 1, Button.STICK: 1}), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert not rig.commands.emitted
+    assert 'control on' not in rig.events()
+    assert 'to the start pose' in rig.events()
+
+
 def test_the_start_move_waits_for_the_settle_states_of_the_arm_after_the_press(world):
     rig = _Rig(world)
     marks = {}
