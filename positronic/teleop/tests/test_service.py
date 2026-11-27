@@ -443,6 +443,112 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
+def test_control_that_went_off_in_a_silence_stays_off_until_a_and_the_view_and_the_log_name_the_cause(
+    socket_path, connect, caplog
+):
+    caplog.set_level(logging.INFO, logger=service_module.__name__)
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=0.3, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        time.sleep(served.silence_limit + 0.05)
+        connection.frame(FRAME_REQUEST)
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control, 'samples that come again do not turn control on'
+        assert (
+            Badge('Control off: connection lost (A: on)', TeleopService.CONTROL_OFF_COLOUR) in served.view_text().lines
+        )
+        silences = [record for record in caplog.records if 'silence limit' in record.getMessage()]
+        assert len(silences) == 1
+        assert silences[0].levelno == logging.INFO
+        assert 'Control off' in silences[0].getMessage()
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        assert Badge('Control on (A: off)', TeleopService.CONTROL_ON_COLOUR) in served.view_text().lines
+        connection.close()
+
+
+class _LockProbe(logging.Handler):
+    """Each line that the process logs, and whether another thread could read the service while the line was
+    written."""
+
+    def __init__(self, service: TeleopService):
+        super().__init__(logging.INFO)
+        self._service = service
+        self.lines: list[tuple[str, bool]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        reader = threading.Thread(target=self._service.shown_image_count, daemon=True)
+        reader.start()
+        reader.join(timeout=2)
+        self.lines.append((record.getMessage(), not reader.is_alive()))
+
+
+@pytest.fixture
+def lock_probe(service, caplog) -> Generator[_LockProbe]:
+    caplog.set_level(logging.INFO)
+    probe = _LockProbe(service)
+    logging.getLogger().addHandler(probe)
+    yield probe
+    logging.getLogger().removeHandler(probe)
+
+
+def test_the_service_logs_each_change_of_the_phase_and_of_control_with_its_cause_after_the_lock(
+    service, socket_path, connect, lock_probe
+):
+    connection = _readied_connection(service, socket_path, connect)
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    _take(service, _buttons(b=1.0))
+    time.sleep(HOLD_SEC + 0.05)
+    _take(service, _buttons(b=1.0))
+    assert END in connection.frame(FRAME_REQUEST)
+    connection.close()
+    _until_phase(service, Phase.IDLE)
+    messages = [message for message, _ in lock_probe.lines]
+    changes = ['-> ready_wait', '-> running (B: Ready)', 'Control on (A)', 'Control off (A)']
+    changes += ['-> ended (hold B: Complete)', '-> idle (the session ended)']
+    unread = iter(messages)
+    for change in changes:
+        assert any(change in message for message in unread), f'no log line with {change!r} in order in {messages}'
+    assert [message for message, free in lock_probe.lines if not free] == [], 'each line is written after the lock'
+
+
+def test_the_view_logs_the_end_of_a_dropped_trial_after_the_lock(
+    service, socket_path, connect, lock_probe, monkeypatch
+):
+    monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
+    connection = _readied_connection(service, socket_path, connect)
+    connection.close()
+    time.sleep(TeleopService.RESUME_LIMIT_SEC + 0.05)
+    service.view()
+    ended = [(message, free) for message, free in lock_probe.lines if 'no session resumed the dropped trial' in message]
+    assert ended == [('Teleop trial: running -> idle (no session resumed the dropped trial)', True)]
+
+
+def test_a_silence_in_umi_mode_leaves_control_on_and_logs_no_change_of_control(
+    service, socket_path, connect, lock_probe
+):
+    connection = _readied_connection(service, socket_path, connect, session_query(operator_position=None))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    time.sleep(service.silence_limit + 0.05)
+    connection.frame(FRAME_REQUEST)
+    assert service.state().control
+    assert Badge('Control on (A: off)', TeleopService.CONTROL_ON_COLOUR) in service.view_text().lines
+    assert [message for message, _ in lock_probe.lines if message.startswith('Control ')] == []
+    connection.close()
+
+
 def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
     service, socket_path, runtime
 ):
