@@ -1,8 +1,7 @@
 """The WebRTC peer of a page: it sends a stream of frames to the page as one video track.
 
-The page offers and the peer answers. The setup messages go over a channel that the caller owns: ``VideoPeer.signal``
-takes each message of the page, and the ``send`` of the peer carries each message to the page. The page opens a data
-channel, ``TIMING_CHANNEL``, on which it measures the age of each frame, and on which it reports what it measured.
+The page offers and the peer answers, over a channel that the caller owns (``VideoPeer.signal`` and ``send``). On the
+data channel ``TIMING_CHANNEL`` the page measures the age of each frame and reports it.
 """
 
 import asyncio
@@ -114,6 +113,12 @@ class VideoReport(BaseModel):
         )
 
 
+class PageReport(BaseModel):
+    """A ``VideoReport`` that the page sends on ``TIMING_CHANNEL``."""
+
+    report: VideoReport
+
+
 class _ConnectionClock:
     """The time from the start of one peer connection: in ms for the page, and in ticks of the RTP clock of video."""
 
@@ -164,11 +169,7 @@ class FrameTrack(MediaStreamTrack):
         return frame
 
 
-class _Report(BaseModel):
-    report: VideoReport
-
-
-_PAGE_TIMING: TypeAdapter[Ping | _Report] = TypeAdapter(Ping | _Report)
+_PAGE_TIMING: TypeAdapter[Ping | PageReport] = TypeAdapter(Ping | PageReport)
 
 
 class _Timing:

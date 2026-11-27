@@ -35,7 +35,7 @@ STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
 _PRESSES, _TIMESTAMP = 'presses', 'timestamp'
 # The field of a message on ``/ws`` that carries a WebRTC setup message of the video, from the page or to it.
-_SIGNAL = 'webrtc'
+SIGNAL_FIELD = 'webrtc'
 # The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
 _CONTROLLER_BUTTONS = 6
 
@@ -360,7 +360,7 @@ class WebXR(pimm.ControlSystem):
             peer: VideoPeer | None = None
 
             async def send_signal(message: dict[str, Any]) -> None:
-                await websocket.send_json({_SIGNAL: message})
+                await websocket.send_json({SIGNAL_FIELD: message})
 
             try:
                 fps = pimm.utils.RateCounter('Websocket')
@@ -368,9 +368,9 @@ class WebXR(pimm.ControlSystem):
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
-                        if _SIGNAL in data:
+                        if SIGNAL_FIELD in data:
                             peer = peer or VideoPeer(self._next_frame, send_signal)
-                            peer.signal(data[_SIGNAL])
+                            peer.signal(data[SIGNAL_FIELD])
                             continue
                         received_ms = time.monotonic() * 1000
                         controller_positions, buttons = parse_controller_message(data)

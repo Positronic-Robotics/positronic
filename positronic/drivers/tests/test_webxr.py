@@ -326,8 +326,9 @@ async def _page_peer(base: str, offer_id: int = 1) -> AsyncIterator[tuple[MediaS
         try:
             await connection.setLocalDescription(await connection.createOffer())
             offer = webrtc.Offer(id=offer_id, sdp=connection.localDescription.sdp)
-            await page.send(json.dumps({webxr._SIGNAL: offer.model_dump()}))
-            answer = webrtc.Answer.model_validate(json.loads(await asyncio.wait_for(page.recv(), 10))[webxr._SIGNAL])
+            await page.send(json.dumps({webxr.SIGNAL_FIELD: offer.model_dump()}))
+            reply = json.loads(await asyncio.wait_for(page.recv(), 10))
+            answer = webrtc.Answer.model_validate(reply[webxr.SIGNAL_FIELD])
             assert answer.id == offer_id
             await connection.setRemoteDescription(RTCSessionDescription(answer.sdp, 'answer'))
             yield await asyncio.wait_for(tracks.get(), 10), timing
@@ -430,7 +431,7 @@ async def test_the_service_logs_each_report_of_the_page_on_its_timing_channel(wo
     with _served_webxr(webxr=served) as base:
         async with _page_peer(base) as (_track, timing):
             await _open(timing)
-            timing.send(webrtc._Report(report=report).model_dump_json())
+            timing.send(webrtc.PageReport(report=report).model_dump_json())
             deadline = time.monotonic() + 10
             while not any('Video over WebRTC' in line for line in caplog.messages):
                 assert time.monotonic() < deadline, 'the service never logged the report'
@@ -448,7 +449,7 @@ async def test_a_bad_setup_message_logs_an_error_and_the_next_offer_still_gets_t
     served.frame._bind(receiver)
     with _served_webxr(webxr=served) as base:
         async with ws_connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as page:
-            await page.send(json.dumps({webxr._SIGNAL: webrtc.Offer(id=1, sdp='not an offer').model_dump()}))
+            await page.send(json.dumps({webxr.SIGNAL_FIELD: webrtc.Offer(id=1, sdp='not an offer').model_dump()}))
             deadline = time.monotonic() + 10
             while not any(record.levelno == logging.ERROR for record in caplog.records):
                 assert time.monotonic() < deadline, 'the service never logged the bad offer'
