@@ -2,6 +2,7 @@ import json
 import logging
 import socket
 import sys
+from collections.abc import Collection
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -44,15 +45,19 @@ _NO_MODEL = ModelCommands(labels=_LABELS, convert=('true',), train=('true',), se
 _SHADOW = f'{policy_keys.SHADOW}.{policy_keys.POLICY_SOURCE}.{_LABELS[0]}'
 
 
+def _joints(arm: str) -> str:
+    return f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'
+
+
 def test_the_round_0_policy_commands_at_each_step_the_joints_and_the_grip_of_the_first_observation():
     arms = keys.BIMANUAL_ARMS
     first = {
-        'robot_state.left.q': np.array([0.1, 0.2]),
-        'robot_state.left.ee_pose': np.zeros(7),
-        'grip.left': 0.3,
-        'robot_state.right.q': np.array([0.4, 0.5]),
-        'grip.right': 0.6,
-        'image.exterior': np.zeros((2, 2, 3)),
+        _joints(keys.LEFT_ARM): np.array([0.1, 0.2]),
+        f'{keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM)}{keys.EE_POSE_SUFFIX}': np.zeros(7),
+        keys.arm_channel(keys.GRIP, keys.LEFT_ARM): 0.3,
+        _joints(keys.RIGHT_ARM): np.array([0.4, 0.5]),
+        keys.arm_channel(keys.GRIP, keys.RIGHT_ARM): 0.6,
+        keys.EXTERIOR_IMAGE: np.zeros((2, 2, 3)),
     }
     later = {name: value + 1 for name, value in first.items()}
     commands = [keys.arm_channel(channel, arm) for channel in (keys.ROBOT_COMMAND, keys.TARGET_GRIP) for arm in arms]
@@ -61,12 +66,13 @@ def test_the_round_0_policy_commands_at_each_step_the_joints_and_the_grip_of_the
 
     for obs in (first, later, later):
         step = policy_run.send(obs)
+        assert step is not None
         assert sorted(step.commands) == sorted(commands)
         for arm in arms:
             command = step.commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)]
             assert isinstance(command, JointPosition)
-            np.testing.assert_array_equal(command.positions, first[f'robot_state.{arm}.q'])
-            assert step.commands[keys.arm_channel(keys.TARGET_GRIP, arm)] == first[f'grip.{arm}']
+            np.testing.assert_array_equal(command.positions, first[_joints(arm)])
+            assert step.commands[keys.arm_channel(keys.TARGET_GRIP, arm)] == first[keys.arm_channel(keys.GRIP, arm)]
 
 
 def test_the_round_0_policy_refuses_a_channel_that_is_not_an_arm_or_a_grip():
@@ -91,12 +97,21 @@ def test_a_model_command_that_does_not_fill_fails_when_the_config_is_made():
 _TELEOPERATOR = RoundZeroPolicy('test', ())
 
 
-class _Rig(Rig):
+class _NoSignals(Rig):
+    """A rig with no observation and no command channel."""
+
+    @property
+    def observations(self) -> Collection[str]:
+        return ()
+
+    @property
+    def commands(self) -> Collection[str]:
+        return ()
+
+
+class _Rig(_NoSignals):
     """A rig with no simulator and the teleoperator ``teleoperator``: each rollout of a Collect step opens its writer,
     records nothing and calls ``perform``."""
-
-    observations = ()
-    commands = ()
 
     def __init__(self, perform, teleoperator: Policy = _TELEOPERATOR):
         self._perform = perform
@@ -154,7 +169,11 @@ def test_a_run_refuses_a_folder_that_has_files(tmp_path):
         (_TELEOPERATOR, {'training_licenses': ()}, 'No license allows training'),
         (_TELEOPERATOR, {'round_0_license': 'gpl-3.0'}, "not have 'gpl-3.0', the license of the round 0 policy"),
         (RoundZeroPolicy('gpl-3.0', ()), {}, "not have 'gpl-3.0', the license of the teleoperator"),
-        (Teleoperator(None, policy_keys.NO_LICENSE), {}, 'The teleoperator states no license'),
+        (
+            Teleoperator(pimm.ControlSystemReceiver[dict](Passive()), policy_keys.NO_LICENSE),
+            {},
+            'The teleoperator states no license',
+        ),
         (_TELEOPERATOR, {'model': replace(_NO_MODEL, license='gpl-3.0')}, "not have 'gpl-3.0', the license of the mod"),
     ],
 )
@@ -282,13 +301,10 @@ class _TeleopDevice(pimm.ControlSystem):
             yield pimm.Sleep(0.01)
 
 
-class _TeleopRig(Rig):
+class _TeleopRig(_NoSignals):
     """A rig with no platform and a teleop device. Each Collect step opens a world with a new arm and a new device.
     The arm of Collect step ``k`` stands at the joints ``[k, k]``. Each rollout opens its writer, records nothing, and
     runs the teleoperator until its element has the message of the device. ``elements`` keeps that element."""
-
-    observations = ()
-    commands = ()
 
     def __init__(self):
         self.takes_over_at_start: list[bool] = []
@@ -314,7 +330,9 @@ class _TeleopRig(Rig):
                 teleoperator_run = executor.start(rollout.helper)
                 for _ in range(100):
                     next(loop)
-                    if element := teleoperator_run.send({}).commands:
+                    step = teleoperator_run.send({})
+                    assert step is not None
+                    if element := step.commands:
                         self.elements.append(element)
                         return {}
                 raise AssertionError('The teleoperator got no message of the device')
