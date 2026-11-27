@@ -1126,11 +1126,11 @@ class TestKeepalive:
             PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
             idle_timeout_min=2,
         )
-        assert InferenceClient(*served.ws()).keepalive() == 120
+        assert InferenceClient(*served.ws()).keepalive().alive_seconds == 120
 
     def test_a_server_with_no_idle_timeout_answers_none(self, stub_server):
         host, port, *_ = stub_server
-        assert _ws_client(host, port).keepalive() is None
+        assert _ws_client(host, port).keepalive().alive_seconds is None
 
     def test_an_infinite_idle_timeout_answers_none(self, start_server, make_mock_model):
         policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
@@ -1139,7 +1139,7 @@ class TestKeepalive:
             PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
             idle_timeout_min=math.inf,
         )
-        assert InferenceClient(*served.ws()).keepalive() is None
+        assert InferenceClient(*served.ws()).keepalive().alive_seconds is None
 
     def test_it_holds_off_the_idle_timeout_as_a_session_does(self, make_mock_model):
         server = PolicyServer(
@@ -1182,7 +1182,7 @@ class TestKeepalive:
                 client.keepalive()
             source.release.set()
             assert ready.wait(timeout=10.0)
-            assert client.keepalive() is None
+            assert client.keepalive().alive_seconds is None
         finally:
             source.release.set()
             server.shutdown()
@@ -1190,7 +1190,7 @@ class TestKeepalive:
 
     def test_it_answers_over_a_unix_socket(self, unix_stub_server):
         served, _policy = unix_stub_server
-        assert InferenceClient(*served.unix()).keepalive() is None
+        assert InferenceClient(*served.unix()).keepalive().alive_seconds is None
 
     def test_it_takes_the_token_that_gates_the_session(self, authed_endpoint):
         endpoint, token = authed_endpoint

@@ -126,9 +126,12 @@ class ModelServer:
         value = headers.get(protocol.AUTH_HEADER.lower(), '')
         return hmac.compare_digest(value.encode(), protocol.bearer(self._auth_token).encode())
 
-    def _keepalive(self) -> int | None:
+    def _keepalive(self) -> wire.KeepaliveAnswer:
+        model = self._model
+        assert model is not None
         self._last_activity = time.monotonic()
-        return None if self._idle_seconds is None else math.floor(self._idle_seconds)
+        alive = None if self._idle_seconds is None else math.floor(self._idle_seconds)
+        return wire.KeepaliveAnswer(alive, tuple(model.parameters))
 
     async def _call(self, function: Callable[[], T]) -> T:
         """Keep an operation alive until it finishes, including while its caller is cancelled."""

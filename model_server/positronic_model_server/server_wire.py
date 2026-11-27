@@ -8,6 +8,8 @@ import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from positronic_wire import wire
+
 from . import keys
 
 
@@ -70,9 +72,8 @@ class ServerConnection(abc.ABC):
 # What a wire hands the server for each session it accepts.
 SessionHandler = Callable[[ServerConnection], Awaitable[None]]
 
-# What a wire calls for each keepalive call: it resets the idle timer, and returns the seconds the server
-# stays alive after the call, or ``None`` for a server with no idle timeout.
-KeepaliveHandler = Callable[[], int | None]
+# What a wire calls for each keepalive call: it resets the idle timer, and returns the answer the wire sends.
+KeepaliveHandler = Callable[[], wire.KeepaliveAnswer]
 
 # Whether the session headers carry a credential the server accepts. Header names are lower case.
 Authorized = Callable[[Mapping[str, str]], bool]

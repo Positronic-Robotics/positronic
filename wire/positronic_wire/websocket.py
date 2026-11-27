@@ -2,7 +2,6 @@
 
 import abc
 import errno
-import json
 import os
 import queue
 import socket
@@ -126,21 +125,21 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     _MAX_KEEPALIVE_BODY_BYTES = 16 * 1024
 
     @staticmethod
-    def _alive_seconds(body: bytes, where: str) -> int | None:
-        """The seconds the keepalive answer in ``body`` carries.
+    def _answer(body: bytes, where: str) -> wire.KeepaliveAnswer:
+        """The keepalive answer in ``body``.
 
         Raises ``wire.ConnectRefused`` with ``FINAL`` where ``body`` is not that answer: something other than a
         server answered 200.
         """
         try:
-            alive = json.loads(body)[wire.ALIVE_SECONDS]
-        except (ValueError, LookupError, TypeError, RecursionError) as e:
-            raise wire.ConnectRefused(wire.Refusal.FINAL, f'{where} answers 200 without the keepalive answer') from e
-        if alive is None or (isinstance(alive, int) and not isinstance(alive, bool)):
-            return alive
-        raise wire.ConnectRefused(wire.Refusal.FINAL, f'{where} answers 200 with {wire.ALIVE_SECONDS} {alive!r}')
+            return wire.KeepaliveAnswer.decode(body)
+        except ValueError as e:
+            refusal = f'{where} answers 200 without the keepalive answer: {e}'
+            raise wire.ConnectRefused(wire.Refusal.FINAL, refusal) from e
 
-    def keepalive(self, address: wire.AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+    def keepalive(
+        self, address: wire.AddressT, headers: Mapping[str, str] | None, timeout: float
+    ) -> wire.KeepaliveAnswer:
         """``POST`` to ``wire.KEEPALIVE_PATH`` on the HTTP API beside the session route.
 
         ``timeout`` bounds the whole call: the name lookup, every address and every read. ``http.client`` caps
@@ -161,7 +160,7 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         finally:
             connection.close()
         if status == HTTPStatus.OK:
-            return self._alive_seconds(body, where)
+            return self._answer(body, where)
         if status == HTTPStatus.NOT_FOUND:
             # A server without the call answers 404, and so does an address that serves something else.
             refusal = self.probe(address, headers, max(0.0, deadline - time.monotonic()))

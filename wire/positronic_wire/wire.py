@@ -8,6 +8,7 @@ spells whatever its library takes.
 
 import abc
 import dataclasses
+import json
 from collections.abc import Iterator, Mapping
 from enum import Enum
 from pathlib import Path
@@ -16,9 +17,42 @@ from typing import ClassVar, Generic, Self, TypeVar
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
 SESSION_PATH = f'{API_PATH}/session'
-# The keepalive route beside the session, and the key its JSON answer carries the seconds under.
+# The keepalive route beside the session, and the keys of its JSON answer (`KeepaliveAnswer`).
 KEEPALIVE_PATH = f'{API_PATH}/keepalive'
 ALIVE_SECONDS = 'alive_seconds'
+DECLARED_PARAMS = 'declared_params'
+
+
+@dataclasses.dataclass(frozen=True)
+class KeepaliveAnswer:
+    """The answer to a keepalive call.
+
+    ``alive_seconds`` is the seconds the server stays alive after the call, or ``None`` for a server with no idle
+    timeout. ``declared_params`` names the session parameters the server takes, or is ``None`` for a server that
+    does not list them.
+    """
+
+    alive_seconds: int | None
+    declared_params: tuple[str, ...] | None = None
+
+    def encode(self) -> bytes:
+        return json.dumps(dataclasses.asdict(self)).encode()
+
+    @classmethod
+    def decode(cls, body: bytes) -> Self:
+        """The answer in ``body``. Raises ``ValueError`` where ``body`` is not a keepalive answer."""
+        try:
+            answer = json.loads(body)
+            alive, declared = answer[ALIVE_SECONDS], answer.get(DECLARED_PARAMS)
+        except (ValueError, LookupError, TypeError, RecursionError) as e:
+            raise ValueError('not a keepalive answer') from e
+        if not (alive is None or (isinstance(alive, int) and not isinstance(alive, bool))):
+            raise ValueError(f'{ALIVE_SECONDS} {alive!r}')
+        if declared is None:
+            return cls(alive)
+        if not (isinstance(declared, list) and all(isinstance(name, str) for name in declared)):
+            raise ValueError(f'{DECLARED_PARAMS} {declared!r}')
+        return cls(alive, tuple(declared))
 
 
 def bracket_ipv6(host: str) -> str:
@@ -154,11 +188,10 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         """A client's end of one session on ``address``. Raises ``ConnectRefused`` when it does not open."""
 
     @abc.abstractmethod
-    def keepalive(self, address: AddressT, headers: Mapping[str, str] | None, timeout: float) -> int | None:
-        """Reset the idle timer of the server on ``address``, outside any session.
+    def keepalive(self, address: AddressT, headers: Mapping[str, str] | None, timeout: float) -> KeepaliveAnswer:
+        """Reset the idle timer of the server on ``address``, outside any session, and return its answer.
 
-        Returns the seconds the server stays alive after the call, or ``None`` for a server with no idle
-        timeout. ``timeout`` bounds the whole call. Raises ``KeepaliveUnsupported`` where the server serves
+        ``timeout`` bounds the whole call. Raises ``KeepaliveUnsupported`` where the server serves
         sessions but not the call, and ``ConnectRefused`` otherwise, in the terms ``probe`` uses.
         """
 

@@ -173,7 +173,9 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         token = self._wait_for_spare(endpoint, deadline, take=True)
         return self._dial_on(endpoint, address, token, deadline, partial(self._keep_as_spare, endpoint))
 
-    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+    def keepalive(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float
+    ) -> wire.KeepaliveAnswer:
         """The keepalive of ``inner`` on a Modal session's container.
 
         The session is the newest that a connection holds, or else the spare, which this starts where there is

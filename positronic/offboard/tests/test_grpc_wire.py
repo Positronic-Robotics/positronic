@@ -77,7 +77,8 @@ def test_both_wires_answer_keepalive_alike(start_server, make_mock_model):
         grpc=True,
         idle_timeout_min=2,
     )
-    assert InferenceClient(*served.grpc()).keepalive() == InferenceClient(*served.ws()).keepalive() == 120
+    assert InferenceClient(*served.grpc()).keepalive() == InferenceClient(*served.ws()).keepalive()
+    assert InferenceClient(*served.grpc()).keepalive() == wire.KeepaliveAnswer(120)
 
 
 def test_a_grpc_server_without_keepalive_says_so(both_wires, monkeypatch):
@@ -248,7 +249,9 @@ def test_the_grpc_keepalive_takes_the_token_that_gates_the_session(authed_server
     with pytest.raises(wire.ConnectRefused) as refused:
         InferenceClient(*authed_server.grpc()).keepalive()
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
-    assert InferenceClient(*authed_server.grpc(), headers={AUTH_HEADER: bearer(_TOKEN)}).keepalive() is None
+    assert (
+        InferenceClient(*authed_server.grpc(), headers={AUTH_HEADER: bearer(_TOKEN)}).keepalive().alive_seconds is None
+    )
 
 
 # An address, and no name that resolves to two families: gRPC reports the last address it failed on,

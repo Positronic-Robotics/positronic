@@ -365,7 +365,7 @@ def test_waiting_keeps_preparation_alive_and_keepalive_answers(start):
     assert (
         running.client_wire.keepalive(
             wire.HostPortAddress(address.host, address.port, wire.SESSION_PATH, ''), headers=None, timeout=5
-        )
+        ).alive_seconds
         == 60
     )
     probe.prepare_release.set()
@@ -376,6 +376,14 @@ def test_waiting_keeps_preparation_alive_and_keepalive_answers(start):
     peer = Peer(connection, message[protocol.SESSION_ID], message[protocol.META], message[protocol.MAX_IN_FLIGHT])
     assert peer.infer({})[protocol.RESULT]['count'] == 1
     peer.close()
+
+
+def test_the_keepalive_answer_names_the_session_parameters_the_model_declares(start):
+    running = start(idle_timeout_min=1)
+    address = running.transport.served_address
+    assert isinstance(address, server_wire.ServedHostPort)
+    endpoint = wire.HostPortAddress(address.host, address.port, wire.SESSION_PATH, '')
+    assert running.client_wire.keepalive(endpoint, headers=None, timeout=5) == wire.KeepaliveAnswer(60, ('scale',))
 
 
 def test_shutdown_waits_for_inference_before_session_and_model_cleanup(start):
@@ -613,7 +621,9 @@ def test_authentication_gates_sessions(start):
     with pytest.raises(wire.ConnectRefused):
         running.client_wire.keepalive(endpoint, headers=None, timeout=5)
     assert (
-        running.client_wire.keepalive(endpoint, headers={protocol.AUTH_HEADER: protocol.bearer('secret')}, timeout=5)
+        running.client_wire.keepalive(
+            endpoint, headers={protocol.AUTH_HEADER: protocol.bearer('secret')}, timeout=5
+        ).alive_seconds
         is None
     )
     peer = running.session(headers={protocol.AUTH_HEADER: protocol.bearer('secret')})

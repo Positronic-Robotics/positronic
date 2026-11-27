@@ -1,7 +1,6 @@
 """The server side of the gRPC wire: one bidirectional stream per session, which carries the ``protocol`` frames,
 and the unary keepalive call beside it."""
 
-import json
 import logging
 from collections.abc import AsyncIterator, Mapping
 from urllib.parse import parse_qsl
@@ -136,7 +135,7 @@ class GrpcWire(server_wire.Wire):
         async def answer_keepalive(_request: bytes, context: grpc.aio.ServicerContext) -> bytes:
             if not authorized(_headers(context)):
                 await context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Invalid or missing bearer token')
-            return json.dumps({wire.ALIVE_SECONDS: keepalive()}).encode()
+            return keepalive().encode()
 
         methods = {
             METHOD: grpc.stream_stream_rpc_method_handler(

@@ -104,13 +104,15 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
         self.connections.append(FakeConnection(token))
         return self.connections[-1]
 
-    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int:
+    def keepalive(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float
+    ) -> wire.KeepaliveAnswer:
         token = self._token(headers)
         self.called.append(token)
         assert headers is not None and headers[modal.IDLE_TIMEOUT_HEADER] == str(modal.IDLE_TIMEOUT)
         if token in self.ended:
             raise wire.ConnectRefused(wire.Refusal.FINAL, '404')
-        return 60
+        return wire.KeepaliveAnswer(60)
 
     def probe(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         token = self._token(headers)
@@ -416,8 +418,8 @@ def test_a_dial_refused_for_good_on_a_new_session_ends_it_and_surfaces(modal_wir
 
 
 def test_a_keepalive_starts_the_spare_and_the_next_dial_takes_it(modal_wire, edge, inner):
-    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == 60
-    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == 60
+    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == wire.KeepaliveAnswer(60)
+    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == wire.KeepaliveAnswer(60)
 
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
@@ -439,7 +441,7 @@ def test_a_keepalive_on_a_spare_that_has_ended_runs_again_on_a_new_one(modal_wir
     modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
     inner.ended.add('token-1')
 
-    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == 60
+    assert modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0) == wire.KeepaliveAnswer(60)
 
     assert inner.called == ['token-1', 'token-1', 'token-2']
 

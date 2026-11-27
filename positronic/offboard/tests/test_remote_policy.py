@@ -105,7 +105,7 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
-    def keepalive(self, address, headers, timeout) -> int | None:
+    def keepalive(self, address, headers, timeout) -> wire.KeepaliveAnswer:
         raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
@@ -850,7 +850,7 @@ class TestWaitForServer:
             self.keepalives += 1
             if (refusal := self._answers.pop(0)) is not None:
                 raise wire.ConnectRefused(refusal, 'refused')
-            return 60
+            return wire.KeepaliveAnswer(60)
 
     def test_a_wire_without_a_probe_is_kept_alive_until_the_server_answers(self):
         fake = self._KeptAliveWire(wire.Refusal.COLD, None)
@@ -2290,7 +2290,7 @@ class TestEveryWireSpendsTheCallersBudgetOnce:
         budget = 2.0
         address = keepalive_server(delay_s=0.0)
         with patch('positronic_wire.websocket.time.monotonic', side_effect=self._clock_after_a_connect_that_took(1.0)):
-            assert websocket.WebsocketClientWire().keepalive(address, None, budget) is None
+            assert websocket.WebsocketClientWire().keepalive(address, None, budget).alive_seconds is None
 
     def test_the_grpc_wire_gives_the_call_what_the_channel_left(self):
         budget, on_the_channel = 4.0, 1.0

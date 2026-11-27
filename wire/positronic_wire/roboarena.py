@@ -64,7 +64,9 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         """The root this wire dials; a roboarena session names no route under it."""
         return f'ws://{wire.bracket_ipv6(address.host)}:{address.port}'
 
-    def keepalive(self, address: RoboarenaAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+    def keepalive(
+        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, timeout: float
+    ) -> wire.KeepaliveAnswer:
         """Raises ``wire.KeepaliveUnsupported``: a partner's protocol carries no keepalive call."""
         raise wire.KeepaliveUnsupported(f"{self.NAME} carries a partner's frames alone and answers no keepalive")
 

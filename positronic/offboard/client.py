@@ -584,9 +584,8 @@ class InferenceClient:
         said = str(failure)
         return said if self.session_url in said else f'{said} (connecting to {self.session_url})'
 
-    def keepalive(self) -> int | None:
-        """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
-        the call, or ``None`` for a server with no idle timeout.
+    def keepalive(self) -> wire.KeepaliveAnswer:
+        """Reset the server's idle timer, outside any session, and return its answer.
 
         A server binds its wires only after its model has loaded and warmed, so any answer means it is ready.
         Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.

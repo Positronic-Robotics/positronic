@@ -64,7 +64,9 @@ The factory owns cleanup if loading raises.
 
 `Model.parameters` declares accepted session names and defaults. Query values are decoded as JSON,
 or retained as strings when they are not JSON. Duplicate or unknown names are refused; strings
-never name Python imports. Every session gets an independent copy of the resolved parameters.
+never name Python imports. The keepalive answer lists the declared names in `declared_params`, so a
+client can send a parameter only to a server that declares it. An older server does not list them.
+Every session gets an independent copy of the resolved parameters.
 `prepare_session` decides how they affect inference and the client description, validates their
 meaning and completes configuration-specific warm-up. It returns a `Session` only when the first
 real inference needs no deferred loading or compilation. Warm-up must preserve the intended initial

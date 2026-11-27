@@ -332,7 +332,7 @@ def dropping() -> Iterator[tuple[str, int]]:
 def test_a_keepalive_posts_to_its_route_with_the_callers_headers_and_reads_the_seconds():
     asked: list[bytes] = []
     host, port = _served(_answering(b'HTTP/1.1 200 OK', asked, _ALIVE))
-    assert _WEBSOCKET.keepalive(_at(host, port), dict([_HEADER]), 5.0) == 60
+    assert _WEBSOCKET.keepalive(_at(host, port), dict([_HEADER]), 5.0).alive_seconds == 60
     assert asked[0].startswith(f'POST {wire.KEEPALIVE_PATH} HTTP/1.1\r\n'.encode())
     assert b'Content-Length: 0\r\n' in asked[0]
     assert f'{_HEADER[0]}: {_HEADER[1]}\r\n'.encode() in asked[0]
@@ -344,18 +344,40 @@ def test_a_chunked_keepalive_answer_carries_the_seconds():
         chunked = b'%x\r\n%s\r\n0\r\n\r\n' % (len(_ALIVE), _ALIVE)
         conn.sendall(b'HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n' + chunked)
 
-    assert _WEBSOCKET.keepalive(_at(*_served(handler)), None, 5.0) == 60
+    assert _WEBSOCKET.keepalive(_at(*_served(handler)), None, 5.0).alive_seconds == 60
 
 
 def test_a_keepalive_answer_of_a_server_with_no_idle_timeout_carries_none():
     body = json.dumps({wire.ALIVE_SECONDS: None}).encode()
-    assert _WEBSOCKET.keepalive(_at(*_served(_answering(b'HTTP/1.1 200 OK', [], body))), None, 5.0) is None
+    assert (
+        _WEBSOCKET.keepalive(_at(*_served(_answering(b'HTTP/1.1 200 OK', [], body))), None, 5.0).alive_seconds is None
+    )
+
+
+def test_a_keepalive_answer_names_the_session_parameters_the_server_declares():
+    body = json.dumps({wire.ALIVE_SECONDS: 60, wire.DECLARED_PARAMS: ['fps', 'warm_up']}).encode()
+    answer = _WEBSOCKET.keepalive(_at(*_served(_answering(b'HTTP/1.1 200 OK', [], body))), None, 5.0)
+    assert answer == wire.KeepaliveAnswer(60, ('fps', 'warm_up'))
+
+
+def test_a_keepalive_answer_without_the_parameter_list_declares_none():
+    """A server that does not list its session parameters answers the seconds alone."""
+    answer = _WEBSOCKET.keepalive(_at(*_served(_answering(b'HTTP/1.1 200 OK', [], _ALIVE))), None, 5.0)
+    assert answer.declared_params is None
 
 
 @pytest.mark.parametrize(
     'body',
-    [b'not json', b'[1]', b'{"other": 1}', b'{"alive_seconds": "soon"}', b'{"alive_seconds": true}'],
-    ids=['not-json', 'a-list', 'no-key', 'a-string', 'a-bool'],
+    [
+        b'not json',
+        b'[1]',
+        b'{"other": 1}',
+        b'{"alive_seconds": "soon"}',
+        b'{"alive_seconds": true}',
+        b'{"alive_seconds": 60, "declared_params": "fps"}',
+        b'{"alive_seconds": 60, "declared_params": [1]}',
+    ],
+    ids=['not-json', 'a-list', 'no-key', 'a-string', 'a-bool', 'params-a-string', 'params-not-names'],
 )
 def test_a_200_that_does_not_carry_the_keepalive_answer_is_final(body):
     """Something other than a policy server answered, so the call does not read it as the server."""
@@ -435,13 +457,13 @@ def test_the_keepalive_host_header_names_an_ipv6_literal_in_brackets():
         if refused.errno not in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT):
             raise
         pytest.skip('this host has no IPv6 loopback')
-    assert _WEBSOCKET.keepalive(_at(host, port), None, 5.0) == 60
+    assert _WEBSOCKET.keepalive(_at(host, port), None, 5.0).alive_seconds == 60
     assert f'Host: [::1]:{port}\r\n'.encode() in asked[0]
 
 
 def test_a_host_name_resolves_inside_the_call():
     host, port = _served(_answering(b'HTTP/1.1 200 OK', [], _ALIVE))
-    assert _WEBSOCKET.keepalive(_at('localhost' if host == '127.0.0.1' else host, port), None, 5.0) == 60
+    assert _WEBSOCKET.keepalive(_at('localhost' if host == '127.0.0.1' else host, port), None, 5.0).alive_seconds == 60
 
 
 # ─── no answer ───────────────────────────────────────────────────────────────

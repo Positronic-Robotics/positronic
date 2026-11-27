@@ -148,12 +148,12 @@ class PolicyServer:
             return None
         return self.idle_timeout_min * 60
 
-    def _keepalive(self) -> int | None:
-        """Reset the idle timer, as a session does. Returns the whole seconds the server stays alive after the
-        call, or ``None`` where idling never stops it."""
+    def _keepalive(self) -> wire.KeepaliveAnswer:
+        """Reset the idle timer, as a session does. The answer carries the whole seconds the server stays alive
+        after the call, or ``None`` where idling never stops it."""
         self._last_activity = time.monotonic()
         timeout_s = self._idle_timeout_s()
-        return None if timeout_s is None else math.floor(timeout_s)
+        return wire.KeepaliveAnswer(None if timeout_s is None else math.floor(timeout_s))
 
     def _session_pipeline(self, params: dict[str, Any]) -> PolicyDeployment:
         """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""

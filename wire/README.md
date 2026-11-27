@@ -38,7 +38,7 @@ client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS` and `DECLARED_PARAMS`, the keys the keepalive answer carries, `KeepaliveAnswer`, the answer itself, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address, `tls_socket(host, port, timeout)`, the same connect with a verified TLS handshake, `https_connection(address, default_port, deadline)`, an HTTPS connection that opens on `tls_socket`, and `post_within(connection, path, headers, deadline, max_body_bytes)`, a `POST` whose deadline covers every read |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
@@ -79,8 +79,10 @@ leaves out on the members that carry one.
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
   frame the server announces itself with.
 - `keepalive(address, headers, timeout)` — resets the server's idle timer outside a session, and
-  returns the seconds the server stays alive after the call, or `None` for a server with no idle
-  timeout. `timeout` bounds the whole call. The websocket members send `POST` to `KEEPALIVE_PATH`, and
+  returns a `KeepaliveAnswer`. `alive_seconds` is the seconds the server stays alive after the call, or
+  `None` for a server with no idle timeout. `declared_params` names the session parameters the server
+  takes, or is `None` for a server that does not list them. `timeout` bounds the whole call. The
+  websocket members send `POST` to `KEEPALIVE_PATH`, and
   the gRPC members call `KEEPALIVE_METHOD_PATH`. `keepalive` raises
   `KeepaliveUnsupported` where the server serves sessions but not the call, and `ConnectRefused`
   otherwise, in the terms `probe` uses: a 200 that does not carry the keepalive answer is `FINAL`.

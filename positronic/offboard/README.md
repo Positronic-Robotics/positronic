@@ -87,11 +87,16 @@ curl -X POST http://localhost:8000/api/v1/keepalive
 **Response:**
 
 ```json
-{ "alive_seconds": 1800 }
+{ "alive_seconds": 1800, "declared_params": ["fps"] }
 ```
 
 `alive_seconds` is the number of seconds the server stays alive after the call, if nothing else calls
 it. It is `null` for a server with no idle timeout.
+
+`declared_params` names the session parameters that the server takes. A `positronic_model_server` server
+lists the names that its model declares (`Model.parameters`). The field is `null`, or not in the answer, where
+the server does not list them: `server.PolicyServer` and a server before this field. A client that sends an
+optional session parameter sends it only to a server that lists it.
 
 The server builds its model before it binds a wire, and the build warms the model (see
 [`server.PolicyServer`](#serverpolicyserver)). So any answer means the policy is ready and warm. A server
@@ -529,7 +534,7 @@ meta = session.metadata
 action = session.infer(observation)
 ```
 
-`keepalive()` resets the server's idle timer and returns `alive_seconds`. It raises
+`keepalive()` resets the server's idle timer and returns the answer, a `wire.KeepaliveAnswer`. It raises
 `wire.KeepaliveUnsupported` on a server without the call.
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays cold.

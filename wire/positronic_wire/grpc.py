@@ -3,7 +3,6 @@
 The stream is untyped bytes on both sides. There is no protobuf schema and no generated code.
 """
 
-import json
 import queue
 import threading
 import time
@@ -272,7 +271,9 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
 
-    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+    def keepalive(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float
+    ) -> wire.KeepaliveAnswer:
         """Call ``KEEPALIVE_METHOD_PATH`` on its own channel. ``timeout`` bounds the whole call: the channel takes what
         it needs, and the call takes the rest."""
         dialled = target(address.host, address.port)
@@ -287,7 +288,7 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
             raise wire.ConnectRefused(_refusal(e), f'{e} (calling {KEEPALIVE_METHOD} on {dialled})') from e
         finally:
             channel.close()
-        return json.loads(answer)[wire.ALIVE_SECONDS]
+        return wire.KeepaliveAnswer.decode(answer)
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float

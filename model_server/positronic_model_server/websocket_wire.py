@@ -280,8 +280,8 @@ class WebsocketWire(server_wire.Wire):
         else:
             headers = [(b'content-type', b'application/json')]
             status = HTTPStatus.OK if authorized else HTTPStatus.UNAUTHORIZED
-            payload = {wire.ALIVE_SECONDS: keepalive()} if authorized else {'detail': 'Invalid or missing bearer token'}
-            body = json.dumps(payload).encode()
+            refusal = {'detail': 'Invalid or missing bearer token'}
+            body = keepalive().encode() if authorized else json.dumps(refusal).encode()
         headers.append((b'content-length', str(len(body)).encode()))
         await send({'type': 'http.response.start', 'status': status, 'headers': headers})
         await send({'type': 'http.response.body', 'body': body})
