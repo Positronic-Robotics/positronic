@@ -77,6 +77,7 @@ ATTR_STEP_EMIT_MS = 'step.emit_ms'
 ATTR_STEP_GC_WAIT_MS = 'step.gc_wait_ms'
 ATTR_STEP_GC_MS = 'step.gc_ms'
 ATTR_STEP_GC_GENERATION = 'step.gc_generation'
+ATTR_STEP_RECORD_WAIT_MS = 'step.record_wait_ms'
 # The signal's name follows each prefix.
 ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
 ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
