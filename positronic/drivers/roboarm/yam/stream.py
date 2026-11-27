@@ -80,6 +80,7 @@ class Hull:
         return cls(vertices, edges, hull.equations, center, float(np.linalg.norm(vertices - center, axis=1).max()))
 
 
+# rules-allow: primitive-type — a `Transform3D` product costs about 73 µs per call, and this runs on each 10 ms tick
 def height_above(frame: np.ndarray, hulls: Sequence[Hull], boxes: Sequence[Box]) -> float:
     """How far the lowest point of ``hulls``, placed by the 4 x 4 ``frame``, that is over a box is above the top of
     that box; infinite over none."""
