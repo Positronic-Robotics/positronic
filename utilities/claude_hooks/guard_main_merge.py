@@ -28,6 +28,7 @@ without the project venv.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -37,6 +38,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import hook_payload
 import pin_move
@@ -502,24 +504,24 @@ def consume_merge_allow(
 STACK_LOOKUP_BUDGET_S = 25
 
 
-class StackLookupError(RuntimeError):
-    """What a merge takes is unknown: the GitHub stack of its pull request cannot be read."""
+class GitHubReadError(RuntimeError):
+    """A GitHub read that a merge verdict needs got no answer: the stack or the diff of the pull request is unknown."""
 
 
 def _gh_json(path: str, deadline: float):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise StackLookupError(f'`gh api {path}` did not run: the stack lookup ran out of time')
+        raise GitHubReadError(f'`gh api {path}` did not run: the GitHub reads ran out of time')
     try:
         done = subprocess.run(['gh', 'api', path], capture_output=True, text=True, timeout=remaining)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise StackLookupError(f'`gh api {path}` did not run: {e}') from None
+        raise GitHubReadError(f'`gh api {path}` did not run: {e}') from None
     if done.returncode != 0:
-        raise StackLookupError(f'`gh api {path}` failed: {done.stderr.strip()[:300]}')
+        raise GitHubReadError(f'`gh api {path}` failed: {done.stderr.strip()[:300]}')
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError as e:
-        raise StackLookupError(f'`gh api {path}` returned no JSON: {e}') from None
+        raise GitHubReadError(f'`gh api {path}` returned no JSON: {e}') from None
 
 
 def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[int]:
@@ -538,13 +540,13 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
         number_on_base = {gh_json(f'repos/{guarded_slug}/pulls/{n}', deadline)['base']['ref']: n for n in head_of}
         ref = stack['base']['ref']
     except (KeyError, TypeError, IndexError) as e:
-        raise StackLookupError(f'the stack of #{number} has an unexpected shape: {e!r}') from None
+        raise GitHubReadError(f'the stack of #{number} has an unexpected shape: {e!r}') from None
     chain = []
     while ref in number_on_base and len(chain) < len(head_of):
         chain.append(number_on_base[ref])
         ref = head_of[chain[-1]]
     if number not in chain:
-        raise StackLookupError(f'the open pull requests of the stack of #{number} do not form one chain from its base')
+        raise GitHubReadError(f'the open pull requests of the stack of #{number} do not form one chain from its base')
     return chain[: chain.index(number)]
 
 
@@ -559,7 +561,7 @@ def only_moves_pins(number: int, guarded_slug: str, head: str, gh_json=_gh_json)
     A merge of such a pull request adds no code that a human did not review on that branch, so it
     needs no receipt. The diff is read at `head`, and the merge must name the same commit, so a later
     push cannot ride on the verdict. A repository that allows auto-merge gets no verdict: an
-    auto-merge can land a later push. Raises `StackLookupError` when GitHub does not answer a read,
+    auto-merge can land a later push. Raises `GitHubReadError` when GitHub does not answer a read,
     an unknown revision included.
     """
     if not re.fullmatch(r'[0-9a-f]{40}', head):
@@ -578,9 +580,19 @@ def only_moves_pins(number: int, guarded_slug: str, head: str, gh_json=_gh_json)
             return False
         files = gh_json(f'repos/{guarded_slug}/compare/{pull["base"]["sha"]}...{head}', deadline).get('files')
     except (KeyError, TypeError, AttributeError) as e:
-        raise StackLookupError(f'GitHub answered #{number} in an unexpected shape: {e!r}') from None
+        raise GitHubReadError(f'GitHub answered #{number} in an unexpected shape: {e!r}') from None
+
+    def read_file(path: str) -> str:
+        found = gh_json(f'repos/{guarded_slug}/contents/{quote(path)}?ref={head}', deadline)
+        try:
+            return base64.b64decode(found['content']).decode()
+        except (KeyError, TypeError, ValueError) as e:
+            raise GitHubReadError(f'GitHub answered `{path}` at {head} in an unexpected shape: {e!r}') from None
+
     # The compare read lists at most 300 files. A pull request with that many is not a pin move.
-    return isinstance(files, list) and len(files) < 300 and pin_move.is_pin_move(files, on_guarded_branch)
+    if not isinstance(files, list) or len(files) >= 300:
+        return False
+    return pin_move.is_pin_move(files, on_guarded_branch, read_file)
 
 
 # Each lookup of a repository's name. A merge makes two, which together stay inside the hook timeout.
@@ -598,7 +610,7 @@ def canonical_repository(slug: str, gh_json=_gh_json) -> str:
     """
     try:
         name = gh_json(f'repos/{slug}', time.monotonic() + REPOSITORY_LOOKUP_BUDGET_S)['full_name']
-    except StackLookupError as e:
+    except GitHubReadError as e:
         raise RepositoryLookupError(f'GitHub did not name `{slug}`: {e}') from None
     except (KeyError, TypeError):
         raise RepositoryLookupError(f'GitHub named `{slug}` in an unexpected shape') from None
@@ -1240,11 +1252,11 @@ def _authorize_merge(
         try:
             if not head or not pins_only(number, guarded_slug, head):
                 return refused
-        except StackLookupError as e:
+        except GitHubReadError as e:
             return PIN_LOOKUP_MSG.format(number=number, reason=e)
     try:
         below = stack_below(number, guarded_slug)
-    except StackLookupError as e:
+    except GitHubReadError as e:
         return STACK_LOOKUP_MSG.format(number=number, reason=e)
     missing = [n for n in below if not authorized(n, guarded_slug)]
     if missing:

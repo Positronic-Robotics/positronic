@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -432,7 +433,7 @@ def test_canonical_repository_follows_github_s_name_and_raises_on_a_failed_looku
     assert gmm.canonical_repository('old/name', gh_json=lambda *_: {'full_name': 'New/Name'}) == 'new/name'
 
     def failing(*_):
-        raise gmm.StackLookupError('404')
+        raise gmm.GitHubReadError('404')
 
     with pytest.raises(gmm.RepositoryLookupError, match='404'):
         gmm.canonical_repository('old/name', gh_json=failing)
@@ -627,7 +628,7 @@ def test_a_merge_whose_stack_cannot_be_read_is_refused_and_spends_nothing(git):
     spent = []
 
     def unreadable(number, slug):
-        raise gmm.StackLookupError('`gh api` failed')
+        raise gmm.GitHubReadError('`gh api` failed')
 
     denial = verdict(
         git, 'gh pr merge 103', allow_merge=lambda n, slug: spent.append(n) or True, stack_below=unreadable
@@ -710,11 +711,20 @@ BASE = 'd' * 40
 REVISION_PATCH = "@@ -1 +1 @@\n-REVISION = '{}'\n+REVISION = '{}'".format('a' * 40, 'b' * 40)
 
 
-def pin_move_github(patch, compare_status='ahead', head=HEAD, allow_auto_merge=False):
-    """A `gh api` stand-in serving one repository, one pull request at `head`, and its compare reads."""
+def pin_move_github(patch, compare_status='ahead', head=HEAD, allow_auto_merge=False, project_files=None):
+    """A `gh api` stand-in serving one repository, one pull request at `head`, its compare and file reads.
+
+    `project_files` maps a changed project file to its (patch, text at the head commit).
+    """
+    project_files = project_files or {}
     files = [
-        {pin_move.FILE_NAME: 'evals/evals.py', pin_move.FILE_STATUS: pin_move.MODIFIED, pin_move.FILE_PATCH: patch}
+        {pin_move.FILE_NAME: name, pin_move.FILE_STATUS: pin_move.MODIFIED, pin_move.FILE_PATCH: file_patch}
+        for name, file_patch in [('evals/evals.py', patch), *((n, fp) for n, (fp, _) in project_files.items())]
     ]
+    contents = {
+        f'repos/{GUARDED}/contents/{name}?ref={HEAD}': {'content': base64.b64encode(text.encode()).decode()}
+        for name, (_, text) in project_files.items()
+    }
 
     def gh_json(path, deadline):
         path = path.replace(GUARDED.casefold(), GUARDED)  # the guard reads the repository by its casefolded name
@@ -724,9 +734,11 @@ def pin_move_github(patch, compare_status='ahead', head=HEAD, allow_auto_merge=F
             return {'head': {'sha': head}, 'base': {'sha': BASE}}
         if path == f'repos/{GUARDED}/compare/{BASE}...{HEAD}':
             return {'files': files}
+        if path in contents:
+            return contents[path]
         if path.endswith(f'...{gmm.GUARDED_BRANCH}'):
             if compare_status is None:
-                raise gmm.StackLookupError('`gh api` failed: Not Found')
+                raise gmm.GitHubReadError('`gh api` failed: Not Found')
             return {'status': compare_status}
         raise AssertionError(path)
 
@@ -737,6 +749,16 @@ def test_only_moves_pins_reads_the_diff_at_the_head_and_asks_whether_the_revisio
     assert gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=pin_move_github(REVISION_PATCH))
     off_main = pin_move_github(REVISION_PATCH, compare_status='diverged')
     assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=off_main)
+
+
+def test_only_moves_pins_reads_the_table_of_a_project_line_from_the_file_at_the_named_head():
+    bump = '@@ -3 +3 @@\n-version = "0.2.1"\n+version = "0.2.2"'
+    in_project = '[project]\nname = "evals"\nversion = "0.2.2"'
+    in_tool = '[tool.release]\nname = "evals"\nversion = "0.2.2"\n[project]\nname = "evals"'
+    project_bump = pin_move_github(REVISION_PATCH, project_files={'evals/pyproject.toml': (bump, in_project)})
+    assert gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=project_bump)
+    tool_bump = pin_move_github(REVISION_PATCH, project_files={'evals/pyproject.toml': (bump, in_tool)})
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=tool_bump)
 
 
 def test_only_moves_pins_is_false_when_the_pull_request_has_moved_past_the_named_head():
@@ -762,7 +784,7 @@ def test_a_pin_lookup_answered_in_an_unexpected_shape_refuses():
     def no_head(path, deadline):
         return {'allow_auto_merge': False} if path == f'repos/{GUARDED}' else {}
 
-    with pytest.raises(gmm.StackLookupError):
+    with pytest.raises(gmm.GitHubReadError):
         gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=no_head)
 
 
@@ -804,13 +826,13 @@ def test_a_merged_layer_is_not_taken_again():
 
 
 def test_a_stack_whose_open_layers_form_no_chain_is_unreadable():
-    with pytest.raises(gmm.StackLookupError):
+    with pytest.raises(gmm.GitHubReadError):
         gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, {101: 'main', 102: 'x', 103: 'b'}))
 
 
 def test_a_stack_lookup_out_of_time_is_unreadable_without_running_gh(monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('gh ran past the deadline'))
-    with pytest.raises(gmm.StackLookupError):
+    with pytest.raises(gmm.GitHubReadError):
         gmm._gh_json('repos/o/r/pulls/1', deadline=0)
 
 
