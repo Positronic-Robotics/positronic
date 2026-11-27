@@ -44,8 +44,6 @@ EOF
   exit 1
 fi
 
-require_cache_fs
-
 CONVERT_CONFIG=()
 case "$VENDOR" in
   lerobot_0_3_3) CODEC=positronic.vendors.lerobot_0_3_3.codecs.ee ;;
@@ -63,6 +61,8 @@ esac
 if [ "$VENDOR" != "gr00t" ]; then
   CONVERT_CONFIG=("--dataset.dataset=${DATASET}" "--dataset.codec=@${CODEC}")
 fi
+
+require_cache_fs
 
 mkdir -p "$LOG_ROOT"
 DATASET_DIR="$S3_BASE/$VENDOR/dataset/"
