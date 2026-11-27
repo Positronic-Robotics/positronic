@@ -287,19 +287,6 @@ class ViewText:
     footer: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class _ViewSnapshot:
-    """What the headset view shows, read in one hold of the lock."""
-
-    state: TrialState
-    shown: str | None
-    answered: bool
-    # Each arm, by the arm name of its channels, and whether its control is on
-    controls: tuple[tuple[str | None, bool], ...]
-    names: tuple[str, ...]
-    images: Mapping[str, np.ndarray]
-
-
 class TeleopService:
     """Serve one teleop session at a time at ``served_address``, as a model server.
 
@@ -659,6 +646,18 @@ class TeleopService:
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
+    @dataclass(frozen=True)
+    class _ViewSnapshot:
+        """What the headset view shows, read in one hold of the lock."""
+
+        state: TrialState
+        shown: str | None
+        answered: bool
+        # Each arm, by the arm name of its channels, and whether its control is on
+        controls: tuple[tuple[str | None, bool], ...]
+        names: tuple[str, ...]
+        images: Mapping[str, np.ndarray]
+
     def view_text(self, task: bool = True) -> ViewText:
         """The text of the headset view in the state of the trial. A running trial shows its task only with ``task``."""
         with self._changed:  # It copies the state that the view shows, with one image reference for each camera.
@@ -684,7 +683,7 @@ class TeleopService:
         # The task and the state of the arms come with the first frame request.
         answered = self._frames > 0
         state, shown, names = self.state(), self._shown_camera(), self.cameras().names
-        return _ViewSnapshot(state, shown, answered, controls, names, dict(self._images))
+        return self._ViewSnapshot(state, shown, answered, controls, names, dict(self._images))
 
     def _text_of(self, snapshot: _ViewSnapshot, task: bool) -> ViewText:
         footer = (CAMERA_HINT,)
