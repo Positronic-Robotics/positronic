@@ -548,7 +548,8 @@ The example image serves the cameras of `droid_molmo`, so the image needs no oth
 Your team has a daily limit of submissions. The [rules](https://competition.phail.ai/rules) state the
 current limit. The count starts again at 00:00 UTC each day.
 
-`users.me` tells how many submissions your team used today, and how many are left. Read it from Python:
+`users.me` tells how many submissions your team used today, and how many are left. Save this as
+`quota.py`:
 
 ```python
 import os
@@ -561,6 +562,12 @@ record = record_if_needed(os.environ, None)  # the key that `positronic account 
 client = PlatformClient(platform_url_from(os.environ, None, record), api_key=api_key_from(os.environ, record))
 day = client.me().quota_for(QUOTA_SUBMISSIONS_DAY)
 print(f'{day.used} of {day.limit} used, {day.remaining} left, until {day.resets_at}')
+```
+
+Run it with the Python of the installed commands:
+
+```bash
+"$(uv tool dir)/positronic/bin/python" quota.py
 ```
 
 `users.me` carries this rule only for an account that has entered. For another account, `quota_for`
