@@ -34,9 +34,6 @@ from .service import Button, Phase
 logger = logging.getLogger(__name__)
 
 _STATE_POLL_SEC = 0.05
-# A press that the page does not show within this time is released and pressed again. It is above the 0.5 s default
-# stale limit of the WebXR driver, so a press that the service counts shows on the page before the next press.
-_PRESS_AGAIN_AFTER_SEC = 1.0
 
 
 def _buttons(*down: Button) -> tuple[float, ...]:
@@ -179,6 +176,11 @@ def _press_until(
         # The page polls while the button is up, so a late effect of the press still ends the wait.
         if (state := page.until(seen, within=hand.hold_sec)) is not None:
             return state
+
+
+# A press that the page does not show within this time is released and pressed again. It is above the 0.5 s default
+# stale limit of the WebXR driver, so a press that the service counts shows on the page before the next press.
+_PRESS_AGAIN_AFTER_SEC = 1.0
 
 
 def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
