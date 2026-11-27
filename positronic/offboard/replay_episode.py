@@ -14,8 +14,8 @@ Usage
 """
 
 import time
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -137,6 +137,22 @@ class _Recording:
         return step
 
 
+@contextmanager
+def _started(runtime: Executor, policy: Policy) -> Iterator[PolicyRun]:
+    """Start ``policy`` on ``runtime``. On exit, drain the runtime and then close the run, as the harness does.
+
+    The runtime closes also when the policy fails to start, so a call that the policy submitted ends.
+    """
+    run = None
+    try:
+        run = runtime.start(policy)
+        yield run
+    finally:
+        runtime.close()
+        if run is not None:
+            run.close()
+
+
 def _wait_for_answers(runtime: Executor) -> int:
     """Wait until the clock may advance, and return how many calls answered."""
     while (result := runtime.wait(WAIT_SEC)).status is WaitStatus.TIMED_OUT:
@@ -169,10 +185,8 @@ def play(
     out(f'Episode of {(last_ns - first_ns) / 1e9:.1f} s on {timeline}: {recording.instruction(now[0])!r}')
 
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
-    run = runtime.start(policy)
     answered = 0
-    # The runtime drains its calls before the run closes, as on a rig.
-    with closing(run), closing(runtime):
+    with _started(runtime, policy) as run:
         rig = _Rig.of(ep, timeline, observed, policy_frames(policy, runtime))
         out(f'Observations sent: {rig.sent}')
         while now[0] <= stop_ns:

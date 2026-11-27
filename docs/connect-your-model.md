@@ -473,8 +473,9 @@ A server on Modal works in two forms:
   `<token-id>.<token-secret>`, which Modal takes as a bearer token
   ([Proxy auth](https://modal.com/docs/guide/webhook-proxy-auth)).
 - **A Modal Server with sticky sessions** (`modal_websocket_tls`, a `*.modal.direct` URL) works from a plan only when
-  it lets a session start with no authentication (`@app.server(unauthenticated=True)`). A plan refuses a token on
-  that wire ([Eval plans](../client/README.md#eval-plans)).
+  it lets a session start with no authentication (`@app.server(unauthenticated=True)`,
+  [Servers](https://modal.com/docs/guide/servers)). A plan refuses a token on that wire
+  ([Eval plans](../client/README.md#eval-plans)).
 
 Check the endpoint from a machine outside your network:
 

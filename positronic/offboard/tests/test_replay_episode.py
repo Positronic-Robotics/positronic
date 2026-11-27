@@ -161,3 +161,34 @@ def test_a_call_open_when_the_play_stops_ends_before_the_run_closes():
     play(_episode(), policy, calls=0, out=lambda _: None)
 
     assert policy.open_in_calls == [True]
+
+
+class _FailsToStart(Policy):
+    """A policy that submits a call as it starts, and then raises before its first observation."""
+
+    def __init__(self):
+        self.call_ended = threading.Event()
+        self._call_started = threading.Event()
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        runtime.submit(self._call)
+        assert self._call_started.wait(5)
+        raise RuntimeError('the policy fails to start')
+        yield
+
+    def _call(self) -> None:
+        self._call_started.set()
+        time.sleep(0.1)
+        self.call_ended.set()
+
+
+def test_a_call_of_a_policy_that_fails_to_start_ends_before_the_play_raises():
+    policy = _FailsToStart()
+
+    with pytest.raises(RuntimeError, match='fails to start'):
+        play(_episode(), policy, out=lambda _: None)
+
+    assert policy.call_ended.is_set()
