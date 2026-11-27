@@ -314,9 +314,10 @@ hi@phail.ai.
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
 episodes, `report`, a page that shows their results, and `outcome`, the kept, judged and successful
-episodes per endpoint. `replay` and `report` are absent until the platform has built each page. The
-rig writes the episodes to the org's own bucket, and `artifacts.result` names the prefix they landed
-under. Read it with the org's own credential for that bucket: `submissions.artifacts` refuses a rig plan.
+episodes per endpoint. `replay` and `report` are absent until the platform has built each page.
+`artifacts.result` names the prefix of the episodes. To download them, call `submissions.artifacts`
+as the account that filed the plan: it gives a signed URL for each file. An episode is every file
+under its prefix. An organization with a customer grant also finds the episodes in its client's bucket.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
@@ -639,8 +640,8 @@ the episodes, read `result.json`. Its `episode_locations` lists their addresses.
 to list the records of one eval of a submission of several; without it, the page lists the first. The route
 refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
-`scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
-org's own bucket (§Eval plans).
+`scores` reads its records off `submissions.get`. It also lists a finished rig plan, for the account
+that filed it (§Eval plans).
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package
