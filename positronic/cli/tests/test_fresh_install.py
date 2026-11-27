@@ -184,6 +184,10 @@ def platform_url() -> Iterator[str]:
         server.server_close()
 
 
+# A cold `uv run` creates the environment and installs every dependency, which can take minutes.
+UV_RUN_TIMEOUT_S = 1800
+
+
 def run_from_a_clean_environment(
     command: list[str], *, platform_url: str, config_dir: Path
 ) -> subprocess.CompletedProcess:
@@ -199,7 +203,7 @@ def run_from_a_clean_environment(
         API_KEY_ENV: 'pk_live_fake',
         CREDENTIAL_ENV: 'token',
     }
-    return subprocess.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=1800)
+    return subprocess.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=UV_RUN_TIMEOUT_S)
 
 
 DOCUMENTED_COMMANDS = {
@@ -266,6 +270,8 @@ DOCUMENTED_COMMANDS = {
 }
 
 
+# Longer than the subprocess timeout, so a slow install fails on that timeout and keeps its output.
+@pytest.mark.timeout(UV_RUN_TIMEOUT_S + 60)
 @pytest.mark.parametrize('command', DOCUMENTED_COMMANDS.values(), ids=DOCUMENTED_COMMANDS.keys())
 def test_a_documented_command_runs_with_nothing_installed(
     command: list[str], platform_url: str, uv: str, tmp_path: Path
