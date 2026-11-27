@@ -602,6 +602,7 @@ def test_the_view_logs_the_end_of_a_dropped_trial_after_the_lock(
 ):
     monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
     connection = _readied_connection(service, socket_path, connect)
+    connection.frame(FRAME_REQUEST)
     connection.close()
     time.sleep(TeleopService.RESUME_LIMIT_SEC + 0.05)
     service.view()
@@ -2550,6 +2551,17 @@ def test_the_heads_up_goes_after_its_time_limit(socket_path, connect):
     with TeleopService(ServedUnixSocket(socket_path), 2.0, 0.1, HOLD_SEC, heads_up_limit=0.2) as service:
         _warm_up(service, socket_path, connect)
         _until_cleared(service)
+
+
+def test_the_heads_up_logs_its_start_and_its_expiry_after_the_lock(service, socket_path, connect, lock_probe):
+    service.heads_up_limit = 0.2
+    _warm_up(service, socket_path, connect)
+    _until_cleared(service)
+    changes = [(message, free) for message, free in lock_probe.lines if 'heads_up' in message]
+    assert changes == [
+        ('Teleop trial: idle -> heads_up (a warm-up session starts)', True),
+        ('Teleop trial: heads_up -> idle (the heads-up expired)', True),
+    ]
 
 
 def test_a_warm_up_session_does_not_resume_a_dropped_trial(service, socket_path, connect):
