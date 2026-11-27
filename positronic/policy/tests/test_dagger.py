@@ -8,6 +8,7 @@ from eval_vocabulary.timeline import recording_timeline
 from pimm import Time
 from positronic import keys
 from positronic.dataset import transforms
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.eval import keys as eval_keys
@@ -108,7 +109,7 @@ def test_a_record_that_the_teleoperator_drives_from_the_start_is_one_episode_of_
     assert episode[TASK] == 'lift the cube'
     assert CONTROL_SOURCE not in episode
     assert not set(GROUND_TRUTH) & set(episode)
-    assert episode.meta['uid'] == record.meta['uid']
+    assert episode.meta[META_UID] == record.meta[META_UID]
     assert run.steps_without_shadow == {}
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from positronic.dagger import META_RECORD_UID, META_ROUND, write_training_data
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import DiskEpisodeWriter, LocalDataset
 from positronic.policy.dagger import DaggerDataset
 from positronic.policy.tests.test_dagger import (
@@ -38,7 +39,7 @@ def test_the_training_data_of_round_2_holds_the_teleoperator_steps_of_each_round
         [_policy(), _teleoperator(), _teleoperator(shadow=()), _policy()],
         [_policy(), _policy(), _teleoperator()],
     ]
-    uids = [_record(tmp_path / f'round{index}', steps).meta['uid'] for index, steps in enumerate(rounds)]
+    uids = [_record(tmp_path / f'round{index}', steps).meta[META_UID] for index, steps in enumerate(rounds)]
     data = _rounds(tmp_path, 3)
 
     write_training_data(data, tmp_path / 'training')

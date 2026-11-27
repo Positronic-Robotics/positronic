@@ -11,7 +11,7 @@ from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN, LEGACY_TIME_COLUM
 
 from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
+from positronic.dataset.episode import META_CREATED_TS_NS, META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.tests.test_video import FakeEncoder, assert_frames_equal, create_frame
 from positronic.dataset.tests.utils import hold_parquet_writes
@@ -733,7 +733,7 @@ class TestLazyMetaProperties:
         ep_dir = tmp_path / 'ep_created'
         original_ts = 1234567890123456789
 
-        with DiskEpisodeWriter(ep_dir, meta={'created_ts_ns': original_ts}) as w:
+        with DiskEpisodeWriter(ep_dir, meta={META_CREATED_TS_NS: original_ts}) as w:
             w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
 
         ep = DiskEpisode(ep_dir)

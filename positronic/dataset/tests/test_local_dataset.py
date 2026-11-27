@@ -10,7 +10,7 @@ import pos3
 import pytest
 
 from positronic.dataset import Episode, edits
-from positronic.dataset.episode import META_UID
+from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import (
     UNFINISHED_MARKER,
     DiskEpisode,
@@ -578,11 +578,11 @@ def test_new_episode_carries_the_meta_items_of_the_caller(tmp_path):
         pass
     meta = LocalDataset(tmp_path / 'ds')[0].meta
     assert (meta['round'], meta['record']) == (2, 'record-uid')
-    assert meta['uid'] != 'record-uid'
+    assert meta[META_UID] != 'record-uid'
 
 
 @pytest.mark.parametrize(
-    'meta', [{'writer': {}}, {'path': 'other'}, {'size_mb': 1.0}, {'round': b'x'}, {'round': object()}]
+    'meta', [{'writer': {}}, {META_PATH: 'other'}, {'size_mb': 1.0}, {'round': b'x'}, {'round': object()}]
 )
 def test_new_episode_refuses_a_meta_item_of_the_writer_or_the_reader_or_one_that_is_not_json(tmp_path, meta):
     with LocalDatasetWriter(tmp_path / 'ds') as w, pytest.raises(ValueError):

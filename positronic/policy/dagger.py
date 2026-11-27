@@ -21,7 +21,7 @@ samples that the training episode used up to that step. Each other timeline keep
 
 import logging
 from collections import Counter
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import groupby
@@ -71,14 +71,6 @@ def _step_times(used: Collection[tuple[Signal, np.ndarray]], steps: np.ndarray) 
         Time(**{HARNESS_STEP: int(step), HARNESS_WORLD: int(ns)})
         for step, ns in zip(steps, np.maximum.accumulate(latest), strict=True)
     ]
-
-
-def _total(counts: Iterable[dict[str, int]]) -> Counter[str]:
-    """The sum of ``counts`` for each source, with a source whose sum is 0 kept."""
-    total = Counter()
-    for count in counts:
-        total.update(count)
-    return total
 
 
 def _is_observation(name: str, observations: Collection[str]) -> bool:
@@ -205,7 +197,11 @@ class DaggerDataset(Dataset):
     @property
     def steps_without_shadow(self) -> Counter[str]:
         """For each source with a shadow action, the teleoperator steps of all runs where it has none."""
-        return _total(run.steps_without_shadow for run in self.runs)
+        total = Counter()
+        for run in self.runs:
+            # ``update`` keeps a source whose count is 0.
+            total.update(run.steps_without_shadow)
+        return total
 
     def __len__(self) -> int:
         return len(self.runs)
