@@ -428,9 +428,9 @@ def test_the_training_data_of_round_1_holds_the_teleoperator_runs_of_round_0_and
     assert _checkpoint(rounds, 1) == stub_model.checkpoint_id(converted)
 
 
-def test_the_robolab_config_builds_the_rig_the_tasks_with_a_layout_each_and_the_expert_of_banana_in_bowl():
+def test_the_robolab_config_builds_the_rig_the_tasks_with_a_layout_each_the_expert_of_banana_in_bowl_and_two_arm_act():
     config = dagger.robolab_banana_in_bowl.override(
-        output_dir='unused', round_0_license='test', **{'rig.teleoperator.license': 'test'}
+        output_dir='unused', round_0_license='test', **{'rig.teleoperator.license': 'test', 'model.license': 'test'}
     )
     built = cfn.Config(dict, **config.kwargs).instantiate()
 
@@ -456,6 +456,13 @@ def test_the_robolab_config_builds_the_rig_the_tasks_with_a_layout_each_and_the_
     for statics in teleoperator.arms.values():
         assert (statics.reach, statics.rest_yaw, statics.wrist_turn) == (0.48, np.pi / 2, np.radians(100.0))
         assert np.array_equal(statics.park, dagger.YAM_PARK)
-    # positronic's LeRobot ACT has no two-arm recipe, so the config binds no model.
-    assert 'model' not in built
+    model = built['model']
+    assert model.labels == (
+        *(keys.arm_key(keys.TARGET_EE_POSE, arm) for arm in keys.BIMANUAL_ARMS),
+        *(keys.arm_channel(keys.TARGET_GRIP, arm) for arm in keys.BIMANUAL_ARMS),
+    )
+    codec = '@positronic.vendors.lerobot_0_3_3.codecs.ee_bimanual'
+    assert f'--dataset.codec={codec}' in model.convert
+    assert f'--codec={codec}' in model.train
+    assert model.serve[3] == 'ee_bimanual'
     assert (built['rounds'], built['episodes']) == (3, 20)

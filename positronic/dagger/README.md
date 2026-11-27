@@ -45,10 +45,11 @@ On a real rig, these parts do not change:
   [`cfg/embodiment.py`](../cfg/embodiment.py) makes the `Embodiment` of each rig of positronic, for example
   `yam_bimanual`. `remote_embodiment` in [`simulator/env_server/proxy.py`](../simulator/env_server/proxy.py) makes the
   `Embodiment` of a simulated rig in the same form.
-- **What it gives.** `RoundZeroPolicy` needs the joints, `robot_state.<arm>.q`. The recipe `ee` of `lerobot_act`
-  needs the pose, `robot_state.ee_pose`. `ee` is for one arm. positronic has no two-arm recipe of ACT, so a two-arm rig
-  gives its own model.
-- **What it takes.** `RoundZeroPolicy` sends a `JointPosition`. `lerobot_act` learns the label `robot_command.pose`.
+- **What it gives.** `RoundZeroPolicy` needs the joints, `robot_state.<arm>.q`. The codec `ee` of `lerobot_act`
+  needs the pose, `robot_state.ee_pose`. `ee` is for one arm. The codec `ee_bimanual` is for the two-arm YAM. It needs
+  the pose and the grip of each arm, `robot_state.<arm>.ee_pose` and `grip.<arm>`.
+- **What it takes.** `RoundZeroPolicy` sends a `JointPosition`. `lerobot_act` learns the label `robot_command.pose`, or
+  `robot_command.<arm>.pose` of each arm with `ee_bimanual`.
   So the teleop device sends a `CartesianPosition`, and ACT sends one too. Each arm takes both kinds of command.
 - **Pose commands.** The harness refuses a pose command of a source that states no frame for that pose. The rig states
   its frames in `Embodiment.static_meta`, with `ee_frames_entry`
@@ -67,9 +68,9 @@ On a real rig, these parts do not change:
 
 ### The camera drivers
 
-- **Where it plugs in.** A camera driver gives the observation `image.<name>`. The recipe `ee` of `lerobot_act` reads
-  `image.wrist` and `image.exterior`. So a rig gives its cameras these names, or the config gives a recipe with the
-  names of the rig.
+- **Where it plugs in.** A camera driver gives the observation `image.<name>`. The codec `ee` of `lerobot_act` reads
+  `image.wrist` and `image.exterior`. `ee_bimanual` reads `image.exterior`, `image.wrist_left` and `image.wrist_right`.
+  So a rig gives its cameras these names, or the config gives a codec with the names of the rig.
 - **In positronic.** The drivers in [`camera`](../drivers/camera), for example `zed.py`, `luxonis.py` and
   `linux_video.py`.
 

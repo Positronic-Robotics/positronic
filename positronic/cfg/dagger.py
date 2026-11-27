@@ -66,25 +66,29 @@ _LEROBOT = 'positronic.vendors.lerobot_0_3_3'
 _GRIPPER_FRAME = '@positronic.cfg.codecs.gripper_frame'
 
 
-@cfn.config(num_train_steps=50_000)
-def lerobot_act(license: str, num_train_steps: int) -> ModelCommands:
-    """LeRobot ACT of ``positronic.vendors.lerobot_0_3_3``, which learns the pose and the grip command of the arm from
-    the wrist and the exterior images, the pose and the grip. ``license`` is the license of each checkpoint."""
+@cfn.config(codec='ee', arms=keys.ONE_ARM, num_train_steps=50_000)
+def lerobot_act(codec: str, arms: tuple[str | None, ...], license: str, num_train_steps: int) -> ModelCommands:
+    """LeRobot ACT of ``positronic.vendors.lerobot_0_3_3`` with the codec and the server pipeline ``codec``, which
+    learns the pose and the grip command of each arm of ``arms``. ``license`` is the license of each checkpoint."""
+    labels = (
+        *(keys.arm_key(keys.TARGET_EE_POSE, arm) for arm in arms),
+        *(keys.arm_channel(keys.TARGET_GRIP, arm) for arm in arms),
+    )
     return ModelCommands(
-        labels=(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
+        labels=labels,
         convert=(
             *('python', '-m', f'{_LEROBOT}.to_lerobot', 'convert'),
             *('--dataset.dataset=.local', '--dataset.dataset.path={training_data}'),
-            *(f'--dataset.codec=@{_LEROBOT}.codecs.ee', f'--dataset.codec.ee_frame={_GRIPPER_FRAME}'),
+            *(f'--dataset.codec=@{_LEROBOT}.codecs.{codec}', f'--dataset.codec.ee_frame={_GRIPPER_FRAME}'),
             '--output_dir={converted}',
         ),
         train=(
-            *('python', '-m', f'{_LEROBOT}.train', '--input_path={converted}'),
+            *('python', '-m', f'{_LEROBOT}.train', '--input_path={converted}', f'--codec=@{_LEROBOT}.codecs.{codec}'),
             *('--output_dir={checkpoint.parent}', '--exp_name={checkpoint.name}'),
             f'--num_train_steps={num_train_steps}',
         ),
         serve=(
-            *('python', '-m', f'{_LEROBOT}.server', 'ee', '--model.checkpoints_dir={checkpoint}'),
+            *('python', '-m', f'{_LEROBOT}.server', codec, '--model.checkpoints_dir={checkpoint}'),
             *('--model.license={license}', f'--pipeline.ee_frame={_GRIPPER_FRAME}'),
             *('--websocket.served_address.host={host}', '--websocket.served_address.port={port}'),
         ),
@@ -168,9 +172,11 @@ def banana_in_bowl_expert(
     )
 
 
-# DAgger rounds of ``BananaInBowlTask`` on the two-arm YAM in the RoboLab env server.
-# TODO: Add a two-arm recipe of LeRobot ACT to ``positronic.vendors.lerobot_0_3_3``, and bind it here as the model. The
-# vendor has only one-arm recipes, so a run of this config gives the model with ``--model``.
+# DAgger rounds of ``BananaInBowlTask`` on the two-arm YAM in the RoboLab env server, with LeRobot ACT.
 robolab_banana_in_bowl = run.override(
-    rig=robolab_rig.override(teleoperator=banana_in_bowl_expert), tasks=banana_in_bowl, rounds=3, episodes=20
+    rig=robolab_rig.override(teleoperator=banana_in_bowl_expert),
+    tasks=banana_in_bowl,
+    model=lerobot_act.override(codec='ee_bimanual', arms=keys.BIMANUAL_ARMS),
+    rounds=3,
+    episodes=20,
 )
