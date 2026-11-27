@@ -10,7 +10,7 @@ import time
 import types
 from collections.abc import Callable, Generator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -73,6 +73,7 @@ from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
     OTHERS_WIDTH,
+    Badge,
     Button,
     ButtonMap,
     CameraState,
@@ -442,6 +443,185 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
+def test_control_that_went_off_in_a_silence_stays_off_until_a_and_the_view_and_the_log_name_the_cause(
+    socket_path, connect, caplog
+):
+    caplog.set_level(logging.INFO, logger=service_module.__name__)
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=0.3, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        time.sleep(served.silence_limit + 0.05)
+        connection.frame(FRAME_REQUEST)
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control, 'samples that come again do not turn control on'
+        assert (
+            Badge('Control off: connection lost (A: on)', TeleopService.CONTROL_OFF_COLOUR) in served.view_text().lines
+        )
+        silences = [record for record in caplog.records if 'silence limit' in record.getMessage()]
+        assert len(silences) == 1
+        assert silences[0].levelno == logging.INFO
+        assert 'Control off' in silences[0].getMessage()
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        assert Badge('Control on (A: off)', TeleopService.CONTROL_ON_COLOUR) in served.view_text().lines
+        connection.close()
+
+
+class _LockProbe(logging.Handler):
+    """Each line that the process logs, and whether another thread could read the service while the line was
+    written."""
+
+    def __init__(self, service: TeleopService):
+        super().__init__(logging.INFO)
+        self._service = service
+        self.lines: list[tuple[str, bool]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        reader = threading.Thread(target=self._service.shown_image_count, daemon=True)
+        reader.start()
+        reader.join(timeout=2)
+        self.lines.append((record.getMessage(), not reader.is_alive()))
+
+
+@pytest.fixture
+def lock_probe(service, caplog) -> Generator[_LockProbe]:
+    caplog.set_level(logging.INFO)
+    probe = _LockProbe(service)
+    logging.getLogger().addHandler(probe)
+    yield probe
+    logging.getLogger().removeHandler(probe)
+
+
+def test_the_service_logs_each_change_of_the_phase_and_of_control_with_its_cause_after_the_lock(
+    service, socket_path, connect, lock_probe
+):
+    connection = _readied_connection(service, socket_path, connect)
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    _take(service, _buttons(b=1.0))
+    time.sleep(HOLD_SEC + 0.05)
+    _take(service, _buttons(b=1.0))
+    assert END in connection.frame(FRAME_REQUEST)
+    connection.close()
+    _until_phase(service, Phase.IDLE)
+    messages = [message for message, _ in lock_probe.lines]
+    changes = ['-> ready_wait', '-> running (B: Ready)', 'Control on (A)', 'Control off (A)']
+    changes += ['-> ended (hold B: Complete)', '-> idle (the session ended)']
+    unread = iter(messages)
+    for change in changes:
+        assert any(change in message for message in unread), f'no log line with {change!r} in order in {messages}'
+    assert [message for message, free in lock_probe.lines if not free] == [], 'each line is written after the lock'
+
+
+def _press_a(service: TeleopService, connection) -> None:
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+
+
+def _ready_in_umi_mode(service: TeleopService, connection) -> None:
+    connection.close()
+
+
+def _control_on_with_a(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    connection.close()
+
+
+def _control_off_with_a(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    _press_a(service, connection)
+    connection.close()
+
+
+def _control_off_in_a_silence(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    time.sleep(service.silence_limit + 0.05)
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+
+
+def _control_off_with_an_untracked_controller(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    service.take_sample({webxr.RIGHT: None}, {webxr.RIGHT: _buttons()})
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+
+
+def _control_off_at_the_end_of_the_session(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+    _until_phase(service, Phase.IDLE)
+
+
+def _control_off_at_the_end_of_a_dropped_trial(service: TeleopService, connection) -> None:
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+    time.sleep(TeleopService.RESUME_LIMIT_SEC + 0.05)
+    service.view()
+
+
+# Each site that turns control of an arm on or off, by its cause: the trackers that Ready makes, a press of A, a
+# silence, a controller that the headset does not track, and the end of a trial
+@pytest.mark.parametrize(
+    ('umi', 'drive', 'line'),
+    [
+        (True, _ready_in_umi_mode, 'Control on (B: Ready, in UMI mode)'),
+        (False, _control_on_with_a, 'Control on (A)'),
+        (False, _control_off_with_a, 'Control off (A)'),
+        (False, _control_off_in_a_silence, 'Control off: connection lost, no controller data within the silence limit'),
+        (False, _control_off_with_an_untracked_controller, 'Control off: the headset does not track the controller'),
+        (False, _control_off_at_the_end_of_the_session, 'Control off (the session ended)'),
+        (True, _control_off_at_the_end_of_a_dropped_trial, 'Control off (no session resumed the dropped trial)'),
+    ],
+)
+def test_each_change_of_control_logs_one_line_with_its_cause_after_the_lock(
+    service, socket_path, connect, lock_probe, monkeypatch, umi, drive, line
+):
+    monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
+    query = session_query(operator_position=None) if umi else ''
+    drive(service, _readied_connection(service, socket_path, connect, query))
+    changes = [free for message, free in lock_probe.lines if message.startswith(line)]
+    assert changes == [True], f'one log line {line!r}, written after the lock, in {lock_probe.lines}'
+
+
+def test_the_view_logs_the_end_of_a_dropped_trial_after_the_lock(
+    service, socket_path, connect, lock_probe, monkeypatch
+):
+    monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
+    connection = _readied_connection(service, socket_path, connect)
+    connection.close()
+    time.sleep(TeleopService.RESUME_LIMIT_SEC + 0.05)
+    service.view()
+    ended = [(message, free) for message, free in lock_probe.lines if 'no session resumed the dropped trial' in message]
+    assert ended == [('Teleop trial: running -> idle (no session resumed the dropped trial)', True)]
+
+
+def test_a_silence_in_umi_mode_leaves_control_on_and_logs_no_change_of_control(
+    service, socket_path, connect, lock_probe
+):
+    connection = _readied_connection(service, socket_path, connect, session_query(operator_position=None))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    time.sleep(service.silence_limit + 0.05)
+    connection.frame(FRAME_REQUEST)
+    assert service.state().control
+    assert Badge('Control on (A: off)', TeleopService.CONTROL_ON_COLOUR) in service.view_text().lines
+    assert [message for message, _ in lock_probe.lines if message.startswith('Control off')] == []
+    connection.close()
+
+
 def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
     service, socket_path, runtime
 ):
@@ -458,6 +638,25 @@ def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_w
         _drive_until(run, lambda _: service.state().control)
         assert colours() == {'on'}
         run.close()
+
+
+def test_the_view_shows_that_the_trial_starts_until_its_first_frame(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    starting = service.view_text().lines
+    assert starting == ('Trial starting: waiting for the robot',), 'no task and no control line before the first frame'
+    connection.frame(FRAME_REQUEST)
+    running = service.view_text().lines
+    assert OBS[keys.TASK] in running
+    assert Badge('Control off (A: on)', TeleopService.CONTROL_OFF_COLOUR) in running
+    assert 'Trial starting: waiting for the robot' not in running
+    connection.close()
+
+
+def test_a_dropped_trial_with_no_frame_shows_that_it_starts_until_a_session_resumes_it(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.close()
+    assert service.phase is Phase.RUNNING, 'the dropped trial stays for a session that resumes it'
+    assert service.view_text().lines == ('Trial starting: waiting for the robot',)
 
 
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
@@ -1662,7 +1861,7 @@ def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, vie
         command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
-@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'min_hold_sec', 'trial_sec', 'circle_sec'])
+@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'stale_limit', 'min_hold_sec', 'trial_sec', 'circle_sec'])
 @pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
 def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refused(name, value):
     with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
@@ -1742,6 +1941,24 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         self._phase = phase
 
 
+class _PageLosingTheFirstPressOfA(_PagePassingASampleAtEachPoll):
+    """A page that loses the first press of A, as the WebXR driver loses the presses of a stale message: the press
+    counts of that sample become the base of the counts that the page passes."""
+
+    def _take_samples(self, connection: ServerConnection) -> None:
+        base, lost = None, False
+        for message in connection:
+            positions, buttons = webxr.parse_controller_message(json.loads(message))
+            pose, right = positions[webxr.RIGHT], buttons[webxr.RIGHT]
+            assert pose is not None and right is not None, 'the scripted headset tracks its right controller'
+            if base is None:
+                base = right.presses
+            elif not lost and right.presses[Button.A] > base[Button.A]:
+                base, lost = right.presses, True
+            counted = replace(right, presses=tuple(now - then for now, then in zip(right.presses, base, strict=True)))
+            self._latest = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: counted})
+
+
 # A station asks for a frame about every 33 ms. A frame request answers at once, so a loop with no pause only
 # competes with the headset for the service.
 STATION_FRAME_SEC = 1 / 30
@@ -1784,6 +2001,27 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
             ends.append(_frames_until_end(service)[-1][END])
         trials.result(timeout=10)
     assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_presses_a_again_when_the_service_lost_its_press_of_a(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    with _PageLosingTheFirstPressOfA(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
+        )
+        service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
+        frames = [service.next_frame(FRAME_REQUEST)]
+        deadline = time.monotonic() + 10.0
+        while END not in frames[-1] and time.monotonic() < deadline:
+            time.sleep(STATION_FRAME_SEC)
+            frames.append(service.next_frame(FRAME_REQUEST))
+        # A trial that does not end lets the scripted headset stop.
+        service.end_session()
+        trials.result(timeout=10)
+    moves = [frame[ACTION][:3] for frame in frames[:-1]]
+    assert frames[-1].get(END) == PolicyEnd.COMPLETE.value
+    assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
 
 def test_the_phone_page_reads_fields_of_the_page_state():

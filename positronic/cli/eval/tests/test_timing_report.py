@@ -32,6 +32,7 @@ from positronic.telemetry import (
     STAT_T_NS,
     STATS_SUFFIX,
     TELEMETRY_SUBDIR,
+    read_spans,
 )
 from positronic.telemetry_keys import (
     ATTR_CODEC,
@@ -41,6 +42,7 @@ from positronic.telemetry_keys import (
     ATTR_STEP_GC_MS,
     ATTR_STEP_LATE_MS,
     ATTR_STEP_POLICY_MS,
+    ATTR_STEP_RECORD_WAIT_MS,
     ATTR_WAYPOINTS_DROPPED,
     ATTR_WAYPOINTS_EMITTED,
     ATTR_WAYPOINTS_LATE_MAX_MS,
@@ -195,6 +197,22 @@ def test_report_aggregates(tmp_path, nested_inference):
     assert report.gpu.sim.peak_vram_gb == pytest.approx(4.0)
     assert report.gpu.sim.peak_proc_vram_gb == pytest.approx(2.0)
     assert report.gpu.policy is None
+
+
+def test_the_record_io_share_counts_the_recording_between_steps_that_the_step_spans_carry(tmp_path):
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+    steps = [
+        _span(SPAN_HARNESS_STEP, base + 35, base + 36, f'hstep{i}', f'ep{i}', {ATTR_STEP_RECORD_WAIT_MS: 2000.0})
+        for i, base in enumerate((0, 50))
+    ]
+    _write_lines(tmp_path / 'steps.jsonl', steps)
+    spans += list(read_spans(tmp_path / 'steps.jsonl'))
+    split = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None).wall_split
+
+    assert split.record_io == pytest.approx(0.12)  # 4 s of record.io spans and 2 s between steps, per episode
+    assert split.overhead == pytest.approx(0.34)
+    assert sum(vars(split).values()) == pytest.approx(1.0)
 
 
 def test_render_shows_shares_as_percentages(tmp_path):
