@@ -85,7 +85,8 @@ leaves out on the members that carry one.
   websocket members send `POST` to `KEEPALIVE_PATH`, and
   the gRPC members call `KEEPALIVE_METHOD_PATH`. `keepalive` raises
   `KeepaliveUnsupported` where the server serves sessions but not the call, and `ConnectRefused`
-  otherwise, in the terms `probe` uses: a 200 that does not carry the keepalive answer is `FINAL`.
+  otherwise, in the terms `probe` uses: a 200, or a gRPC reply, that does not carry the keepalive
+  answer is `FINAL`.
   `roboarena` always raises `KeepaliveUnsupported`, and dials nothing.
 
 `registry.client_wire(name)` selects an installed transport. `CLIENT_WIRES` includes only families

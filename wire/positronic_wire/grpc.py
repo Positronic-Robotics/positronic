@@ -288,7 +288,11 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
             raise wire.ConnectRefused(_refusal(e), f'{e} (calling {KEEPALIVE_METHOD} on {dialled})') from e
         finally:
             channel.close()
-        return wire.KeepaliveAnswer.decode(answer)
+        try:
+            return wire.KeepaliveAnswer.decode(answer)
+        except ValueError as e:
+            refusal = f'{KEEPALIVE_METHOD} on {dialled} answers without the keepalive answer: {e}'
+            raise wire.ConnectRefused(wire.Refusal.FINAL, refusal) from e
 
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float

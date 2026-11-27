@@ -142,6 +142,30 @@ def test_a_probe_carries_the_headers_as_metadata_and_closes_the_channel(monkeypa
     channel.close.assert_called_once()
 
 
+def _keepalive_answering(answer: bytes, monkeypatch) -> wire.KeepaliveAnswer:
+    channel = MagicMock(**{'unary_unary.return_value': MagicMock(return_value=answer)})
+    monkeypatch.setattr(client_grpc, '_ready_channel', lambda channel, target, timeout: channel)
+    monkeypatch.setattr(grpc, 'insecure_channel', lambda target, options: channel)
+    return client_grpc.GrpcClientWire().keepalive(_ADDRESS, None, 2.0)
+
+
+def test_a_keepalive_answer_names_the_session_parameters_the_server_declares(monkeypatch):
+    answer = b'{"alive_seconds": 60, "declared_params": ["fps"]}'
+    assert _keepalive_answering(answer, monkeypatch) == wire.KeepaliveAnswer(60, ('fps',))
+
+
+@pytest.mark.parametrize(
+    'answer',
+    [b'not json', b'{"other": 1}', b'{"alive_seconds": 60, "declared_params": "fps"}'],
+    ids=['not-json', 'no-key', 'params-a-string'],
+)
+def test_a_keepalive_reply_that_is_not_the_keepalive_answer_is_final(answer, monkeypatch):
+    """Something other than a policy server answered, so the call does not read it as the server."""
+    with pytest.raises(wire.ConnectRefused) as refused:
+        _keepalive_answering(answer, monkeypatch)
+    assert refused.value.refusal is wire.Refusal.FINAL
+
+
 def test_a_port_that_never_answers_is_no_answer():
     """Nothing listens on port 1; the call never reaches a server."""
     assert (
