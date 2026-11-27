@@ -11,6 +11,7 @@ Frames:
 """
 
 import copy
+import functools
 import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -20,10 +21,11 @@ from typing import Any, NamedTuple
 import numpy as np
 
 if __package__:
-    from positronic.simulator.env_server import arm_action, protocol
+    from positronic.simulator.env_server import arm_action, dls_ik, protocol
     from positronic.simulator.robolab import keys
 else:
     import arm_action  # pyright: ignore[reportMissingImports]
+    import dls_ik  # pyright: ignore[reportMissingImports]
     import keys  # pyright: ignore[reportMissingImports]
     import protocol  # pyright: ignore[reportMissingImports]
 
@@ -367,25 +369,148 @@ def Xform "yam_stand"
 """
 
 
+# ---- the kinematics ----
+
+
+_MOVING_JOINTS = ('revolute', 'prismatic', 'continuous')
+
+
+class _Joint(NamedTuple):
+    """A moving joint of a chain, and the fixed transform from the joint before it, or the root link, to its frame."""
+
+    name: str
+    prismatic: bool
+    rot: np.ndarray
+    pos: np.ndarray
+    axis: np.ndarray  # a unit vector in the joint frame
+    # The cross-product matrix of ``axis`` and its square: a turn by ``a`` is ``I + sin(a) skew + (1 - cos(a)) skew2``
+    skew: np.ndarray
+    skew2: np.ndarray
+
+
+def _values(element: ET.Element | None, name: str, default: str) -> np.ndarray:
+    text = default if element is None else element.get(name, default)
+    return np.array([float(value) for value in text.split()])
+
+
+class UrdfChain:
+    """The joints of a URDF from the root link to ``link``, and the kinematics of ``link`` in the root link's frame.
+
+    ``joints`` names the moving joints in order, and ``lower`` and ``upper`` hold their limits; a joint with no limit
+    has an infinite one.
+    """
+
+    def __init__(self, urdf: ET.Element, link: str):
+        by_child = {}
+        for joint in urdf.findall('joint'):
+            child = joint.find('child')
+            assert child is not None  # every joint of a URDF names its child link
+            by_child[child.get('link')] = joint
+        elements = []
+        while link in by_child:
+            elements.append(by_child[link])
+            parent = by_child[link].find('parent')
+            assert parent is not None  # every joint of a URDF names its parent link
+            link = parent.get('link')
+        self._joints: list[_Joint] = []
+        limits = []
+        rot, pos = np.eye(3), np.zeros(3)  # the fixed transform since the last moving joint
+        for element in reversed(elements):
+            origin = element.find('origin')
+            pos = pos + rot @ _values(origin, 'xyz', '0 0 0')
+            rot = rot @ rpy_matrix(_values(origin, 'rpy', '0 0 0'))
+            kind = element.get('type')
+            if kind not in _MOVING_JOINTS:
+                continue
+            axis = _values(element.find('axis'), 'xyz', '1 0 0')
+            x, y, z = axis = axis / np.linalg.norm(axis)
+            skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+            self._joints.append(
+                _Joint(str(element.get('name')), kind == 'prismatic', rot, pos, axis, skew, skew @ skew)
+            )
+            limit = element.find('limit')
+            bounded = kind != 'continuous' and limit is not None
+            limits.append(
+                (float(limit.get('lower', 0)), float(limit.get('upper', 0)))
+                if bounded and limit is not None
+                else (-math.inf, math.inf)
+            )
+            rot, pos = np.eye(3), np.zeros(3)
+        self._tip_rot, self._tip_pos = rot, pos
+        self.joints = tuple(joint.name for joint in self._joints)
+        self.lower, self.upper = np.array(limits, dtype=np.float64).reshape(-1, 2).T
+
+    def kinematics(self, q: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The position and the rotation matrix of the link at the joints ``q``, and its ``6 x n`` Jacobian."""
+        rot, pos = np.eye(3), np.zeros(3)
+        points, axes = [], []
+        for joint, value in zip(self._joints, np.asarray(q, dtype=np.float64), strict=True):
+            pos = pos + rot @ joint.pos
+            rot = rot @ joint.rot
+            points.append(pos)
+            axes.append(rot @ joint.axis)
+            if joint.prismatic:
+                pos = pos + axes[-1] * value
+            else:
+                rot = rot @ (np.eye(3) + math.sin(value) * joint.skew + (1 - math.cos(value)) * joint.skew2)
+        pos = pos + rot @ self._tip_pos
+        rot = rot @ self._tip_rot
+        jac = np.zeros((6, len(axes)))
+        for column, (joint, point, axis) in enumerate(zip(self._joints, points, axes, strict=True)):
+            if joint.prismatic:
+                jac[:3, column] = axis
+            else:
+                lever = pos - point
+                jac[:3, column] = [
+                    axis[1] * lever[2] - axis[2] * lever[1],
+                    axis[2] * lever[0] - axis[0] * lever[2],
+                    axis[0] * lever[1] - axis[1] * lever[0],
+                ]
+                jac[3:, column] = axis
+        return pos, rot, jac
+
+
+@functools.cache
+def arm_chains() -> dict[str, UrdfChain]:
+    """The chain of each arm of ``bimanual_urdf``, from the root link ``base_plate`` to ``<side>_gripper``."""
+    urdf = ET.fromstring(bimanual_urdf())
+    return {side: UrdfChain(urdf, f'{side}_{GRIPPER_SITE}') for side in SIDES}
+
+
 # ---- the action ----
 
 
-# TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves pose commands.
-JOINT_COMMANDS_ONLY = 'the RoboLab YAM env takes joint commands only'
-_POSE_COMMANDS = (protocol.CARTESIAN, protocol.CARTESIAN_DELTA)
+# The root in the rig world frame. The root does not turn in it, so a rotation is the same in the two frames.
+_ROOT = np.asarray(ROOT_IN_RIG_WORLD, dtype=np.float64)
 
 
-def _no_pose(*_args: Any) -> Any:
-    raise AssertionError('action holds an arm on a pose command before arm_targets')
+def _solve_pose(
+    chain: UrdfChain, measured_q: np.ndarray, target_pos: np.ndarray, target_rot: np.ndarray
+) -> np.ndarray | None:
+    """The joints of ``chain`` at a pose of its site in the rig world frame, or a near solution (``dls_ik.solve``);
+    None when the solve misses."""
+    solution = dls_ik.solve(
+        chain.kinematics,
+        measured_q=measured_q,
+        lower=chain.lower,
+        upper=chain.upper,
+        target_pos=np.asarray(target_pos, dtype=np.float64) - _ROOT,
+        target_rot=target_rot,
+    )
+    return None if solution.fit is dls_ik.Fit.MISS else solution.q
+
+
+def _site_pose(chain: UrdfChain, measured_q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The pose of the site of ``chain`` in the rig world frame, at the measured joints."""
+    pos, rot, _ = chain.kinematics(measured_q)
+    return pos + _ROOT, rot
 
 
 class Action(NamedTuple):
-    """One clone's action: the 14 values in ``ACTION_TERMS`` order, the grip of each arm, and the arms that hold on a
-    pose command."""
+    """One clone's action: the 14 values in ``ACTION_TERMS`` order, and the grip of each arm."""
 
     values: np.ndarray
     grips: np.ndarray
-    pose_refused: tuple[str, ...]
 
 
 def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> Action:
@@ -393,7 +518,7 @@ def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> Act
 
     ``measured`` holds the measured joints of each arm in ``SIDES`` order, ``(2, 6)``. ``grips`` holds the last grip
     of each arm, which an arm keeps when its wire grip is not finite. A wire grip is in [0, 1], 1 closed, and goes in as
-    it is. An arm holds on a pose command, with no log: ``PoseRefusals`` reports it.
+    it is. A pose solves to the joints of its arm at ``<side>_gripper`` (``dls_ik.solve``), in the rig world frame.
     """
     channels = {
         protocol.arm_channel(name, side) for side in SIDES for name in (protocol.ROBOT_COMMAND, protocol.TARGET_GRIP)
@@ -401,51 +526,19 @@ def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> Act
     extra = set(wire) - channels
     if extra:
         raise ValueError(f'the RoboLab YAM robot cannot act on channels {sorted(extra)}')
-    values, new_grips, pose_refused = [], [], []
+    chains = arm_chains()
+    values, new_grips = [], []
     for i, side in enumerate(SIDES):
         grip = float(wire[protocol.arm_channel(protocol.TARGET_GRIP, side)])
         grip = grip if math.isfinite(grip) else float(grips[i])
-        command = wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)]
-        if command[protocol.COMMAND_TYPE] in _POSE_COMMANDS:
-            targets = np.asarray(measured[i], dtype=np.float32)
-            pose_refused.append(side)
-        else:
-            targets = arm_action.arm_targets(command, measured[i], ik=_no_pose, read_eef=_no_pose, arm=side).q
+        joints, chain = np.asarray(measured[i], dtype=np.float64), chains[side]
+        targets = arm_action.arm_targets(
+            wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)],
+            joints,
+            ik=functools.partial(_solve_pose, chain, joints),
+            read_eef=functools.partial(_site_pose, chain, joints),
+            arm=side,
+        ).q
         values += [targets, [grip]]
         new_grips.append(grip)
-    return Action(
-        np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32), tuple(pose_refused)
-    )
-
-
-class PoseRefusals:
-    """Per clone and arm, the steps of one episode on which the arm held on a pose command."""
-
-    def __init__(self, num_envs: int) -> None:
-        self._steps: list[dict[str, int]] = [dict.fromkeys(SIDES, 0) for _ in range(num_envs)]
-
-    def add(self, slot: int, sides: tuple[str, ...]) -> list[str]:
-        """Count one step of ``slot`` for each arm in ``sides``. Returns one warning per arm on its first such step."""
-        warnings = []
-        for side in sides:
-            self._steps[slot][side] += 1
-            if self._steps[slot][side] == 1:
-                warnings.append(
-                    f'slot {slot}: the {side} arm holds on a pose command, as {JOINT_COMMANDS_ONLY}; the count '
-                    'follows at the episode end'
-                )
-        return warnings
-
-    def report(self, slots: list[int] | None = None) -> list[str]:
-        """One line per clone of ``slots``, or of every clone, and arm that held on a pose command in this episode.
-        It zeroes the counts it reports."""
-        lines = []
-        for slot in range(len(self._steps)) if slots is None else slots:
-            counts = self._steps[slot]
-            lines += [
-                f'slot {slot}: the {side} arm held on a pose command on {steps} steps, as {JOINT_COMMANDS_ONLY}'
-                for side, steps in counts.items()
-                if steps
-            ]
-            self._steps[slot] = dict.fromkeys(SIDES, 0)
-        return lines
+    return Action(np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32))

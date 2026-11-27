@@ -21,6 +21,8 @@ class IkSolution(NamedTuple):
     converged: bool
 
 
+# TODO: Solve with `dls_ik.solve` on the kinematics of the site, as positronic-next does, so that one solve serves each
+# env server.
 def damped_least_squares_ik(
     model: mujoco.MjModel,
     *,

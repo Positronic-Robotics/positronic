@@ -176,9 +176,7 @@ _HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 def test_the_action_holds_each_arm_then_its_grip_in_the_term_order():
     left, right = np.full(6, 0.5, dtype=np.float32), np.full(6, -0.5, dtype=np.float32)
 
-    action, grips, _ = spec.action(
-        _wire(_joint_command(left), _joint_command(right), (1.0, 0.0)), _MEASURED, np.zeros(2)
-    )
+    action, grips = spec.action(_wire(_joint_command(left), _joint_command(right), (1.0, 0.0)), _MEASURED, np.zeros(2))
 
     assert spec.ACTION_DIM == action.shape[0] == 14
     assert [name for name, _ in spec.ACTION_TERMS] == ['left_arm', 'left_gripper', 'right_arm', 'right_gripper']
@@ -213,55 +211,89 @@ def test_an_arm_holds_its_measured_joints_on_a_command_the_rig_refuses_and_a_war
 
 
 def test_an_arm_keeps_its_last_grip_when_the_wire_grip_is_not_finite():
-    action, grips, _ = spec.action(_wire(_HOLD, _HOLD, (float('nan'), 1.0)), _MEASURED, np.array([1.0, 0.0]))
+    action, grips = spec.action(_wire(_HOLD, _HOLD, (float('nan'), 1.0)), _MEASURED, np.array([1.0, 0.0]))
 
     assert (action[6], action[13]) == (1.0, 1.0)
     np.testing.assert_array_equal(grips, [1.0, 1.0])
 
 
-def _pose_command(kind: str) -> dict:
+# Joints well inside the limits of each arm, and the joints of a pose command near them.
+_START = np.array([0.2, 1.2, 1.0, -0.3, 0.2, 0.3])
+_TARGET = _START + np.array([0.15, 0.1, -0.1, 0.2, -0.15, 0.1])
+
+
+def _gripper_pose(model: mujoco.MjModel, side: str, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The pose of the ``<side>_gripper`` link of the URDF at the joints ``q`` of the arm, in the rig world frame."""
+    data = mujoco.MjData(model)
+    _set_joints(model, data, side, dict(zip(spec.ARM_JOINTS, q, strict=True)))
+    body = model.body(f'{side}_{spec.GRIPPER_SITE}').id
+    return data.xpos[body] + spec.ROOT_IN_RIG_WORLD, data.xmat[body].reshape(3, 3)
+
+
+def _pose_command(pos: np.ndarray, rot: np.ndarray, kind: str = protocol.CARTESIAN) -> dict:
     field = protocol.COMMAND_POSE if kind == protocol.CARTESIAN else protocol.COMMAND_DELTA
-    return {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.full(3, 0.1), np.eye(3).reshape(-1)])}
+    return {protocol.COMMAND_TYPE: kind, field: np.concatenate([pos, np.asarray(rot).reshape(-1)])}
 
 
-@pytest.mark.parametrize('kind', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
-def test_a_pose_command_holds_its_arm_with_no_log_and_the_other_arm_moves(kind, caplog):
-    target = np.full(6, 0.3, dtype=np.float32)
-
-    action = spec.action(_wire(_pose_command(kind), _joint_command(target)), _MEASURED, np.zeros(2))
-
-    np.testing.assert_array_equal(action.values[:6], _MEASURED[0])
-    np.testing.assert_array_equal(action.values[7:13], target)
-    assert action.pose_refused == (spec.LEFT,)
-    assert not caplog.records
-
-
-def test_an_episode_of_pose_commands_warns_once_per_arm_and_reports_the_count_per_clone_and_arm():
-    refusals = spec.PoseRefusals(num_envs=2)
-    wire = _wire(_pose_command(protocol.CARTESIAN), _pose_command(protocol.CARTESIAN_DELTA))
-
-    warnings = [w for _ in range(50) for w in refusals.add(1, spec.action(wire, _MEASURED, np.zeros(2)).pose_refused)]
-
-    assert len(warnings) == 2
-    assert all(spec.JOINT_COMMANDS_ONLY in w for w in warnings)
-    assert refusals.report() == [
-        f'slot 1: the {side} arm held on a pose command on 50 steps, as {spec.JOINT_COMMANDS_ONLY}'
-        for side in spec.SIDES
-    ]
+@pytest.mark.parametrize('side', spec.SIDES)
+def test_the_chain_of_each_arm_gives_the_pose_and_the_jacobian_of_its_gripper_link(model, side):
+    chain = spec.arm_chains()[side]
+    rng = np.random.default_rng(7)
+    assert chain.joints == tuple(f'{side}_{joint}' for joint in spec.ARM_JOINTS)
+    np.testing.assert_allclose(np.stack([chain.lower, chain.upper], axis=1), spec.ARM_LIMITS)
+    for _ in range(5):
+        q = np.array([rng.uniform(lo + 0.1, hi - 0.1) for lo, hi in spec.ARM_LIMITS])
+        pos, rot, jac = chain.kinematics(q)
+        expected_pos, expected_rot = _gripper_pose(model, side, q)
+        np.testing.assert_allclose(pos + spec.ROOT_IN_RIG_WORLD, expected_pos, atol=1e-9)
+        np.testing.assert_allclose(rot, expected_rot, atol=1e-9)
+        for joint in range(len(q)):
+            moved = q.copy()
+            moved[joint] += 1e-6
+            moved_pos, _, _ = chain.kinematics(moved)
+            np.testing.assert_allclose((moved_pos - pos) / 1e-6, jac[:3, joint], atol=1e-5)
 
 
-def test_a_report_of_one_clone_zeroes_only_the_counts_of_that_clone():
-    refusals = spec.PoseRefusals(num_envs=2)
-    for slot in (0, 1):
-        refusals.add(slot, spec.SIDES[:1])
+@pytest.mark.parametrize('side', spec.SIDES)
+def test_a_pose_command_solves_to_joints_that_reach_the_pose_and_the_other_arm_moves(model, side):
+    target_pos, target_rot = _gripper_pose(model, side, _TARGET)
+    measured = np.stack([_START, _START]).astype(np.float32)
+    joints = np.full(6, 0.4, dtype=np.float32)
+    commands = {side: _pose_command(target_pos, target_rot)}
+    other = next(arm for arm in spec.SIDES if arm != side)
+    commands[other] = _joint_command(joints)
 
-    assert refusals.report([0]) == [
-        f'slot 0: the {spec.SIDES[0]} arm held on a pose command on 1 steps, as {spec.JOINT_COMMANDS_ONLY}'
-    ]
-    assert refusals.report() == [
-        f'slot 1: the {spec.SIDES[0]} arm held on a pose command on 1 steps, as {spec.JOINT_COMMANDS_ONLY}'
-    ]
-    assert refusals.report() == []
+    values = spec.action(_wire(commands[spec.LEFT], commands[spec.RIGHT]), measured, np.zeros(2)).values
+
+    arm = spec.SIDES.index(side)
+    reached_pos, reached_rot = _gripper_pose(model, side, values[arm * 7 : arm * 7 + 6])
+    np.testing.assert_allclose(reached_pos, target_pos, atol=1e-3)
+    np.testing.assert_allclose(reached_rot, target_rot, atol=1e-2)
+    other_arm = spec.SIDES.index(other)
+    np.testing.assert_array_equal(values[other_arm * 7 : other_arm * 7 + 6], joints)
+
+
+def test_a_cartesian_delta_moves_the_gripper_link_from_its_measured_pose(model):
+    measured = np.stack([_START, _START]).astype(np.float32)
+    start_pos, start_rot = _gripper_pose(model, spec.LEFT, _START)
+    shift = np.array([0.01, -0.02, 0.015])
+    delta = _pose_command(shift, np.eye(3), protocol.CARTESIAN_DELTA)
+
+    values = spec.action(_wire(delta, _HOLD), measured, np.zeros(2)).values
+
+    reached_pos, reached_rot = _gripper_pose(model, spec.LEFT, values[:6])
+    np.testing.assert_allclose(reached_pos, start_pos + shift, atol=1e-3)
+    np.testing.assert_allclose(reached_rot, start_rot, atol=1e-2)
+
+
+def test_a_pose_out_of_reach_holds_its_arm_and_a_warning_names_it(caplog):
+    far = _pose_command(np.array([2.0, 0.0, 2.0]), np.eye(3))
+
+    values = spec.action(_wire(far, _HOLD), _MEASURED, np.zeros(2)).values
+
+    np.testing.assert_array_equal(values[:6], _MEASURED[0])
+    (record,) = caplog.records
+    assert f'the {spec.LEFT} arm holds: no IK solution' in record.getMessage()
 
 
 def test_a_channel_of_no_arm_is_refused():

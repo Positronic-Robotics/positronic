@@ -9,8 +9,9 @@ The wire contract:
   ``joint_vel`` anchors on the measured joints, ``hold`` re-commands them, and a pose solves through ``pose_ik``
   once per step. Poses are in the eef control frame (``eef_frame``): position env-local, rotation world.
 - YAM: the env steps the 14 values of ``yam_spec.ACTION_TERMS``, from one command and one grip per arm on the
-  ``protocol.arm_channel`` channels. It solves no pose command. Every pose is in the rig world frame
-  (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
+  ``protocol.arm_channel`` channels. A pose solves to the joints of its arm through ``dls_ik`` once per step. Every
+  pose is in the rig world frame (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that
+  frame.
 - The reset token names the RoboLab env, the instruction variant and the camera set, and carries no seed: RoboLab's
   eval path has no seed hook. A reset rebuilds the scene only when its ``scene_key`` changes.
 - A success ends its episode ``success_tail.TAIL_SEC`` later, or earlier at the time limit or at a fault of its arm
@@ -827,7 +828,6 @@ class YamEnv(RobolabEnv):
         # The robot USD is converted once per server, into a directory of its own.
         robot_usd, stand_usd = yam_robolab.convert(Path(tempfile.mkdtemp(prefix='robolab-yam-')))
         self._register_envs = functools.partial(yam_robolab.register_envs, robot_usd=robot_usd, stand_usd=stand_usd)
-        self._pose_refusals = yam_spec.PoseRefusals(0)
 
     def _register(self, task: str, cameras: str) -> None:
         keys.camera_set(keys.YAM, cameras)  # a set of another robot fails; the YAM renders its own cameras
@@ -839,7 +839,6 @@ class YamEnv(RobolabEnv):
         self._joint_ids = [names.index(f'{side}_{joint}') for side in yam_spec.SIDES for joint in yam_spec.ARM_JOINTS]
         self._grip = torch.zeros(self._num_envs, len(yam_spec.SIDES), dtype=torch.float32, device=self._env.device)
         self._gripper = yam_spec.CONTACT_GRIPPERS
-        self._pose_refusals = yam_spec.PoseRefusals(self._num_envs)
 
     def _robot_meta(self) -> dict[str, Any]:
         # The client holds the arm model, so the meta holds only where each arm stands.
@@ -861,15 +860,7 @@ class YamEnv(RobolabEnv):
             act = yam_spec.action(wire, measured[slot], self._grip[slot].cpu().numpy())
             rows[slot] = act.values
             self._grip[slot] = torch.as_tensor(act.grips, device=self._env.device)
-            for warning in self._pose_refusals.add(slot, act.pose_refused):
-                print(f'{self._episode_task} episode {self._episode} {warning}', file=sys.stderr)
         return torch.as_tensor(rows, dtype=torch.float32, device=self._env.device)
-
-    def _end_episode(self, slots: list[int] | None = None) -> None:
-        """Print the count of this episode's steps that held on a pose command of each arm of each slot of ``slots``,
-        or of every slot, then zero those counts."""
-        for line in self._pose_refusals.report(slots):
-            print(f'{self._episode_task} episode {self._episode} {line}', file=sys.stderr)
 
     def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
         # The proprio group holds no joint velocities, so they come from the articulation.
