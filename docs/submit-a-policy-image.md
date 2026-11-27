@@ -620,7 +620,7 @@ model that loaded too slowly. Check the offline variables above first.
 
 ## See also
 
-- [Eval plans](../client/README.md#eval-plans) — compose your own tasks and endpoints; needs a
-  customer grant.
+- [Eval plans](../client/README.md#eval-plans) — compose your own tasks and endpoints. Your
+  personal organization needs no grant.
 - [Examples](../positronic/cli/examples/README.md) — the same flow from Python.
 - [Evaluation](evaluation.md) — the evals, and the local run that needs no platform.

@@ -679,7 +679,8 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
     The plan states the count once. A task may override it for that task, and an endpoint for that
     endpoint; an endpoint may also state its own episode window and preset. It either states its own
     tasks or names an eval the platform offers, and the catalogue expands that name into the same
-    tasks. The plan carries no client field: the gateway reads the client from the key's grant.
+    tasks. The plan carries no client field: a plan that states its own tasks runs for the organization
+    that `request_type` names.
     """
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*Cascade._OMITTED_WHEN_NONE, 'sample')
