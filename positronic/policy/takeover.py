@@ -33,13 +33,6 @@ class ControlObservation(BaseModel):
         return None if event is None else event.model_dump(mode='json', by_alias=True, exclude_none=True)
 
 
-class _Presses(BaseModel):
-    model_config = ConfigDict(frozen=True, extra='forbid')
-
-    take_over: StrictInt | None = Field(default=None, alias=HELPER_TAKE_OVER)
-    hand_back: StrictInt | None = Field(default=None, alias=HELPER_HAND_BACK)
-
-
 def helper_commands(element: Mapping[str, Any]) -> Commands:
     """The commands of ``element``, an element of the helper: each field but the press fields."""
     return {name: value for name, value in element.items() if name not in HELPER_FIELDS}
@@ -54,6 +47,13 @@ class Driver(StrEnum):
 
 # The driver that each press gives the rig to.
 _PRESS_TO = {HELPER_TAKE_OVER: Driver.TELEOPERATOR, HELPER_HAND_BACK: Driver.POLICY}
+
+
+class _Presses(BaseModel):
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    take_over: StrictInt | None = Field(default=None, alias=HELPER_TAKE_OVER)
+    hand_back: StrictInt | None = Field(default=None, alias=HELPER_HAND_BACK)
 
 
 class Takeover:

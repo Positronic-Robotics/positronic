@@ -44,7 +44,7 @@ from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps, _Source
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
-from positronic.policy.record import Event, EventKind
+from positronic.policy.record import Event, EventKind, encode_uses
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.teleoperator import Teleoperator
@@ -1994,13 +1994,15 @@ class Helper(Policy):
 
 
 TAKE_OVER_AT_2_HAND_BACK_AT_4 = {2: {policy_keys.HELPER_TAKE_OVER: 1}, 4: {policy_keys.HELPER_HAND_BACK: 2}}
+POLICY, TELEOPERATOR = policy_keys.POLICY_SOURCE, policy_keys.TELEOPERATOR
+SHADOW_MOTOR = f'{policy_keys.SHADOW}.{POLICY}.{MOTOR}'
 
 
 def _control_records(episode):
     return [
         (name, data, timestamps[HARNESS_STEP])
         for name, data, timestamps in episode.records
-        if name.startswith(('control.', f'{policy_keys.SHADOW}.'))
+        if name.startswith((f'{policy_keys.CONTROL}.', f'{policy_keys.SHADOW}.'))
     ]
 
 
@@ -2012,18 +2014,18 @@ def test_take_over_and_hand_back_switch_the_commands_that_the_rig_gets_in_the_st
     assert _until_answered(h, answer)[eval_keys.TERMINATED] is True
     assert [value for _, value in h.commands.values] == [1, 102, 103, 4, 5]
     [episode] = h.dataset.episodes
-    take_over = Event(kind=EventKind.SWITCH, from_='policy', to='teleoperator', cause='take_over')
-    hand_back = Event(kind=EventKind.SWITCH, from_='teleoperator', to='policy', cause='hand_back')
+    take_over = Event(kind=EventKind.SWITCH, from_=POLICY, to=TELEOPERATOR, cause=policy_keys.HELPER_TAKE_OVER)
+    hand_back = Event(kind=EventKind.SWITCH, from_=TELEOPERATOR, to=POLICY, cause=policy_keys.HELPER_HAND_BACK)
     assert _control_records(episode) == [
-        (policy_keys.CONTROL_SOURCE, 'policy', 0),
-        (policy_keys.CONTROL_USES, '["policy"]', 0),
-        (policy_keys.CONTROL_SOURCE, 'teleoperator', 1),
-        (policy_keys.CONTROL_USES, '["teleoperator"]', 1),
+        (policy_keys.CONTROL_SOURCE, POLICY, 0),
+        (policy_keys.CONTROL_USES, encode_uses(frozenset({POLICY})), 0),
+        (policy_keys.CONTROL_SOURCE, TELEOPERATOR, 1),
+        (policy_keys.CONTROL_USES, encode_uses(frozenset({TELEOPERATOR})), 1),
         (policy_keys.CONTROL_EVENT, take_over.encode(), 1),
-        ('shadow.policy.motor', 2, 1),
-        ('shadow.policy.motor', 3, 2),
-        (policy_keys.CONTROL_SOURCE, 'policy', 3),
-        (policy_keys.CONTROL_USES, '["policy"]', 3),
+        (SHADOW_MOTOR, 2, 1),
+        (SHADOW_MOTOR, 3, 2),
+        (policy_keys.CONTROL_SOURCE, POLICY, 3),
+        (policy_keys.CONTROL_USES, encode_uses(frozenset({POLICY})), 3),
         (policy_keys.CONTROL_EVENT, hand_back.encode(), 3),
     ]
     assert [(data, timestamps[HARNESS_STEP]) for name, data, timestamps in episode.records if name == MOTOR] == [
@@ -2061,11 +2063,11 @@ def test_the_helper_gets_the_control_and_the_ground_truth_and_the_policy_gets_ne
         for obs in policy.observations:
             assert policy_keys.CONTROL not in obs and policy_keys.GROUND_TRUTH not in obs
         assert [obs[policy_keys.GROUND_TRUTH][OBJECT_POSE].tolist() for obs in helper.observations] == [[0], [1], [2]]
-        switch = {'kind': 'switch', 'from': 'policy', 'to': 'teleoperator', 'cause': 'take_over'}
+        switch = {'kind': EventKind.SWITCH, 'from': POLICY, 'to': TELEOPERATOR, 'cause': policy_keys.HELPER_TAKE_OVER}
         assert [obs[policy_keys.CONTROL] for obs in helper.observations] == [
-            {'source': 'policy', 'event': None},
-            {'source': 'policy', 'event': None},
-            {'source': 'teleoperator', 'event': switch},
+            {'source': POLICY, 'event': None},
+            {'source': POLICY, 'event': None},
+            {'source': TELEOPERATOR, 'event': switch},
         ]
         assert helper.observations[0][POSITION] == 0
 
@@ -2126,13 +2128,31 @@ def test_the_teleoperator_sends_each_new_console_message_and_the_rig_keeps_it_wh
     _until_answered(h, answer)
     assert [value for _, value in h.commands.values] == [1, 60, 60, 4, 5]
     [episode] = h.dataset.episodes
-    assert [(data, step) for name, data, step in _control_records(episode) if name.startswith('shadow.')] == [
-        (2, 1),
-        (3, 2),
-    ]
+    assert [
+        (data, step) for name, data, step in _control_records(episode) if name.startswith(f'{policy_keys.SHADOW}.')
+    ] == [(2, 1), (3, 2)]
     teleoperator_meta = f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}'
     assert episode.static[f'{teleoperator_meta}.{policy_keys.TYPE}'] == policy_keys.TELEOPERATOR
     assert episode.static[f'{teleoperator_meta}.{policy_keys.LICENSE}'] == 'cc-by-4.0'
+
+
+def test_a_press_from_the_episode_before_is_not_new_in_the_next_episode_of_the_teleoperator(episode_harness):
+    h = episode_harness
+    console_out, console_in = h.world.local_pipe()
+    console = pimm.ControlSystemReceiver[dict](Passive())
+    console._bind(console_in)
+    teleoperator = Teleoperator(console, 'cc-by-4.0')
+    h.observation.emit(1)
+    console_out.emit({MOTOR: 50, policy_keys.HELPER_TAKE_OVER: 3})
+    _until_answered(h, h.caller(Rollout(Task('test', 1.0), EndAfter(calls=2), h.dataset, teleoperator)))
+    policy = EndAfter(calls=4)
+    answer = h.caller(Rollout(Task('test', 1.0), policy, h.dataset, teleoperator))
+    while policy.calls == 0:
+        next(h.loop)
+    console_out.emit({MOTOR: 60, policy_keys.HELPER_TAKE_OVER: 3})
+    _until_answered(h, answer)
+    _, second = h.dataset.episodes
+    assert [data for name, data, _ in _control_records(second) if name == policy_keys.CONTROL_SOURCE] == [POLICY]
 
 
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):

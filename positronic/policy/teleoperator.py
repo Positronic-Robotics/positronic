@@ -12,8 +12,10 @@ from positronic.policy.keys import LICENSE, TELEOPERATOR, TYPE
 
 
 class Teleoperator(Policy):
-    """The teleoperator at the rig. ``inputs`` gets each message of the console. A step carries the message that came
-    since the last step, or no element when none came. ``license`` is the license of the commands of the person."""
+    """The teleoperator at the rig. ``inputs`` gets each message of the console. The first step of a run carries the
+    last message of the console, so a press from before the episode is not new. Each later step carries the message
+    that came since the step before, or no element when none came. ``license`` is the license of the commands of the
+    person."""
 
     def __init__(self, inputs: pimm.SignalReceiver[dict[str, Any]], license: str):
         self._inputs = inputs
@@ -24,6 +26,7 @@ class Teleoperator(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         yield
+        message = self._inputs.read()
         while True:
-            message = pimm.read_updated(self._inputs)
             yield Step(dict(message.data) if message is not None else {}, runtime.time_ns)
+            message = pimm.read_updated(self._inputs)
