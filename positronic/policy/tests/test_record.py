@@ -65,20 +65,28 @@ def test_the_uses_encode_as_one_sorted_json_list_and_decode_back():
     assert decode_uses(encode_uses(uses)) == uses
 
 
+def _by_signal(samples, part: int) -> dict[str, list]:
+    """The value (``part`` 1) or the time (``part`` 2) of each of ``samples``, in order, by signal."""
+    parts: dict[str, list] = {}
+    for sample in samples:
+        parts.setdefault(sample[0], []).append(sample[part])
+    return parts
+
+
 def test_a_control_value_goes_in_once_and_again_only_when_it_changes():
     samples = RecordSamples(SERIALIZERS)
     first = samples.of(POLICY_STEP, _at(10))
-    assert [(signal, value) for signal, value, _ in first] == [
-        (CONTROL_SOURCE, POLICY_SOURCE),
-        (CONTROL_USES, encode_uses(frozenset({POLICY_SOURCE}))),
-    ]
+    assert _by_signal(first, 1) == {
+        CONTROL_SOURCE: [POLICY_SOURCE],
+        CONTROL_USES: [encode_uses(frozenset({POLICY_SOURCE}))],
+    }
     assert samples.of(POLICY_STEP, _at(20)) == []
     switched = samples.of(StepRecord(TELEOPERATOR, frozenset({TELEOPERATOR}), events=(TAKE_OVER,)), _at(30))
-    assert [(signal, value) for signal, value, _ in switched] == [
-        (CONTROL_SOURCE, TELEOPERATOR),
-        (CONTROL_USES, encode_uses(frozenset({TELEOPERATOR}))),
-        (CONTROL_EVENT, TAKE_OVER.encode()),
-    ]
+    assert _by_signal(switched, 1) == {
+        CONTROL_SOURCE: [TELEOPERATOR],
+        CONTROL_USES: [encode_uses(frozenset({TELEOPERATOR}))],
+        CONTROL_EVENT: [TAKE_OVER.encode()],
+    }
 
 
 def test_the_second_event_of_a_step_comes_1_ns_after_the_first_on_each_clock_at_the_same_step():
@@ -94,11 +102,11 @@ def test_a_sample_of_a_later_step_at_the_same_world_time_comes_1_ns_after_the_la
     samples = RecordSamples(SERIALIZERS)
     samples.of(StepRecord(POLICY_SOURCE, frozenset({POLICY_SOURCE}), events=(TAKE_OVER, HAND_BACK)), _at(100))
     step = samples.of(StepRecord(TELEOPERATOR, frozenset({TELEOPERATOR}), events=(TAKE_OVER,)), _at(100))
-    assert [(signal, time) for signal, _, time in step] == [
-        (CONTROL_SOURCE, _time(101, 108)),
-        (CONTROL_USES, _time(101, 108)),
-        (CONTROL_EVENT, _time(102, 109)),
-    ]
+    assert _by_signal(step, 2) == {
+        CONTROL_SOURCE: [_time(101, 108)],
+        CONTROL_USES: [_time(101, 108)],
+        CONTROL_EVENT: [_time(102, 109)],
+    }
 
 
 def test_a_shadow_action_goes_through_the_serializer_of_its_channel():
