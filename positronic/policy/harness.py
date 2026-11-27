@@ -668,9 +668,7 @@ class Harness(pimm.ControlSystem):
             elif self._writer is not None and sampled_ns >= sample_at_ns:
                 # The summed wait goes on the next step span, so it is timed only while step spans record.
                 self._sample(
-                    timing=self._record_wait.timing
-                    if telemetry.enabled(telemetry.Level.STEP)
-                    else self._record_io_span
+                    timing=self._record_wait.timing if telemetry.enabled(telemetry.Level.STEP) else self._record_io_span
                 )
                 sample_at_ns = sampled_ns + self._recording_period_ns
             # No complete observation yet: read the sensors again after one poll period.
