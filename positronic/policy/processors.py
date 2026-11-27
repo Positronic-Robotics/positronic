@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from enum import Enum
 from functools import partial
@@ -980,7 +981,7 @@ class RTCSchedule(InferenceSchedule):
 class _StackedObs(Mapping[str, Any]):
     """``obs`` with each buffered key replaced by its stack, built on the first read of that key."""
 
-    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]]):
+    def __init__(self, obs: Obs, picked: list[Mapping[str, np.ndarray]]):
         self._obs = obs
         self._picked = picked
         self._stacks: dict[str, np.ndarray] = {}
@@ -999,32 +1000,92 @@ class _StackedObs(Mapping[str, Any]):
         return len(self._obs)
 
 
+class _Arriving(Mapping[str, np.ndarray]):
+    """The values of one entry while a background thread changes them. A read of a value waits for the result."""
+
+    def __init__(self, keys: tuple[str, ...], result: Future[dict[str, np.ndarray]]):
+        self._keys = keys
+        self._result = result
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._keys
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self._result.result()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+
+class _ArrivalThread:
+    """One background thread that applies ``change`` to the values of each new entry, in the order they come.
+
+    The main loop does none of the work. ``check`` raises the first error of a change, also of a change that
+    nothing reads.
+    """
+
+    def __init__(self, change: Callable[[dict[str, Any]], dict[str, Any]]):
+        self._change = change
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='temporal_stack_arrival')
+        self._error: BaseException | None = None
+
+    def __call__(self, values: dict[str, np.ndarray]) -> Mapping[str, np.ndarray]:
+        self.check()
+        result = self._pool.submit(self._change, values)
+        result.add_done_callback(self._keep_error)
+        return _Arriving(tuple(values), result)
+
+    def check(self) -> None:
+        if self._error is not None:
+            raise self._error
+
+    def _keep_error(self, result: Future) -> None:
+        if self._error is None and not result.cancelled():
+            self._error = result.exception()
+
+    def close(self) -> None:
+        self._pool.shutdown(cancel_futures=True)
+
+
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, observed_ns, values)`` entries, capped to the sampled window.
 
-    ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new entry,
-    except one byte-identical to the previous, which shares the previous arrays — a source slower than the
-    control loop repeats its value, and carry-over sampling reuses the stored one. It then drops entries before
-    the oldest sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
-    with a stack holding, for each offset, the latest value at or before that time — carry-over, never the
-    future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
-    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
-    ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
+    ``values`` maps each key to an array; every entry holds the same keys. ``append`` copies each new entry and
+    stores what ``arrive`` makes of the copy. An entry byte-identical to the previous one that came shares the
+    stored values — a source slower than the control loop repeats its value, and carry-over sampling reuses the
+    stored one. It then drops entries before the oldest sampled offset, keeping the one at or before it. ``sample``
+    replaces each key of an observation with a stack holding, for each offset, the latest value at or before that
+    time — carry-over, never the future. Offsets that precede the first entry either repeat the oldest entry
+    (``pad_start=True``, a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack
+    grows from 1 to ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's
+    values.
     """
 
-    def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
+    def __init__(
+        self,
+        offsets_sec: tuple[float, ...],
+        pad_start: bool = True,
+        arrive: Callable[[dict[str, np.ndarray]], Mapping[str, np.ndarray]] = dict,
+    ):
         self._offsets_sec = offsets_sec
         self._pad_start = pad_start
-        self._entries: deque[tuple[float, int | None, dict[str, np.ndarray]]] = deque()
+        self._arrive = arrive
+        self._entries: deque[tuple[float, int | None, Mapping[str, np.ndarray]]] = deque()
+        self._newest_new: dict[str, np.ndarray] = {}
 
     def reset(self):
         self._entries.clear()
+        self._newest_new = {}
 
     def append(self, now: float, observed_ns: int | None, values: dict[str, np.ndarray]):
-        if self._entries and all(np.array_equal(self._entries[-1][2][k], v) for k, v in values.items()):
+        if self._entries and all(np.array_equal(self._newest_new[k], v) for k, v in values.items()):
             self._entries.append((now, observed_ns, self._entries[-1][2]))
         else:
-            self._entries.append((now, observed_ns, {k: np.array(v) for k, v in values.items()}))
+            self._newest_new = {k: np.array(v) for k, v in values.items()}
+            self._entries.append((now, observed_ns, self._arrive(self._newest_new)))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
@@ -1062,8 +1123,9 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
     are omitted, and the stack grows until the full window has been observed.
 
-    ``on_arrival`` changes the selected channels of each observation after the stack reads the time, so the time
-    it takes does not move the sample. It has no wire form.
+    ``on_arrival`` changes the selected channels of each new observation on one background thread of the stack.
+    The main loop does none of that work, so no clock that a component reads moves. A read of a stacked value
+    waits for the change of each sample in it. A repeated value keeps its changed copy. It has no wire form.
     """
 
     WIRE_NAME = 'temporal_stack'
@@ -1091,30 +1153,34 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
         return self._keys
 
     def with_arrival(self, on_arrival: Callable[[dict[str, Any]], dict[str, Any]]) -> 'TemporalStack':
-        """This stack, with ``on_arrival`` applied to each observation after the stack reads the time."""
+        """This stack, with ``on_arrival`` applied to each new observation on a background thread."""
         return TemporalStack(self._keys, self._offsets_sec, self._pad_start, on_arrival)
 
     def field_use(self, field: str) -> FieldUse:
         return FieldUse.OTHER if field in self._keys else FieldUse.FORWARDED
 
     def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT, ReturnT]) -> ProcessorRun[Obs, OutputT, ReturnT]:
-        buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
-        obs = yield
-        while True:
-            now_sec = runtime.time_ns / 1e9
-            step_observed_ns = runtime.observed_ns
-            values = {k: obs[k] for k in self._keys}
-            buffer.append(now_sec, step_observed_ns, self._on_arrival(values) if self._on_arrival else values)
-            stacked_observed_ns = buffer.newest_observed_ns(now_sec)
-            if self._stacks_camera_frames and step_observed_ns is not None and stacked_observed_ns is not None:
-                runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
-            try:
-                output = inner.send(buffer.sample(now_sec, obs))
-            except StopIteration as end:
-                return end.value
-            finally:
-                runtime.observed_ns = step_observed_ns
-            obs = yield output
+        arrivals = None if self._on_arrival is None else _ArrivalThread(self._on_arrival)
+        buffer = _StackBuffer(self._offsets_sec, self._pad_start, dict if arrivals is None else arrivals)
+        try:
+            obs = yield
+            while True:
+                now_sec = runtime.time_ns / 1e9
+                step_observed_ns = runtime.observed_ns
+                buffer.append(now_sec, step_observed_ns, {k: obs[k] for k in self._keys})
+                stacked_observed_ns = buffer.newest_observed_ns(now_sec)
+                if self._stacks_camera_frames and step_observed_ns is not None and stacked_observed_ns is not None:
+                    runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
+                try:
+                    output = inner.send(buffer.sample(now_sec, obs))
+                except StopIteration as end:
+                    return end.value
+                finally:
+                    runtime.observed_ns = step_observed_ns
+                obs = yield output
+        finally:
+            if arrivals is not None:
+                arrivals.close()
 
     def to_spec(self) -> dict[str, Any]:
         return {

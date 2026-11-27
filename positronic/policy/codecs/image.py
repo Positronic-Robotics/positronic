@@ -229,7 +229,7 @@ def _is_rgb_frame(value: Any) -> bool:
 
 
 class TransformOnArrival(Codec):
-    """Transform each camera frame in ``fields`` as ``transform`` does, on the step where the frame arrives.
+    """Transform each camera frame in ``fields`` as ``transform`` does, once, when the frame arrives.
 
     A field that is absent, or that holds no RGB frame, passes unchanged.
     """
