@@ -1,11 +1,14 @@
-"""The parts that the scripted experts of the simulated tasks share: the commanded pose that moves toward a goal, the
-path that the source that drives keeps to, the press fields of a console, and the readers of an observation.
+"""The parts that the scripted experts of the simulated tasks share: the statics of an arm, the commanded pose that
+moves toward a goal, the idle arm, the path that the source that drives keeps to, the press fields of a console, and the
+readers of an observation.
 
-An expert is the helper of a run. It reads the pose at ``GRIPPER_SITE`` and the grip of the arm, and the ground truth
-of the scene under ``GROUND_TRUTH``. It sends a pose at ``GRIPPER_SITE`` and a grip.
+An expert is the helper of a run. It reads the pose at ``GRIPPER_SITE`` and the grip of each arm, and the ground truth
+of the scene under ``GROUND_TRUTH``. It sends a pose at ``GRIPPER_SITE`` and a grip on the channels of each arm. An arm
+of ``None`` is the one arm of a rig whose channels carry no arm name.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
@@ -14,6 +17,7 @@ from eval_vocabulary.episode import GT_STATE_GRIPPER_CONTACT, GT_STATE_OBJECTS, 
 
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.policy.base import Commands, Obs
 from positronic.policy.keys import GROUND_TRUTH, HELPER_HAND_BACK, HELPER_TAKE_OVER, TELEOPERATOR
 from positronic.policy.takeover import ControlObservation
@@ -31,12 +35,30 @@ STALL_NS = 1_500_000_000
 DOWN = geom.Rotation.from_euler([np.pi, 0.0, 0.0])
 # The phases of the path of an expert.
 PhaseT = TypeVar('PhaseT', bound=Enum)
+# The grip point of an arm whose grip closes at ``GRIPPER_SITE``.
+AT_GRIPPER_SITE = geom.Transform3D()
+
+
+@dataclass(frozen=True)
+class ArmStatics:
+    """What an expert knows of an arm that its observation does not give."""
+
+    grip_point: geom.Transform3D  # where the grip closes, measured from ``GRIPPER_SITE``
+    mount: np.ndarray  # the base of the arm in the rig's world frame
+    # Where the expert moves the grip point to get the arm out of the way, measured from the mount. The grip point
+    # points down there, so the IK must reach it with the grip down.
+    park: np.ndarray
 
 
 def yaw(rotation: geom.Rotation) -> float:
     """The angle about z of the x axis of ``rotation``."""
     x_axis = rotation.as_rotation_matrix[:, 0]
     return float(np.arctan2(x_axis[1], x_axis[0]))
+
+
+def down(rotation: geom.Rotation) -> geom.Rotation:
+    """The rotation of a grip point that points down, with the yaw of ``rotation``."""
+    return geom.Rotation.from_euler([0.0, 0.0, yaw(rotation)]) * DOWN
 
 
 def wrap(angle: float) -> float:
@@ -79,6 +101,26 @@ class Command:
         if seconds > 0:
             self.pose = toward(self.pose, goal, SPEED * seconds, TURN_SPEED * seconds)
         return self.pose
+
+
+class IdleArm:
+    """The commands of an arm that does not do the task: its grip point moves to the park position of the arm, with the
+    grip open."""
+
+    def __init__(self, arm: str | None, statics: ArmStatics, obs: Obs, now_ns: int):
+        self._arm, self._statics = arm, statics
+        self._command = Command(grip_pose(obs, arm, statics.grip_point), now_ns)
+
+    def commands(self, obs: Obs, now_ns: int, drives: bool) -> dict[str, Any]:
+        """The commands of the arm at ``now_ns``. While the expert does not drive, the commanded pose stays at the grip
+        point."""
+        pose = grip_pose(obs, self._arm, self._statics.grip_point)
+        if drives:
+            self._command.follow(pose)
+        else:
+            self._command.restart(pose, now_ns)
+        goal = geom.Transform3D(self._statics.mount + self._statics.park, down(self._command.pose.rotation))
+        return arm_commands(self._command.advance(goal, now_ns), 0.0, self._arm, self._statics.grip_point)
 
 
 class Path(Generic[PhaseT]):
@@ -137,20 +179,34 @@ class Console(Generic[PhaseT]):
         return {**commands, HELPER_TAKE_OVER: self._take_over, HELPER_HAND_BACK: self._hand_back}
 
 
-def grip_pose(obs: Obs) -> geom.Transform3D:
-    """The pose of the grip point at ``GRIPPER_SITE`` in ``obs``, in the rig's world frame."""
-    ee_pose = np.asarray(obs[keys.EE_POSE])
-    return geom.Transform3D.from_vector(ee_pose, geom.Rotation.Representation.QUAT)
+def frames(arms: Iterable[str | None]) -> dict[str, EEFrame]:
+    """The frame of each pose that an expert reads and commands on the arms ``arms``: ``GRIPPER_SITE``."""
+    poses = []
+    for arm in arms:
+        poses += [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}']
+        poses += [f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}']
+    return dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE))
 
 
-def grip(obs: Obs) -> float:
-    """The observed grip in ``obs``: 0 open, 1 closed."""
-    return float(obs[keys.GRIP])
+def grip_pose(obs: Obs, arm: str | None = None, grip_point: geom.Transform3D = AT_GRIPPER_SITE) -> geom.Transform3D:
+    """The pose of the grip point ``grip_point`` of ``arm`` in ``obs``, in the rig's world frame."""
+    ee_pose = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'])
+    return geom.Transform3D.from_vector(ee_pose, geom.Rotation.Representation.QUAT) * grip_point
 
 
-def arm_commands(pose: geom.Transform3D, grip: float) -> dict[str, Any]:
-    """The commands that move the grip point to ``pose`` and set the grip."""
-    return {keys.ROBOT_COMMAND: CartesianPosition(pose), keys.TARGET_GRIP: grip}
+def grip(obs: Obs, arm: str | None = None) -> float:
+    """The observed grip of ``arm`` in ``obs``: 0 open, 1 closed."""
+    return float(obs[keys.arm_channel(keys.GRIP, arm)])
+
+
+def arm_commands(
+    pose: geom.Transform3D, grip: float, arm: str | None = None, grip_point: geom.Transform3D = AT_GRIPPER_SITE
+) -> dict[str, Any]:
+    """The commands that move the grip point ``grip_point`` of ``arm`` to ``pose`` and set its grip."""
+    return {
+        keys.arm_channel(keys.ROBOT_COMMAND, arm): CartesianPosition(pose * grip_point.inv),
+        keys.arm_channel(keys.TARGET_GRIP, arm): grip,
+    }
 
 
 def object_key(name: str, field: str) -> str:

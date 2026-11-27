@@ -11,7 +11,7 @@ from eval_vocabulary.episode import GT_STATE_SIGNAL
 import pimm
 from positronic import wire
 from positronic.cfg.embodiment import mujoco_franka
-from positronic.dagger.rounds import Rig
+from positronic.dagger.rounds import Rig, run_harness
 from positronic.eval import Embodiment
 from positronic.policy.base import Policy
 from positronic.policy.harness import Harness, Rollout
@@ -69,17 +69,5 @@ class MujocoRig(Rig):
             harness = Harness(embodiment)
             world.connect(sim.gt_state, done.gt_state)
             wire.wire_embodiment(world, harness, embodiment, privileged={GT_STATE_SIGNAL: sim.gt_state}, done=done.done)
-            caller = world.pair(harness.perform_task)
-            loop = world.start([harness, done, *embodiment.control_systems])
-
-            def perform(rollout: Rollout) -> dict[str, Any]:
-                answer = caller(rollout)
-                while not answer.done():
-                    next(loop)
-                return answer.result()
-
-            try:
+            with run_harness(world, harness, [done, *embodiment.control_systems]) as perform:
                 yield perform, LiftCubeExpert(self._license, takes_over_at_start=takes_over_at_start)
-            finally:
-                world.request_stop()
-                list(loop)

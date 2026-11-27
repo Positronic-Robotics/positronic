@@ -23,6 +23,12 @@ EPISODE_LENGTH_OVERRIDE = 'robolab.episode_length_override'
 INSTRUCTION_TYPE = 'robolab.instruction_type'
 # The camera set of the run, in ``ROBOT_CAMERA_SETS``, which ``_reset_token`` reads back.
 CAMERAS = 'robolab.cameras'
+# The scene state that the reset restores, in the tree of RoboLab's ``scene.get_state(is_relative=True)``. The reset
+# writes its entries over the state of the scene file. Absent when the scene randomizes.
+STATE = 'robolab.state'
+# The names in that tree: the rigid objects, and the root pose of each as [x, y, z, qw, qx, qy, qz].
+STATE_RIGID_OBJECTS = 'rigid_object'
+STATE_ROOT_POSE = 'root_pose'
 
 # A step frame's field when the env ended a clone's episode because the clone cannot go on. Its value is the fault.
 FRAME_FAULT = 'fault'

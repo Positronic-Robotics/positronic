@@ -31,7 +31,8 @@ def _droid_camera_dict(names: Sequence[str]) -> dict[str, str]:
     return {keys.WRIST_IMAGE if name == robolab_keys.WRIST_CAMERA else exteriors.pop(0): name for name in names}
 
 
-def _yam_camera_dict(names: Sequence[str]) -> dict[str, str]:
+def yam_camera_dict(names: Sequence[str]) -> dict[str, str]:
+    """The camera of each name in ``names``, by the observation name that the YAM rig gives that camera."""
     return {_YAM_CAMERAS[name]: name for name in names}
 
 
@@ -40,7 +41,7 @@ def _droid_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]
     return remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
 
 
-def _yam_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]) -> Embodiment:
+def yam_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]) -> Embodiment:
     # The env server holds no positronic, so the client carries the arm model, as the rig records it.
     return remote_embodiment(
         proxy,
@@ -65,7 +66,7 @@ class _RobotEval:
 
 _ROBOT_EVALS = {
     robolab_keys.DROID: _RobotEval(_droid_camera_dict, RobolabDroidAdapter, _droid_embodiment),
-    robolab_keys.YAM: _RobotEval(_yam_camera_dict, RobolabYamAdapter, _yam_embodiment),
+    robolab_keys.YAM: _RobotEval(yam_camera_dict, RobolabYamAdapter, yam_embodiment),
 }
 
 

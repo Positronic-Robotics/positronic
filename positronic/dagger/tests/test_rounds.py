@@ -5,8 +5,10 @@ import sys
 from collections.abc import Collection
 from contextlib import contextmanager
 from dataclasses import replace
+from itertools import islice
 from pathlib import Path
 
+import configuronic as cfn
 import numpy as np
 import pytest
 
@@ -15,6 +17,7 @@ from pimm.tests.testing import Passive
 from positronic import keys
 from positronic.cfg import dagger
 from positronic.dagger import META_RECORD_UID, META_ROUND
+from positronic.dagger.env_server import EnvServerRig
 from positronic.dagger.rounds import ModelCommands, Rig, RoundZeroPolicy, run
 from positronic.dagger.tests import stub_model
 from positronic.dataset.episode import META_UID
@@ -28,6 +31,8 @@ from positronic.policy.base import Policy
 from positronic.policy.executor import Executor
 from positronic.policy.teleoperator import Teleoperator
 from positronic.policy.tests import test_dagger as dagger_tests
+from positronic.simulator.robolab import keys as robolab_keys
+from positronic.simulator.robolab.expert import BananaInBowlExpert, layout
 
 _LABELS = (keys.TARGET_EE_POSE, keys.TARGET_GRIP)
 _STUB = (sys.executable, '-m', 'positronic.dagger.tests.stub_model')
@@ -421,3 +426,36 @@ def test_the_training_data_of_round_1_holds_the_teleoperator_runs_of_round_0_and
     converted = stub_model.episodes(rounds / 'round_1' / 'converted')
     assert [(each['round'], each['record_uid']) for each in converted] == listed
     assert _checkpoint(rounds, 1) == stub_model.checkpoint_id(converted)
+
+
+def test_the_robolab_config_builds_the_rig_the_tasks_with_a_layout_each_and_the_expert_of_banana_in_bowl():
+    config = dagger.robolab_banana_in_bowl.override(
+        output_dir='unused', round_0_license='test', **{'rig.teleoperator.license': 'test'}
+    )
+    built = cfn.Config(dict, **config.kwargs).instantiate()
+
+    assert isinstance(built['rig'], EnvServerRig)
+    observations = set(built['rig'].observations)
+    for arm in keys.BIMANUAL_ARMS:
+        assert keys.arm_channel(keys.ROBOT_STATE, arm) in observations
+        assert keys.arm_channel(keys.GRIP, arm) in observations
+    assert {keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE} <= observations
+    first, second = islice(built['tasks'], 2)
+    scenes = [task.prepare_args[eval_keys.SCENE] for task in (first, second)]
+    assert [scene[eval_keys.TASK] for scene in scenes] == ['BananaInBowlTask'] * 2
+    assert [scene[robolab_keys.CAMERAS] for scene in scenes] == [robolab_keys.TOP_AND_WRISTS] * 2
+    assert [task.meta[eval_keys.SEED] for task in (first, second)] == [0, 1]
+    assert scenes[0][robolab_keys.STATE] == layout(np.random.default_rng(0), 0.05, np.radians(30.0))
+    assert scenes[0][robolab_keys.STATE] != scenes[1][robolab_keys.STATE]
+    # The env server starts at the first request of the proxy, so the harness of the rig starts no RoboLab here.
+    with built['rig'].harness(takes_over_at_start=True) as (_, teleoperator):
+        pass
+    assert isinstance(teleoperator, BananaInBowlExpert)
+    meta = teleoperator.meta()
+    assert (meta[policy_keys.TYPE], meta[policy_keys.LICENSE]) == (BananaInBowlExpert.WIRE_NAME, 'test')
+    for statics in teleoperator.arms.values():
+        assert (statics.reach, statics.rest_yaw, statics.wrist_turn) == (0.48, np.pi / 2, np.radians(100.0))
+        assert np.array_equal(statics.park, dagger.YAM_PARK)
+    # positronic's LeRobot ACT has no two-arm recipe, so the config binds no model.
+    assert 'model' not in built
+    assert (built['rounds'], built['episodes']) == (3, 20)

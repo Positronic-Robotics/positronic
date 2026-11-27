@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from positronic import geom, keys
-from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import ee_frames_entry
 from positronic.policy.base import Policy, PolicyRun, Runtime, Step
 from positronic.policy.keys import CONTROL, LICENSE, TELEOPERATOR, TYPE
 from positronic.policy.takeover import ControlObservation
@@ -28,6 +28,7 @@ from positronic.simulator.expert import (
     apart,
     arm_commands,
     check_truth,
+    frames,
     grip,
     grip_pose,
     object_pose,
@@ -57,7 +58,7 @@ STUCK_NS = 500_000_000  # how long a grip point stays still, short of the comman
 # by more than this goes back to ``RISE``.
 RISE_MARGIN = 0.03
 # The frames of the poses that the expert reads and commands: the frames of the one-arm rig.
-FRAMES = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE)}
+FRAMES = frames(keys.ONE_ARM)
 
 
 class Phase(Enum):

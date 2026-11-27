@@ -16,6 +16,9 @@ See [Model Selection Guide](../../../docs/model-selection.md) for comparison.
 | **Inference** | Consumer GPU (4GB+) | RTX 3060, 4060, or similar |
 | **Development** | CPU acceptable | For testing (slower inference) |
 
+Training reads the videos of a dataset with `torchcodec`, which loads the FFmpeg libraries of the host, versions 4
+to 7. On Ubuntu, install the `ffmpeg` package.
+
 ## Quick Start
 
 ```bash

@@ -29,6 +29,7 @@ import configuronic as cfn
 import numpy as np
 from positronic_wire.wire import SESSION_PATH, HostPortAddress
 
+import pimm
 from positronic import keys
 from positronic.dagger.training_data import write_training_data
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -37,7 +38,7 @@ from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Commands, Obs, Policy, PolicyRun, Runtime, Step
 from positronic.policy.dagger import DaggerDataset
-from positronic.policy.harness import Rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.policy.keys import LICENSE, NO_LICENSE, TYPE
 from positronic.policy.license import LicenseRule
 from positronic.policy.remote import RemotePolicy
@@ -108,6 +109,28 @@ class Rig(ABC):
         """Run the harness of the rig for the context. The value is a pair: a function that runs one rollout and returns
         its answer, and the teleoperator. ``takes_over_at_start`` is true in round 0, where the teleoperator takes over
         at the start of each episode."""
+
+
+@contextmanager
+def run_harness(
+    world: pimm.World, harness: Harness, control_systems: Iterable[pimm.ControlSystem]
+) -> Iterator[Callable[[Rollout], dict[str, Any]]]:
+    """Run ``harness`` and ``control_systems`` in ``world`` for the context, and stop them at its end. The value runs
+    one rollout on the loop of the world and returns its answer, as ``Rig.harness`` gives it."""
+    caller = world.pair(harness.perform_task)
+    loop = world.start([harness, *control_systems])
+
+    def perform(rollout: Rollout) -> dict[str, Any]:
+        answer = caller(rollout)
+        while not answer.done():
+            next(loop)
+        return answer.result()
+
+    try:
+        yield perform
+    finally:
+        world.request_stop()
+        list(loop)
 
 
 @dataclass(frozen=True)
