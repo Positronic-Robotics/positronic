@@ -34,8 +34,9 @@ from .service import Button, Phase
 logger = logging.getLogger(__name__)
 
 _STATE_POLL_SEC = 0.05
-# A press of Ready that the page does not show within this time is released and pressed again.
-_READY_PRESS_AGAIN_AFTER_SEC = 1.0
+# A press that the page does not show within this time is released and pressed again. It is above the 0.5 s default
+# stale limit of the WebXR driver, so a press that the service counts shows on the page before the next press.
+_PRESS_AGAIN_AFTER_SEC = 1.0
 
 
 def _buttons(*down: Button) -> tuple[float, ...]:
@@ -164,7 +165,8 @@ def _press_until(
     not pass ``seen`` within ``again_after``, release the button and press it again.
 
     The press lasts until the page shows its effect: a loaded service can read no sample in a hold of fixed length. The
-    release makes the next press of the button a new press, and a press again recovers a release the service missed.
+    release makes the next press of the button a new press. A press again recovers a release that the service missed,
+    and a press that the WebXR driver dropped because it came late.
     """
     while True:
         logger.info('The scripted headset presses %s', button.name)
@@ -183,12 +185,15 @@ def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
     page.until(lambda state: state.phase is Phase.READY_WAIT)
     # A trial that ends at once after Ready, for example by a short timeout, can end before this poll sees it run.
     ready = _press_until(
-        page, hand, Button.B, lambda state: state.phase is not Phase.READY_WAIT, _READY_PRESS_AGAIN_AFTER_SEC
+        page, hand, Button.B, lambda state: state.phase is not Phase.READY_WAIT, _PRESS_AGAIN_AFTER_SEC
     )
     if ready.phase is not Phase.RUNNING:
         logger.warning('The trial ended before the scripted headset saw it run')
         return
-    if not _press_until(page, hand, Button.A, lambda state: state.control or state.phase is not Phase.RUNNING).control:
+    clutch = _press_until(
+        page, hand, Button.A, lambda state: state.control or state.phase is not Phase.RUNNING, _PRESS_AGAIN_AFTER_SEC
+    )
+    if not clutch.control:
         logger.warning('The trial ended before the scripted headset turned control on')
     hand.moving_since = time.monotonic()
     while page.phase() is Phase.RUNNING and time.monotonic() - hand.moving_since < trial_sec:
