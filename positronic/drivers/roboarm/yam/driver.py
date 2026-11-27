@@ -845,13 +845,6 @@ class _Serving:
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]] | None = None
 
 
-class _ServeEnd(Enum):
-    """Why the serve of an open chain ended: the world stopped, or ``engaged`` turned off and the park is verified."""
-
-    STOPPED = 'stopped'
-    PARKED = 'parked'
-
-
 class Robot(pimm.ControlSystem):
     """Drives one YAM chain: FK/IK in the driver, joint-space position-PD on the arm.
 
@@ -1000,6 +993,13 @@ class Robot(pimm.ControlSystem):
             if error is not None:
                 asked = yield from self._hold(error, should_stop, clock)
 
+    class _ServeEnd(Enum):
+        """Why the serve of an open chain ended: the world stopped, or ``engaged`` turned off and the park is
+        verified."""
+
+        STOPPED = 'stopped'
+        PARKED = 'parked'
+
     def _drive_chain(
         self,
         kinematics: YamKinematics,
@@ -1055,7 +1055,7 @@ class Robot(pimm.ControlSystem):
                 self._answer_start_calls(asked, missed)
                 asked = []
                 serving = _Serving(joints, grip, missed, idle_since=clock.now())
-                if (yield from self._serve_until_parked(arm, serving, should_stop, clock)) is _ServeEnd.PARKED:
+                if (yield from self._serve_until_parked(arm, serving, should_stop, clock)) is self._ServeEnd.PARKED:
                     return None  # the chain closes with no shutdown park
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
@@ -1080,14 +1080,14 @@ class Robot(pimm.ControlSystem):
         while True:
             yield from self._serve(arm, serving, should_stop, clock)
             if should_stop.value:
-                return _ServeEnd.STOPPED
+                return self._ServeEnd.STOPPED
             logger.info('The engaged input turned off: parking the arm before the torque goes off')
             serving.q_target, serving.grip_target, failure = yield from arm.park(
                 arm.read_grip(arm.observations()), interrupt_on_stop=False
             )
             if failure is None:
                 logger.info('The arm is parked; the torque goes off until the engaged input turns on')
-                return _ServeEnd.PARKED
+                return self._ServeEnd.PARKED
             serving.failed_move, serving.park_failed = failure, True
             logger.critical('Parking failed; the arm stays powered until the engaged input turns on and off again')
 
