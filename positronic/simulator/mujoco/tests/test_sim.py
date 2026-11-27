@@ -5,6 +5,7 @@ import re
 import mujoco as mj
 import numpy as np
 import pytest
+from eval_vocabulary.episode import GT_STATE_GRIPPER_CONTACT, GT_STATE_OBJECTS
 
 import pimm
 from positronic import geom
@@ -14,8 +15,9 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
 from positronic.drivers.roboarm.models import GRIPPER_SITE, bundled_panda_model
 from positronic.geom import Transform3D
+from positronic.simulator.mujoco import lift_cube
 from positronic.simulator.mujoco.sim import SCENE_XML, MujocoSim
-from positronic.simulator.mujoco.transforms import MujocoSceneTransform
+from positronic.simulator.mujoco.transforms import MujocoSceneTransform, SetBodyPosition
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 MODEL = 'positronic/assets/mujoco/franka_table.xml'
@@ -379,3 +381,18 @@ def test_mujoco_grip_one_is_closed():
     assert snapshots['closed_grip'] > 0.9
     assert snapshots['opened'] > 0.035
     assert snapshots['opened_grip'] < 0.1
+
+
+def test_the_ground_truth_gives_the_pose_of_each_named_object_and_whether_a_finger_touches_it():
+    at = (0.5, 0.1, lift_cube.TABLE_TOP + lift_cube.CUBE_HALF)
+    loaders = (lift_cube.CUBE, SetBodyPosition(body_name=lift_cube.CUBE.body_name, position=at))
+    sim = MujocoSim(MODEL, loaders, objects={lift_cube.CUBE_NAME: lift_cube.CUBE.body_name})
+
+    with pimm.World(virtual_time=True) as world:
+        truth = world.pair(sim.gt_state)
+        scheduler = world.start([sim])
+        drive_scheduler(scheduler, steps=_turns(sim, 0.1))
+        value = truth.value
+
+    np.testing.assert_allclose(value[lift_cube.CUBE_POSE], [*at, 1.0, 0.0, 0.0, 0.0], atol=1e-3)
+    assert value[f'.{GT_STATE_OBJECTS}.{lift_cube.CUBE_NAME}.{GT_STATE_GRIPPER_CONTACT}'] is False

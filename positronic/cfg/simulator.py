@@ -1,5 +1,6 @@
 import configuronic as cfn
 
+from positronic.simulator.mujoco import lift_cube
 from positronic.simulator.mujoco.transforms import (
     AddBox,
     AddCameras,
@@ -31,6 +32,18 @@ def stack_cubes_loaders():
         STACK_GREEN_CUBE,
         SetBodyPosition(
             body_name=STACK_GREEN_CUBE.body_name, random_position=((0.31, -0.28, 0.31), (0.69, 0.28, 0.31))
+        ),
+    ]
+
+
+@cfn.config()
+def lift_cube_loaders():
+    """The scene of ``lift_cube``: one cube at a random place on the table, in reach of the arm."""
+    height = lift_cube.TABLE_TOP + lift_cube.CUBE_HALF
+    return [
+        lift_cube.CUBE,
+        SetBodyPosition(
+            body_name=lift_cube.CUBE.body_name, random_position=((0.4, -0.15, height), (0.6, 0.15, height))
         ),
     ]
 
