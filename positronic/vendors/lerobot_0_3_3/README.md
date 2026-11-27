@@ -60,6 +60,7 @@ LeRobot supports two primary codecs for different observation/action configurati
 | `joints` | Joint positions (7D) + grip (1D) + images | Absolute EE position (7D quat) + grip | Joint-space observations with task-space control |
 | `ee_traj` | EE pose (7D quat) + grip + images | Absolute EE trajectory (7D quat) + grip (binarized) | Training on actual robot trajectory |
 | `joints_traj` | Joint positions (7D) + grip + images | Absolute joint trajectory (7D) + grip (binarized) | Joint-space trajectory training |
+| `ee_bimanual` | EE pose (7D quat) + grip of each arm, left arm first + the exterior and the two wrist images | Absolute EE position (7D quat) + grip of each arm, left arm first | The two-arm YAM. The server pipeline of the same name decodes the action with `BimanualCartesianAction` |
 
 **Key features:**
 - Uses `task_field='task'` (LerobotPolicy filters this before passing to ACT)
@@ -107,7 +108,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 |-----------|-------------|---------|---------|
 | subcommand | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
 | `--model.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
-| `--pipeline.ee_frame` | The EE frame the checkpoint speaks, as an offset from a site of the rig's model. `joints_traj` and the IK pipelines set `None` | Required on `ee`, `joints`, `ee_traj`, `ee_flip` | `@positronic.cfg.codecs.gripper_frame` |
+| `--pipeline.ee_frame` | The EE frame the checkpoint speaks, as an offset from a site of the rig's model. `joints_traj` and the IK pipelines set `None` | Required on `ee`, `joints`, `ee_traj`, `ee_flip`, `ee_bimanual` | `@positronic.cfg.codecs.gripper_frame` |
 | `--model.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--websocket.served_address.port` | WebSocket wire port | `8000` | `8001` |
 | `--websocket.served_address.host` | WebSocket wire host | `0.0.0.0` | Binds to all interfaces |

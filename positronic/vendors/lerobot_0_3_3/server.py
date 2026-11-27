@@ -68,6 +68,7 @@ def pipeline(
     horizon_sec: float | None = 1.0,
     binarize_grip: tuple[str, ...] | None = None,
     flip_grip: bool = False,
+    arms: tuple[str | None, ...] = keys.ONE_ARM,
 ) -> PolicyDeployment:
     return PolicyDeployment(
         local=Sequential(
@@ -76,7 +77,7 @@ def pipeline(
             TransformImages(224, 224, mode=ResizeMode.BOUND),
         ),
         codec=codecs.compose_data(
-            obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame
+            obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame, arms=arms
         ),
     )
 
@@ -111,6 +112,10 @@ joints_ik_sim = pipeline.override(**{
 })
 # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
 ee_flip = pipeline.override(flip_grip=True)
+# The two-arm YAM: a pose command and a grip for each arm, left arm first.
+ee_bimanual = pipeline.override(
+    obs=codecs.bimanual_eepose_obs, action=codecs.bimanual_pos_action, arms=keys.BIMANUAL_ARMS
+)
 
 
 # The phail checkpoints speak the real Franka's ``F_T_EE``, the sim_stack and demo ones the sim panda's ``EE_LINK``.
@@ -144,6 +149,7 @@ COMMANDS = {
     'joints_ik': serve.override(model=act_model, pipeline=joints_ik),
     'joints_ik_sim': serve.override(model=act_model, pipeline=joints_ik_sim),
     'ee_flip': serve.override(model=act_model, pipeline=ee_flip),
+    'ee_bimanual': serve.override(model=act_model, pipeline=ee_bimanual),
     'phail': serve.override(
         model=act_model.override(checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/'), pipeline=phail
     ),

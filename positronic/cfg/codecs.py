@@ -15,6 +15,7 @@ from positronic.drivers.roboarm.models import (
 )
 from positronic.policy import training
 from positronic.policy.codecs import (
+    BimanualCartesianAction,
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
@@ -76,6 +77,20 @@ joints_obs = joints_grip_obs.override(
 eepose_joints_obs = eepose_grip_joints_obs.override(
     image_mappings={'observation.images.left': keys.WRIST_IMAGE, 'observation.images.side': keys.EXTERIOR_IMAGE}
 )
+# A two-arm embodiment: the pose and the grip of each arm, left arm first, as ``BimanualCartesianAction`` orders the
+# action, and the exterior camera and the wrist camera of each arm.
+bimanual_eepose_obs = eepose_grip_obs.override(
+    state_features={
+        keys.arm_key(key, arm): width
+        for arm in keys.BIMANUAL_ARMS
+        for key, width in {keys.EE_POSE: 7, keys.GRIP: 1}.items()
+    },
+    image_mappings={
+        'observation.images.exterior': keys.EXTERIOR_IMAGE,
+        'observation.images.wrist_left': keys.WRIST_LEFT_IMAGE,
+        'observation.images.wrist_right': keys.WRIST_RIGHT_IMAGE,
+    },
+)
 
 
 # The grip point, where every rig reports its poses.
@@ -90,30 +105,49 @@ yam_grasp_site_frame = gripper_frame.override(offset=YAM_GRASP_SITE_FRAME)
 droid_frame = gripper_frame.override(offset=DROID_EE_FRAME)
 
 
-@cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None)
-def compose_data(obs, action, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None):
+@cfn.config(binarize_grip=None, flip_grip=False, ee_frame=None, arms=keys.ONE_ARM)
+def compose_data(
+    obs,
+    action,
+    binarize_grip: tuple[str, ...] | None,
+    flip_grip: bool,
+    ee_frame: EEFrame | None,
+    arms: tuple[str | None, ...],
+):
     """Compose observation and action conversions, with optional grip and frame conversions.
 
     ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame`` is the
-    frame the checkpoint speaks its poses in: a ``ChangeEEFrame`` declares it and re-expresses a dataset in it for
-    training. A codec that reads or writes poses states one; ``None`` speaks joints only.
+    frame the checkpoint speaks its poses in: a ``ChangeEEFrame`` declares it for the poses of each arm of ``arms``
+    and re-expresses a dataset in it for training. A codec that reads or writes poses states one; ``None`` speaks
+    joints only. The grip conversions also act on each arm of ``arms``.
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(ee_frame) | result
+        result = ChangeEEFrame(ee_frame, keys.frame_keys(arms)) | result
     if flip_grip:
-        result = FlipGrip() | result
+        # ``FlipGrip()`` publishes wire version 1, which one-arm clients read.
+        result = FlipGrip(None if arms == keys.ONE_ARM else arms) | result
     if binarize_grip:
-        result = BinarizeGripTraining(binarize_grip) | BinarizeGripInference() | result
+        for arm in arms:
+            result = BinarizeGripInference(key=keys.arm_channel(keys.TARGET_GRIP, arm)) | result
+        result = BinarizeGripTraining(binarize_grip) | result
     return result
 
 
-@cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None)
+@cfn.config(training_fps=15.0, binarize_grip=None, flip_grip=False, ee_frame=None, arms=keys.ONE_ARM)
 def compose(
-    obs, action, training_fps: float, binarize_grip: tuple[str, ...] | None, flip_grip: bool, ee_frame: EEFrame | None
+    obs,
+    action,
+    training_fps: float,
+    binarize_grip: tuple[str, ...] | None,
+    flip_grip: bool,
+    ee_frame: EEFrame | None,
+    arms: tuple[str | None, ...],
 ):
     """Data conversions with the sampling cadence recorded in training metadata."""
-    result = compose_data(obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame)
+    result = compose_data(
+        obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame, arms=arms
+    )
     return Metadata({ACTION_FPS: training_fps}) | result
 
 
@@ -154,6 +188,7 @@ def phail_v1_execution(action):
 
 
 traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key=keys.EE_POSE, tgt_grip_key=keys.GRIP)
+bimanual_pos_action = cfn.Config(BimanualCartesianAction)
 
 
 @cfn.config(

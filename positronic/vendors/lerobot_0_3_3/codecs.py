@@ -6,6 +6,8 @@ from positronic.cfg import codecs
 ee = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action)
 phail_v1 = ee.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action))
 joints = ee.override(obs=codecs.joints_obs)
+# The two-arm YAM: the pose and the grip command of each arm, left arm first.
+ee_bimanual = ee.override(obs=codecs.bimanual_eepose_obs, action=codecs.bimanual_pos_action, arms=keys.BIMANUAL_ARMS)
 
 # Trajectory variants: use actual robot trajectory as action target instead of commanded targets
 ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,))

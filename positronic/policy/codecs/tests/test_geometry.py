@@ -231,6 +231,29 @@ def test_one_key_carries_a_vector_one_way_and_a_command_the_other():
     np.testing.assert_allclose(decoded['x'].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)
 
 
+def test_the_frame_keys_of_two_arms_move_the_pose_and_the_command_of_each_arm():
+    poses = {
+        arm: _pose([0.3, y, 0.4], [0.2, -0.3, 0.5]) for arm, y in zip(obs_keys.BIMANUAL_ARMS, (0.3, -0.3), strict=True)
+    }
+    codec = ChangeEEFrame(ROBOLAB_FRAME, obs_keys.frame_keys(obs_keys.BIMANUAL_ARMS))
+
+    encoded = codec.encode({
+        obs_keys.arm_key(obs_keys.EE_POSE, arm): pose.as_vector(QUAT) for arm, pose in poses.items()
+    })
+    decoded = codec._decode_single({
+        obs_keys.arm_key(obs_keys.ROBOT_COMMAND, arm): cmd_module.CartesianPosition(pose=pose * TO_ROBOLAB)
+        for arm, pose in poses.items()
+    })
+
+    for arm, pose in poses.items():
+        moved = encoded[obs_keys.arm_key(obs_keys.EE_POSE, arm)]
+        np.testing.assert_allclose(moved, (pose * TO_ROBOLAB).as_vector(QUAT), atol=1e-9)
+        command = decoded[obs_keys.arm_key(obs_keys.ROBOT_COMMAND, arm)]
+        np.testing.assert_allclose(command.pose.as_vector(QUAT), pose.as_vector(QUAT), atol=1e-9)
+    stated = [obs_keys.arm_key(key, arm) for arm in poses for key in (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE)]
+    _assert_states(codec.meta, stated, GRIPPER_SITE, TO_ROBOLAB)
+
+
 def test_encode_passes_through_when_no_pose_key_is_present():
     obs = {obs_keys.JOINTS: np.zeros(7)}
     assert ChangeEEFrame(ROBOLAB_FRAME).encode(obs) is obs

@@ -37,7 +37,7 @@ class ChangeEEFrame(EpisodeTransform):
     Every field it moves must be recorded at ``frame.site`` with no offset, since the offset is measured from there.
     """
 
-    def __init__(self, frame: EEFrame, fields: Sequence[str] = (keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND)):
+    def __init__(self, frame: EEFrame, fields: Sequence[str] = keys.frame_keys(keys.ONE_ARM)):
         self._frame = frame
         self._fields = tuple(fields)
 

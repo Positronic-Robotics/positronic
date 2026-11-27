@@ -309,7 +309,8 @@ class BimanualJointsAction(CommandsPathCodec):
 class BimanualCartesianAction(CommandsPathCodec):
     """Converts a two-arm action to and from one ``CartesianPosition`` and one grip target per arm.
 
-    Per arm, the action holds the pose as xyz and a wxyz quaternion, and then the grip, left arm first.
+    Per arm, the action holds the pose as xyz and a wxyz quaternion, and then the grip, left arm first. For training,
+    it makes the action from the commanded pose and the target grip of each arm.
     """
 
     WIRE_NAME = 'bimanual_cartesian_action'
@@ -318,6 +319,7 @@ class BimanualCartesianAction(CommandsPathCodec):
 
     def __init__(self, *, commands_path: tuple[str | int, ...] | None = None):
         super().__init__(commands_path)
+        self._training_meta = {LEROBOT_FEATURES: {ACTION: lerobot_action(self.ARM_WIDTH * len(keys.BIMANUAL_ARMS))}}
 
     def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
         parts = []
@@ -342,6 +344,18 @@ class BimanualCartesianAction(CommandsPathCodec):
             out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.CartesianPosition(pose=pose)
             out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(arm_vector[-1])
         return out
+
+    def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
+        parts = []
+        for arm in keys.BIMANUAL_ARMS:
+            parts.append(episode[keys.arm_key(keys.TARGET_EE_POSE, arm)])
+            parts.append(episode[keys.arm_channel(keys.TARGET_GRIP, arm)])
+        timeline = recording_timeline(tuple(name for part in parts for name in part.timelines))
+        return transforms.concat(*parts, dtype=np.float32, timelines=(timeline,))
+
+    @property
+    def training_encoder(self):
+        return Derive(meta=self._training_meta, **{ACTION: self._encode_episode})
 
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: self._commands_path_args()}
