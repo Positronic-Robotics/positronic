@@ -11,6 +11,7 @@ from positronic.utils import package_assets_path
 
 from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_FINGER_JOINT_NAMES, YAM_GRIPPER_BODIES, YAM_JOINT_NAMES, YAM_MJCF_PATH
+from .stream import Hull
 
 IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 IK_ROT_TOL = 1e-2  # radians
@@ -39,7 +40,7 @@ class YamKinematics:
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
         ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
         self._lower, self._upper = ranges[:, 0], ranges[:, 1]
-        self.gripper_points = self._gripper_points()
+        self.gripper_hulls = self._gripper_hulls()
 
     @property
     def lower(self) -> np.ndarray:
@@ -56,22 +57,15 @@ class YamKinematics:
         mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
-    def gripper_points_at(self, q: np.ndarray) -> np.ndarray:
-        """``gripper_points`` at joints ``q``, in the arm-base frame."""
-        self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)
-        rotation = self._data.site_xmat[self._site_id].reshape(3, 3)
-        return self.gripper_points @ rotation.T + self._data.site_xpos[self._site_id]
+    def _gripper_hulls(self) -> tuple[Hull, ...]:
+        """The convex hull of each gripper mesh over the full travel of the fingers, in the frame of ``GRIPPER_SITE``.
+        Each mesh is inside its hull, and each vertex of a hull is a mesh vertex."""
+        # A finger slides, so each place of it on its travel is inside the hull of its closed and open places
+        closed, opened = self._gripper_vertices(0.0), self._gripper_vertices(1.0)
+        return tuple(Hull.of(np.vstack(places)) for places in zip(closed, opened, strict=True))
 
-    def _gripper_points(self) -> np.ndarray:
-        """The vertices of the gripper meshes, with the fingers closed and open, one in each 4 mm cell, in the frame of
-        ``GRIPPER_SITE``. The mesh between them reaches at most a few millimeters past them."""
-        points = np.vstack([self._gripper_vertices(open_share) for open_share in (0.0, 1.0)])
-        _, one_a_cell = np.unique(np.round(points / 0.004), axis=0, return_index=True)
-        return points[one_a_cell]
-
-    def _gripper_vertices(self, open_share: float) -> np.ndarray:
-        """The vertices of the gripper meshes with the fingers open by ``open_share`` of their travel, in the frame of
+    def _gripper_vertices(self, open_share: float) -> list[np.ndarray]:
+        """The vertices of each gripper mesh with the fingers open by ``open_share`` of their travel, in the frame of
         ``GRIPPER_SITE``."""
         model, data = self._model, self._data
         data.qpos[:] = 0.0
@@ -91,7 +85,7 @@ class YamKinematics:
             first, count = model.mesh_vertadr[model.geom_dataid[g]], model.mesh_vertnum[model.geom_dataid[g]]
             world = model.mesh_vert[first : first + count] @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
             points.append((world - site_pos) @ site_mat)
-        return np.vstack(points)
+        return points
 
     def _jacobian(self, q: np.ndarray) -> np.ndarray:
         """The 6x6 Jacobian of ``GRIPPER_SITE`` at ``q``: the shift rows, then the turn rows, in the arm-base frame."""

@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import mujoco
 import numpy as np
 import pytest
 
@@ -29,8 +30,11 @@ from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import (
     GRIPPER_SITE,
     YAM_BASE_IN_EARLIER_BASE,
+    YAM_FINGER_JOINT_NAMES,
     YAM_GRASP_SITE_FRAME,
+    YAM_GRIPPER_BODIES,
     YAM_JOINT_NAMES,
+    YAM_MJCF_PATH,
     bundled_yam_model,
 )
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
@@ -40,7 +44,7 @@ from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from positronic.drivers.roboarm.yam.grasp import DEFAULT_GRASP, Grasp, GraspTuning
 from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
-from positronic.drivers.roboarm.yam.stream import UNLIMITED_STREAM, Box, StreamTuning, heights_above, points_at
+from positronic.drivers.roboarm.yam.stream import UNLIMITED_STREAM, Box, StreamTuning
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -49,6 +53,7 @@ from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.amazon_abc import mapping as abc_mapping
 from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
+from positronic.utils import package_assets_path
 
 PARK = np.zeros(6)
 RAISED = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
@@ -1054,13 +1059,55 @@ def _line(start: np.ndarray, end: np.ndarray, rotation: geom.Rotation, seconds: 
     return [geom.Transform3D(start + (end - start) * (i + 1) / ticks, rotation) for i in range(ticks)]
 
 
+class _GripperMesh:
+    """Each vertex of the gripper meshes of the YAM MJCF, with the fingers closed and open."""
+
+    def __init__(self):
+        self._model = mujoco.MjModel.from_xml_path(package_assets_path(YAM_MJCF_PATH))
+        self._data = mujoco.MjData(self._model)
+        body = mujoco.mjtObj.mjOBJ_BODY
+        self._geoms = [
+            g
+            for g in range(self._model.ngeom)
+            if self._model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH
+            and mujoco.mj_id2name(self._model, body, self._model.geom_bodyid[g]) in YAM_GRIPPER_BODIES
+        ]
+
+    def at(self, q: np.ndarray) -> np.ndarray:
+        """The vertices at arm joints ``q``, in the arm-base frame."""
+        model, data = self._model, self._data
+        vertices = []
+        for open_share in (0.0, 1.0):
+            data.qpos[:] = 0.0
+            for name, value in zip(YAM_JOINT_NAMES, q, strict=True):
+                data.qpos[model.joint(name).qposadr.item()] = value
+            for name in YAM_FINGER_JOINT_NAMES:
+                data.qpos[model.joint(name).qposadr.item()] = open_share * model.joint(name).range[1]
+            mujoco.mj_kinematics(model, data)
+            for g in self._geoms:
+                first, count = model.mesh_vertadr[model.geom_dataid[g]], model.mesh_vertnum[model.geom_dataid[g]]
+                mesh = model.mesh_vert[first : first + count]
+                vertices.append(mesh @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g])
+        return np.vstack(vertices)
+
+
+@functools.cache
+def _gripper_mesh() -> _GripperMesh:
+    return _GripperMesh()
+
+
 def _gripper_heights(joints, boxes=None, base=geom.Transform3D.identity) -> np.ndarray:
-    """How far the lowest point of the gripper is above ``boxes`` (the table), at each of ``joints``."""
-    kinematics = YamKinematics()
-    return np.array([
-        heights_above(points_at(base * kinematics.fk(q), kinematics.gripper_points), boxes or (TABLE,)).min()
-        for q in joints
-    ])
+    """How far the lowest vertex of the gripper meshes over a box of ``boxes`` (the table) is above the top of that
+    box, at each of ``joints``."""
+    heights = []
+    for q in joints:
+        x, y, z = (_gripper_mesh().at(q) @ base.rotation.as_rotation_matrix.T + base.translation).T
+        over = [
+            (b, (b.lower[0] <= x) & (x <= b.upper[0]) & (b.lower[1] <= y) & (y <= b.upper[1]))
+            for b in boxes or (TABLE,)
+        ]
+        heights.append(min((z[inside] - b.upper[2]).min(initial=np.inf) for b, inside in over))
+    return np.array(heights)
 
 
 def test_a_cartesian_stream_past_the_end_of_joint_1_holds_joint_1_at_its_limit_and_never_turns_it_back(rig):
@@ -1173,6 +1220,32 @@ def test_a_tilted_open_gripper_keeps_its_fingers_above_the_table():
     heights = _gripper_heights(asked)
     assert heights.min() >= MARGIN_M - FOLLOW_TOL_M
     assert heights[-1] == pytest.approx(MARGIN_M, abs=FOLLOW_TOL_M)
+    rig.loop.close()
+
+
+def test_a_tilted_gripper_lowered_onto_the_table_rests_with_its_lowest_mesh_vertex_at_the_margin():
+    margin = 0.002  # `yambox_stream`
+    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(obstacles=(TABLE,), obstacle_margin_m=margin))
+    rig.ready()
+    kinematics = YamKinematics()
+    start = kinematics.fk(RAISED)
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * start.rotation
+    tilted = (
+        geom.Rotation.from_rotvec(np.radians([12.0, 0.0, 0.0]))
+        * geom.Rotation.from_rotvec(np.radians([0.0, -29.0, 0.0]))
+        * down
+    )
+    turn = (start.rotation.inv * tilted).as_rotvec
+    above = np.array([0.35, -0.10, 0.10])
+    turn_down = [
+        geom.Transform3D(
+            start.translation + (above - start.translation) * s, start.rotation * geom.Rotation.from_rotvec(turn * s)
+        )
+        for s in np.linspace(0.005, 1.0, 200)
+    ]
+    below = np.array([0.35, -0.10, TABLE.upper[2] - 0.04])
+    asked = _stream_poses(rig, turn_down + _line(above, below, tilted, 1.5) + [geom.Transform3D(below, tilted)] * 150)
+    assert _gripper_heights(asked[-1:])[0] == pytest.approx(margin, abs=1e-6)
     rig.loop.close()
 
 

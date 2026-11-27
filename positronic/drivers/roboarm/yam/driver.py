@@ -44,7 +44,7 @@ from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from .grasp import Grasp, GraspTuning, capped_target
 from .kinematics import YamKinematics
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
-from .stream import UNLIMITED_STREAM, StreamTuning, heights_above, lift_above
+from .stream import UNLIMITED_STREAM, StreamTuning, height_above, lift_above
 
 logger = logging.getLogger(__name__)
 
@@ -521,7 +521,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _lifted(self, world_pose: geom.Transform3D) -> geom.Transform3D:
         """``world_pose`` kept ``obstacle_margin_m`` above each obstacle it is over."""
-        return lift_above(world_pose, self._kin.gripper_points, self._stream.obstacles, self._stream.obstacle_margin_m)
+        return lift_above(world_pose, self._kin.gripper_hulls, self._stream.obstacles, self._stream.obstacle_margin_m)
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""
@@ -860,13 +860,10 @@ class _Arm(DriverRun[command.CommandType]):
             yield self.limiter.wait()
             q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
 
-    def _gripper_points(self, q: np.ndarray) -> np.ndarray:
-        base = self._base_pose.as_matrix
-        return self._kin.gripper_points_at(q) @ base[:3, :3].T + base[:3, 3]
-
     def _gripper_height(self, q: np.ndarray) -> float:
         """How far the gripper at joints ``q`` is above the obstacles that it is over; infinite over none."""
-        return float(heights_above(self._gripper_points(q), self._stream.obstacles).min())
+        frame = self._base_pose.as_matrix @ self._kin.fk(q).as_matrix
+        return height_above(frame, self._kin.gripper_hulls, self._stream.obstacles)
 
     def _ramp_keeps_clear(self, start: np.ndarray, goal: np.ndarray) -> bool:
         """Whether the gripper on the joint ramp from ``start`` to ``goal`` keeps ``obstacle_margin_m`` above each
@@ -876,11 +873,8 @@ class _Arm(DriverRun[command.CommandType]):
         count = int(np.ceil(np.max(np.abs(goal - start)) / self._RAMP_STEP_RAD)) + 1
         lower_end = min(self._gripper_height(start), self._gripper_height(goal)) - self._MARGIN_TOLERANCE_M
         floor = min(self._stream.obstacle_margin_m, lower_end)
-        highest = max(box.upper[2] for box in self._stream.obstacles)
         for share in np.linspace(0.0, 1.0, count)[1:-1]:
-            points = self._gripper_points(start + share * (goal - start))
-            # A gripper this high above the highest top is clear of each obstacle, so its footprint needs no check
-            if points[:, 2].min() - highest < floor and heights_above(points, self._stream.obstacles).min() < floor:
+            if self._gripper_height(start + share * (goal - start)) < floor:
                 return False
         return True
 
