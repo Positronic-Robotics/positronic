@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import guard_main_merge as gmm  # noqa: E402
 import hook_payload  # noqa: E402
+import pin_move  # noqa: E402
 
 POSITRONIC_URL = 'git@github.com:Positronic-Robotics/positronic.git'
 INFRA_URL = 'git@gh-infra:someone/agent_infra.git'
@@ -684,7 +685,13 @@ def pin_move_github(patch, compare_status='ahead'):
 
     def gh_json(path, deadline):
         if '/pulls/103/files' in path:
-            return [{'filename': 'evals/evals.py', 'status': 'modified', 'patch': patch}]
+            return [
+                {
+                    pin_move.FILE_NAME: 'evals/evals.py',
+                    pin_move.FILE_STATUS: pin_move.MODIFIED,
+                    pin_move.FILE_PATCH: patch,
+                }
+            ]
         if '/compare/' in path:
             if compare_status is None:
                 raise gmm.StackLookupError('`gh api` failed: Not Found')
