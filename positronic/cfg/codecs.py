@@ -126,7 +126,8 @@ def compose_data(
         result = ChangeEEFrame(ee_frame, keys.frame_keys(arms)) | result
     if flip_grip:
         # ``FlipGrip()`` publishes wire version 1, which one-arm clients read.
-        result = FlipGrip(None if arms == keys.ONE_ARM else arms) | result
+        named = tuple(arm for arm in arms if arm is not None)
+        result = FlipGrip(named or None) | result
     if binarize_grip:
         for arm in arms:
             result = BinarizeGripInference(key=keys.arm_channel(keys.TARGET_GRIP, arm)) | result
