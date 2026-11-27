@@ -423,7 +423,7 @@ class Harness(pimm.ControlSystem):
             step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
         if self._writer is not None:
             world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
-            timestamps = pimm.Time(**message.time, **{HARNESS_WORLD: stamp[world], HARNESS_WALL: stamp[wall]})
+            timestamps = pimm.Time(**message.time, **self._harness_coordinates(stamp[world], stamp[wall]))
             self._append(values, timestamps, timing)
         return values
 
