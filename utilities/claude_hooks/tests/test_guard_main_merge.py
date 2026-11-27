@@ -83,8 +83,20 @@ def same_name(slug):
     return slug.casefold()
 
 
+def no_pin_move(number, guarded_slug):
+    return False
+
+
 def verdict(
-    git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None, canonical=same_name
+    git,
+    cmd,
+    cwd=CLONE,
+    allow_merge=no_allow,
+    gh_repo_env='',
+    authorized=None,
+    stack_below=None,
+    canonical=same_name,
+    pins_only=no_pin_move,
 ):
     return gmm.analyze(
         cmd,
@@ -97,6 +109,7 @@ def verdict(
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
         canonical=canonical,
+        pins_only=pins_only,
     )
 
 
@@ -635,6 +648,64 @@ def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
     assert read == []
 
 
+def test_a_pin_move_merges_without_a_receipt_and_spends_none(git):
+    spent = []
+    allow = lambda n, slug: spent.append(n) or True  # noqa: E731
+    pin_move = lambda n, slug: n == 103  # noqa: E731
+    unauthorized = lambda n, slug: False  # noqa: E731
+    assert verdict(git, 'gh pr merge 103', allow_merge=allow, authorized=unauthorized, pins_only=pin_move) is None
+    args = merge_args(103)
+    assert mcp_verdict(MERGE_TOOL, args, allow_merge=allow, authorized=unauthorized, pins_only=pin_move) is None
+    assert spent == []
+
+
+def test_a_merge_that_moves_more_than_a_pin_still_needs_a_receipt(git):
+    unauthorized = lambda n, slug: False  # noqa: E731
+    assert verdict(git, 'gh pr merge 103', authorized=unauthorized) == gmm.GH_MERGE_MSG
+    assert mcp_verdict(MERGE_TOOL, merge_args(103), authorized=unauthorized) is not None
+
+
+def test_a_pin_move_on_a_stack_still_needs_a_receipt_for_each_pull_request_below_it(git):
+    spent = []
+    denial = verdict(
+        git,
+        'gh pr merge 103',
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n == 102,
+        stack_below=lambda n, slug: [101, 102],
+        pins_only=lambda n, slug: n == 103,
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial
+    assert spent == []
+
+
+def pin_move_github(patch, compare_status='ahead'):
+    """A `gh api` stand-in serving one pull request's changed files and a compare of its revision."""
+
+    def gh_json(path, deadline):
+        if '/pulls/103/files' in path:
+            return [{'filename': 'evals/evals.py', 'status': 'modified', 'patch': patch}]
+        if '/compare/' in path:
+            if compare_status is None:
+                raise gmm.StackLookupError('`gh api` failed: Not Found')
+            return {'status': compare_status}
+        raise AssertionError(path)
+
+    return gh_json
+
+
+REVISION_PATCH = "@@ -1 +1 @@\n-REVISION = '{}'\n+REVISION = '{}'".format('a' * 40, 'b' * 40)
+
+
+def test_only_moves_pins_reads_the_diff_and_asks_whether_the_revision_is_on_main():
+    assert gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH))
+    assert not gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH, compare_status='diverged'))
+
+
+def test_only_moves_pins_is_false_when_github_does_not_know_the_revision():
+    assert not gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
+
+
 def fake_github(stack_members, bases, stack_base='main'):
     """A `gh api` stand-in serving one stack: members as (number, head ref, state), and each base ref."""
 
@@ -854,7 +925,14 @@ OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
 
 
 def mcp_verdict(
-    tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None, canonical=same_name
+    tool,
+    arguments,
+    guarded=GUARDED,
+    allow_merge=no_allow,
+    authorized=None,
+    stack_below=None,
+    canonical=same_name,
+    pins_only=no_pin_move,
 ):
     return gmm.analyze_mcp(
         tool,
@@ -864,6 +942,7 @@ def mcp_verdict(
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
         canonical=canonical,
+        pins_only=pins_only,
     )
 
 
@@ -1009,7 +1088,13 @@ def test_a_call_that_cannot_land_a_commit_on_main_is_untouched(tool, arguments):
 
 def run_hook(payload, cwd, project_dir, script=None):
     script = script or Path(__file__).resolve().parents[1] / 'guard_main_merge.py'
-    env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir)}
+    # A `gh` that always fails, so a merge the hook reads asks no real GitHub about the pull request.
+    fake_bin = Path(project_dir).parent / 'fake-bin'
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / 'gh').write_text('#!/bin/sh\nexit 1\n')
+    (fake_bin / 'gh').chmod(0o755)
+    path = f'{fake_bin}{os.pathsep}{os.environ.get("PATH", "")}'
+    env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir), 'PATH': path}
     body = payload if isinstance(payload, str) else json.dumps({**payload, 'cwd': str(cwd)})
     return subprocess.run([sys.executable, str(script)], input=body, env=env, capture_output=True, text=True)
 

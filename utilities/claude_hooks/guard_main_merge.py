@@ -5,7 +5,8 @@ Blocks history-rewriting `git commit --amend`, merges / integrating pulls / dire
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
 receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`). A merge
-needs a receipt for each pull request it takes (see `merged_along_with`).
+needs a receipt for each pull request it takes (see `merged_along_with`). A pull request that only moves a
+dependency pin needs no receipt of its own (see `only_moves_pins`).
 
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
@@ -38,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import hook_payload
+import pin_move
 
 DENY_TAIL = (
     ' Merging to main requires a PR and an explicit human/operator command — a named human must run the merge'
@@ -45,6 +47,7 @@ DENY_TAIL = (
 )
 MERGE_ESCAPE = (
     ' A named human can authorize THIS ONE merge from chat with `!allow_merge <pr>`, which the merge then spends.'
+    ' A pull request that only moves a pin to a commit on main, with its version fields and lock file, needs none.'
 )
 UNNUMBERED_MSG = (
     'BLOCKED: name the pull request to merge (`gh pr merge <number>`) — an authorization names one pull'
@@ -541,6 +544,31 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
     return chain[: chain.index(number)]
 
 
+# The whole read of a pull request's diff and of the revisions it pins. It and the stack lookup together
+# finish inside the hook's own timeout in `.claude/settings.json`.
+PIN_MOVE_LOOKUP_BUDGET_S = 15
+
+
+def only_moves_pins(number: int, guarded_slug: str, gh_json=_gh_json) -> bool:
+    """Whether the pull request only moves pins, each revision to a commit on the guarded branch.
+
+    A merge of such a pull request adds no code that a human did not review on that branch, so it
+    needs no receipt. A diff that cannot be read is not a pin move.
+    """
+    deadline = time.monotonic() + PIN_MOVE_LOOKUP_BUDGET_S
+
+    def on_guarded_branch(revision: str) -> bool:
+        compared = gh_json(f'repos/{guarded_slug}/compare/{revision}...{GUARDED_BRANCH}', deadline)
+        return isinstance(compared, dict) and compared.get('status') in ('ahead', 'identical')
+
+    try:
+        # One page holds a pin move. A pull request with more files than a page is not one.
+        files = gh_json(f'repos/{guarded_slug}/pulls/{number}/files?per_page=100', deadline)
+        return isinstance(files, list) and len(files) < 100 and pin_move.is_pin_move(files, on_guarded_branch)
+    except StackLookupError:
+        return False
+
+
 # Each lookup of a repository's name. A merge makes two, which together stay inside the hook timeout.
 REPOSITORY_LOOKUP_BUDGET_S = 10
 
@@ -616,6 +644,7 @@ def analyze_mcp(
     authorized=merge_authorized,
     stack_below=merged_along_with,
     canonical=canonical_repository,
+    pins_only=only_moves_pins,
 ) -> str | None:
     """The deny message for a GitHub MCP call, or None to allow it."""
     if not tool.startswith(GITHUB_MCP_PREFIX):
@@ -631,7 +660,7 @@ def analyze_mcp(
         refused = MCP_MERGE_MSG.format(tool=tool)
         if slug != guarded_slug:
             return refused
-        return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, refused)
+        return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, pins_only, refused)
     # A write the guard cannot place — no repository named, or none to compare it against — is
     # treated as a write onto this repository.
     if slug and guarded_slug and slug != guarded_slug:
@@ -1047,6 +1076,7 @@ def analyze(  # noqa: C901
     authorized=merge_authorized,
     stack_below=merged_along_with,
     canonical=canonical_repository,
+    pins_only=only_moves_pins,
 ) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
@@ -1068,6 +1098,7 @@ def analyze(  # noqa: C901
                 authorized,
                 stack_below,
                 canonical,
+                pins_only,
             )
             if deny:
                 return deny
@@ -1155,13 +1186,21 @@ def analyze(  # noqa: C901
     if pending_merge is not None:
         if not _merge_runs_alone(cmd):
             return MERGE_NOT_ALONE_MSG
-        return _authorize_merge(pending_merge, guarded_slug, allow_merge, authorized, stack_below, GH_MERGE_MSG)
+        return _authorize_merge(
+            pending_merge, guarded_slug, allow_merge, authorized, stack_below, pins_only, GH_MERGE_MSG
+        )
     return None
 
 
-def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, stack_below, refused: str) -> str | None:
-    """The deny message for a merge of `number`, or None after spending one authorization per pull request it takes."""
-    if not authorized(number, guarded_slug):
+def _authorize_merge(
+    number: int, guarded_slug: str, allow_merge, authorized, stack_below, pins_only, refused: str
+) -> str | None:
+    """The deny message for a merge of `number`, or None after spending one authorization per pull request it takes.
+
+    A pin move of `number` itself needs no authorization. Each pull request below it in a stack still needs one.
+    """
+    has_receipt = authorized(number, guarded_slug)
+    if not has_receipt and not pins_only(number, guarded_slug):
         return refused
     try:
         below = stack_below(number, guarded_slug)
@@ -1170,7 +1209,7 @@ def _authorize_merge(number: int, guarded_slug: str, allow_merge, authorized, st
     missing = [n for n in below if not authorized(n, guarded_slug)]
     if missing:
         return STACKED_MERGE_MSG.format(number=number, below=_pr_list(below), missing=_pr_list(missing))
-    if not all(allow_merge(n, guarded_slug) for n in [*below, number]):
+    if not all(allow_merge(n, guarded_slug) for n in [*below, *([number] if has_receipt else [])]):
         return refused
     return None
 
