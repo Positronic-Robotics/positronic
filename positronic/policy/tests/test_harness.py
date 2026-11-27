@@ -1442,6 +1442,38 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_the_harness_records_its_step_spans_only_at_the_step_level(episode_harness, tmp_path, level):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-levels', level=level):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), h.dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(13_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    names = [s.name for s in spans]
+    assert telemetry_keys.SPAN_RESET in names
+    assert (telemetry_keys.SPAN_HARNESS_STEP in names) is (level is telemetry.Level.STEP)
+    record_io = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    if level is telemetry.Level.CALL:
+        # The writer opens and closes once per episode; the samples between steps record no span.
+        assert len(record_io) == 2
+        assert all(s.parent_id == episode.span_id for s in record_io)
+    else:
+        assert len(record_io) > 2
+
+
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
     h = episode_harness
 

@@ -1114,6 +1114,8 @@ class _BlankRenderer:
 @pytest.mark.timeout(120)
 def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(socket_path, tmp_path, monkeypatch):
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', _BlankRenderer)
+    # The spans of each processor record only at the step level.
+    monkeypatch.setenv(telemetry.ENV_TELEMETRY_LEVEL, telemetry.Level.STEP.name.lower())
     ev = stack_cubes(
         mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
         loaders=positronic.cfg.simulator.stack_cubes_loaders(),
