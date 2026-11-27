@@ -35,9 +35,10 @@
       cancel: '/cancel',
       camera: (name) => `/camera/${encodeURIComponent(name)}.jpg`,
     };
-    const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+    const PHASE = { idle: 'idle', headsUp: 'heads_up', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
     const STATE = {
       [PHASE.idle]: 'Waiting for a trial',
+      [PHASE.headsUp]: 'A run with a teleop episode is starting. The episode comes later.',
       [PHASE.readyWait]: 'Human trial: put on the headset, then press Ready on the headset or the phone',
       [PHASE.running]: 'Task running',
       [PHASE.ended]: 'The trial ended: give the verdict on the console',

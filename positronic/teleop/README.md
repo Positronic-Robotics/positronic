@@ -115,7 +115,12 @@ for Ready or runs, the window and the headset page show a notice when `tracked` 
 2. If the button shows EXIT VR, press it, reload the page, and press ENTER VR again.
 
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
-comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
+comes also when the window is not open, and the service closes it when the wait ends.
+
+A run can open a warm-up session before its episodes, with the session parameter `warm_up=true`. A warm-up session
+starts no trial and does not wait for Ready. It opens at once. The dialog, the window and the pages then show "A run
+with a teleop episode is starting. The episode comes later." The heads-up stays until a trial waits for Ready, or for
+30 min at most. A press of B in the heads-up does nothing. On macOS the service uses
 `osascript` and `afplay`, and the dialog is in the centre of the screen. On Linux it uses `zenity` on `DISPLAY`, and
 plays the sound with `paplay`. The window manager puts the dialog, for example in the top left corner.
 `--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
@@ -367,8 +372,9 @@ and vary how you come to the object.
   A Ctrl-C during the wait closes the session, and the service stops the wait.
 - The service serves one session at a time, and refuses a second one. Each trial opens a new session.
 - The scripted headset sends only the right controller, so it does the trials of one-arm sessions only.
-- When the connection drops before the first frame reply, the client opens the session again. The trial goes on with
-  no second Ready. The service keeps such a trial for 45 s.
+- When the connection drops after the first frame request and before the second one, the client opens the session
+  again. The trial goes on with no second Ready. The service keeps such a trial for 45 s. A session that ends before
+  its first frame request ends its trial at once, so the next session waits for Ready.
 - Each frame request carries the camera images, so the images go at the rate of the frames, about the rate of the
   headset. A slow network can feel it.
 - When the service is down, a trial fails after the connect deadline of the client (900 s).

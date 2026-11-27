@@ -72,6 +72,7 @@ from positronic.teleop import service as service_module
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
+    HEADS_UP_TEXT,
     OTHERS_WIDTH,
     Badge,
     Button,
@@ -652,11 +653,11 @@ def test_the_view_shows_that_the_trial_starts_until_its_first_frame(service, soc
     connection.close()
 
 
-def test_a_dropped_trial_with_no_frame_shows_that_it_starts_until_a_session_resumes_it(service, socket_path, connect):
+def test_a_dropped_trial_with_no_frame_ends_at_once_and_the_view_waits_for_a_trial(service, socket_path, connect):
     connection = _readied_connection(service, socket_path, connect)
     connection.close()
-    assert service.phase is Phase.RUNNING, 'the dropped trial stays for a session that resumes it'
-    assert service.view_text().lines == ('Trial starting: waiting for the robot',)
+    _until_cleared(service)
+    assert service.view_text().lines == ('Waiting for a trial',)
 
 
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
@@ -1024,6 +1025,8 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(video_bitrate=0)
     with pytest.raises(ValueError, match='video_fps must be a positive integer'):
         session_query(video_fps=2.5)
+    with pytest.raises(ValueError, match='warm_up must be true or false'):
+        session_query(warm_up='yes')
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -2300,21 +2303,27 @@ class _RecordingNotice:
     def __init__(self):
         self.calls: list[str] = []
 
-    def show(self, text: str) -> None:
-        self.calls.append(f'show {text}')
+    def show(self, text: command.NoticeText) -> None:
+        self.calls.append(f'show {text.message}')
 
     def hide(self) -> None:
         self.calls.append('hide')
 
 
+NOTICE_TEXTS = {
+    Phase.HEADS_UP: command.NoticeText('Teleoperation run', 'A teleop episode comes'),
+    Phase.READY_WAIT: command.NoticeText('Teleoperation trial', 'Press Ready'),
+}
+
+
 def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
-    """A ready notice that has read ``phases``, its stop flag and its loop."""
+    """A phase notice that has read ``phases``, its stop flag and its loop."""
     notice = _RecordingNotice()
-    ready_notice = command._ReadyNotice(notice, 'Press Ready')
+    phase_notice = command._PhaseNotice(notice, NOTICE_TEXTS)
     states = ManualCommandReceiver[dict]()
-    ready_notice.page_state._bind(states)
+    phase_notice.page_state._bind(states)
     stop = MutableShouldStop()
-    loop = cast(Generator, ready_notice.run(cast(pimm.SignalReceiver, stop), SystemClock()))
+    loop = cast(Generator, phase_notice.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     for phase in phases:
         states.push(asdict(command.PageState(phase, control=False)))
         next(loop)
@@ -2325,6 +2334,16 @@ def test_the_notice_shows_while_a_trial_waits_for_ready():
     phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
     notice, _, _ = _ready_notice_after([*phases, Phase.IDLE])
     assert notice.calls == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
+
+
+def test_the_notice_shows_the_heads_up_of_a_run_until_its_trial_waits_for_ready():
+    notice, _, _ = _ready_notice_after([Phase.IDLE, Phase.HEADS_UP, Phase.HEADS_UP, Phase.READY_WAIT, Phase.RUNNING])
+    assert notice.calls == ['show A teleop episode comes', 'hide', 'show Press Ready', 'hide']
+
+
+def test_the_notice_hides_the_heads_up_when_it_expires():
+    notice, _, _ = _ready_notice_after([Phase.HEADS_UP, Phase.IDLE])
+    assert notice.calls == ['show A teleop episode comes', 'hide']
 
 
 def test_a_service_that_stops_in_the_ready_wait_hides_the_notice():
@@ -2364,7 +2383,7 @@ def test_the_desktop_notice_runs_the_notice_commands_of_the_platform(monkeypatch
     started: list[list[str]] = []
     monkeypatch.setattr(command.sys, 'platform', platform)
     monkeypatch.setattr(command.subprocess, 'Popen', lambda argv, env: _Process(argv, started))
-    command.DesktopNotice(sound='/sounds/ready.wav').show('Press "Ready"')
+    command.DesktopNotice(sound='/sounds/ready.wav').show(command.NoticeText('Teleoperation trial', 'Press "Ready"'))
     assert started == commands
 
 
@@ -2379,7 +2398,7 @@ def test_hide_closes_the_dialog(monkeypatch, platform, dialog):
     monkeypatch.setattr(command.sys, 'platform', platform)
     monkeypatch.setattr(command.subprocess, 'Popen', start)
     notice = command.DesktopNotice()
-    notice.show('Press Ready')
+    notice.show(NOTICE_TEXTS[Phase.READY_WAIT])
     notice.hide()
     assert [process.command[0] for process in processes if process.terminated] == [dialog]
 
@@ -2393,7 +2412,7 @@ def test_the_linux_dialog_starts_with_no_session_bus_and_no_accessibility_bus(mo
 
     monkeypatch.setattr(command.sys, 'platform', 'linux')
     monkeypatch.setattr(command.subprocess, 'Popen', start)
-    command.DesktopNotice().show('Press Ready')
+    command.DesktopNotice().show(NOTICE_TEXTS[Phase.READY_WAIT])
     zenity_env = envs['zenity']
     assert zenity_env is not None
     assert (zenity_env['DBUS_SESSION_BUS_ADDRESS'], zenity_env['NO_AT_BRIDGE']) == ('disabled:', '1')
@@ -2410,7 +2429,7 @@ def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkey
 
     monkeypatch.setattr(command.sys, 'platform', 'linux')
     monkeypatch.setattr(command.subprocess, 'Popen', start)
-    command.DesktopNotice().show('Press Ready')
+    command.DesktopNotice().show(NOTICE_TEXTS[Phase.READY_WAIT])
     assert [argv[0] for argv in started] == ['paplay']
     assert 'Cannot show the notice with zenity' in caplog.text
 
@@ -2478,9 +2497,70 @@ def test_a_resumed_trial_keeps_its_clutch(service, socket_path, connect):
 
 def test_a_dropped_trial_that_no_session_resumes_in_time_is_forgotten(service, socket_path, monkeypatch):
     monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
-    websocket, _ = _raw_session(service, socket_path)
+    websocket, session_id = _raw_session(service, socket_path)
+    _frames(websocket, session_id, count=1)
     _drop(websocket)
     _until_cleared(service)
+
+
+@pytest.mark.parametrize('ending', ['close', 'drop'])
+def test_a_session_that_ends_before_its_first_frame_ends_its_trial_at_once(service, socket_path, connect, ending):
+    if ending == 'close':
+        _readied_connection(service, socket_path, connect).session.close()
+    else:
+        websocket, _ = _raw_session(service, socket_path)
+        _drop(websocket)
+    _until_cleared(service)
+    connection = connect(socket_path)
+    _until_phase(service, Phase.READY_WAIT)
+    assert not connection.opening.done(), 'the next session waits for Ready'
+    service.cancel_ready_wait()
+
+
+def _warm_up(service: TeleopService, socket_path: Path, connect) -> None:
+    """Open and close a warm-up session, as a console does before its run."""
+    connection = connect(socket_path, session_query(warm_up=True))
+    connection.wait_open()
+    assert service.phase is Phase.HEADS_UP
+    connection.session.close()
+
+
+def test_a_warm_up_session_opens_with_no_ready_and_leaves_the_heads_up_of_the_run(service, socket_path, connect):
+    _warm_up(service, socket_path, connect)
+    assert service.phase is Phase.HEADS_UP
+    assert service.view_text().lines == (HEADS_UP_TEXT,)
+
+
+def test_the_heads_up_stays_until_the_trial_of_the_run_waits_for_ready(service, socket_path, connect):
+    _warm_up(service, socket_path, connect)
+    _take(service, _buttons())
+    _take(service, _buttons(b=1.0))
+    _take(service, _buttons())
+    assert service.phase is Phase.HEADS_UP, 'a press of B in the heads-up readies nothing'
+    connection = connect(socket_path)
+    _until_phase(service, Phase.READY_WAIT)
+    assert not connection.opening.done(), 'the trial of the run waits for Ready'
+    _take(service, _buttons(b=1.0))
+    _take(service, _buttons())
+    connection.wait_open()
+    assert service.phase is Phase.RUNNING
+
+
+def test_the_heads_up_goes_after_its_time_limit(service, socket_path, connect, monkeypatch):
+    monkeypatch.setattr(TeleopService, 'HEADS_UP_SEC', 0.2)
+    _warm_up(service, socket_path, connect)
+    _until_cleared(service)
+
+
+def test_a_warm_up_session_does_not_resume_a_dropped_trial(service, socket_path, connect):
+    websocket, session_id = _raw_session(service, socket_path)
+    _frames(websocket, session_id, count=1)
+    _drop(websocket)
+    _warm_up(service, socket_path, connect)
+    connection = connect(socket_path)
+    _until_phase(service, Phase.READY_WAIT)
+    assert not connection.opening.done(), 'the dropped trial went with the heads-up, so the session waits for Ready'
+    service.cancel_ready_wait()
 
 
 def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(service, socket_path, runtime):
