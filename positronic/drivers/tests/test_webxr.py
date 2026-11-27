@@ -16,6 +16,7 @@ import numpy as np
 import psutil
 import pytest
 from aiortc import MediaStreamTrack, RTCConfiguration, RTCDataChannel, RTCPeerConnection, RTCSessionDescription
+from pydantic import TypeAdapter
 from websockets.asyncio.client import connect as ws_connect
 from websockets.sync import client as ws_client
 
@@ -392,10 +393,11 @@ async def test_the_timing_channel_gives_the_rtp_time_of_each_frame_less_one_offs
             async with _frames_flowing(emitter):
                 rtp_times = [(await _received_frame(track))[1] for _ in range(5)]
                 await asyncio.sleep(0.1)
-    parsed = [json.loads(messages.get_nowait()) for _ in range(messages.qsize())]
-    pongs = [webrtc.Pong.model_validate(message) for message in parsed if 'pong' in message]
+    service_message = TypeAdapter(webrtc.Pong | webrtc.FrameSent)
+    parsed = [service_message.validate_json(messages.get_nowait()) for _ in range(messages.qsize())]
+    pongs = [message for message in parsed if isinstance(message, webrtc.Pong)]
     assert [pong.pong for pong in pongs] == [12.5] and pongs[0].service_ms > 0
-    sent = [webrtc.FrameSent.model_validate(message).frame for message in parsed if 'frame' in message]
+    sent = [message.frame for message in parsed if isinstance(message, webrtc.FrameSent)]
     # The page finds the offset of the RTP timestamps: the one difference that each shown frame has with a sent time
     # One offset joins each received frame to a sent time. The decoder of aiortc rounds the RTP time by up to 1 tick.
     first, *others = rtp_times
@@ -428,7 +430,7 @@ async def test_the_service_logs_each_report_of_the_page_on_its_timing_channel(wo
     with _served_webxr(webxr=served) as base:
         async with _page_peer(base) as (_track, timing):
             await _open(timing)
-            timing.send(json.dumps({'report': report.model_dump()}))
+            timing.send(webrtc._Report(report=report).model_dump_json())
             deadline = time.monotonic() + 10
             while not any('Video over WebRTC' in line for line in caplog.messages):
                 assert time.monotonic() < deadline, 'the service never logged the report'
@@ -446,7 +448,7 @@ async def test_a_bad_setup_message_logs_an_error_and_the_next_offer_still_gets_t
     served.frame._bind(receiver)
     with _served_webxr(webxr=served) as base:
         async with ws_connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as page:
-            await page.send(json.dumps({webxr._SIGNAL: {'type': 'offer', 'id': 1, 'sdp': 'not an offer'}}))
+            await page.send(json.dumps({webxr._SIGNAL: webrtc.Offer(id=1, sdp='not an offer').model_dump()}))
             deadline = time.monotonic() + 10
             while not any(record.levelno == logging.ERROR for record in caplog.records):
                 assert time.monotonic() < deadline, 'the service never logged the bad offer'
