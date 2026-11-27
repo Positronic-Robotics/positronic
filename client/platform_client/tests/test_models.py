@@ -347,6 +347,7 @@ MODELS: list[BaseModel] = [
         ],
     ),
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
+    CancelledSubmissionView(id=SUB, cancelled_at=AT, started_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
     RankingsResponse(
         board=BoardRef('smoke'),
@@ -654,6 +655,26 @@ def test_a_finished_run_reads_the_link_to_its_report():
     lasting = FinishedSubmissionView.model_validate({**payload, 'report': {'url': REPORT_URL}})
     assert lasting.report == ReportLink(url=REPORT_URL)
     assert lasting.model_dump(mode='json')['report'] == {'url': REPORT_URL, 'expires_at': None}
+
+
+def test_a_finished_run_reads_when_it_started_from_the_wire():
+    payload = {'id': '1f', 'status': 'finished', 'artifacts': {'result': RESULT_URL}}
+    view = FinishedSubmissionView.model_validate({**payload, 'started_at': '2026-08-13T10:01:00Z'})
+    assert view.started_at == datetime(2026, 8, 13, 10, 1, tzinfo=UTC)
+    assert FinishedSubmissionView.model_validate(payload).started_at is None
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        {'id': '1f', 'status': 'errored', 'reason': 'the image did not pull'},
+        {'id': '1f', 'status': 'cancelled', 'cancelled_at': AT.isoformat()},
+    ],
+)
+def test_a_run_that_ended_before_it_started_has_no_start(payload: dict):
+    view = SUBMISSION_VIEWS.validate_python(payload)
+    assert isinstance(view, ErroredSubmissionView | CancelledSubmissionView)
+    assert view.started_at is None
 
 
 def test_an_id_reaches_the_query_string_in_its_hex_wire_form():

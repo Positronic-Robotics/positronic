@@ -29,7 +29,7 @@ class EnvConnection:
         *,
         open_timeout: float = 10.0,
         connect_deadline: float = 1800.0,
-        ping_timeout: float = 600.0,
+        ping_timeout: float = protocol.HEARTBEAT_TIMEOUT_S,
     ):
         uri = f'ws://{host}:{port}/'
         deadline = time.monotonic() + connect_deadline
@@ -52,12 +52,14 @@ class EnvConnection:
     def tasks(self, spec: Any) -> list[dict[str, Any]]:
         return self._request({protocol.CMD: protocol.Command.TASKS.value, protocol.SPEC: spec})[protocol.TASKS]
 
-    def reset(self, token: Any, batch_size: int | None = None) -> dict[str, Any]:
+    def reset(self, token: Any, batch_size: int | None = None, *, refill: bool = False) -> dict[str, Any]:
         """This client's frame of the reset. ``batch_size`` is how many clients start the batch; ``None`` asks for
-        every slot of the server."""
-        msg = {protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token}
+        every slot of the server. With ``refill``, this slot resets alone into the batch that runs."""
+        msg: dict[str, Any] = {protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token}
         if batch_size is not None:
             msg[protocol.BATCH_SIZE] = batch_size
+        if refill:
+            msg[protocol.REFILL] = True
         return self._request(msg)
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:

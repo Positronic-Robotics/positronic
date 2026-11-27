@@ -286,10 +286,10 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 
 ### Subprocess startup timeout
 
-**Problem:** "OpenPI subprocess did not become ready within 300s"
+**Problem:** "OpenPI subprocess did not become ready within 1800.0s"
 
 **Solutions:**
 1. First startup may be slow (model download, loading weights)
 2. Check available GPU memory (OpenPI requires ~8GB VRAM)
-3. Set a larger `max_wait` in the `wait_for_subprocess_ready` call in server.py
+3. The wait is `WARMUP_DEADLINE_S` (`platform_client.policy_container`), the published start deadline of a policy image
 4. Check OpenPI subprocess logs for slow operations

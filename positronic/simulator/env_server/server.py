@@ -5,7 +5,7 @@ This module must work in an isolated interpreter without Positronic installed.
 Protocol (msgpack frames, see ``protocol``), between a client and its slot:
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
   client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``, opt. ``goal``
-    (a reset can also carry ``'batch_size': n``)
+    (a reset can also carry ``'batch_size': n`` and ``'refill': True``)
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``, opt. ``goal``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
@@ -30,22 +30,32 @@ policies in one env:
   failed stays a batch, so its retry is a later reset.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
   A slot that reports ``done`` stops holding the others back; a client may still step it until its next reset.
+* A reset that carries ``refill`` resets its slot alone into the batch that runs, between two steps, and answers at
+  once. Its token must be the token of the batch, and its batch size, if it gives one, the size of the batch. A slot
+  of the batch takes its own env slot again; a slot outside the batch takes an env slot that no slot of the batch
+  holds. The env must reset one slot alone (``EnvProtocol.reset_slot``). A refill is refused while a slot waits to
+  join the next batch, so that the batch ends for it.
 * A slot leaves when its client closes or disconnects, also while it waits on an answer, and a new client can
   then take it. A slot outside the batch that asks for a reset waits until every slot of the batch has left, and
   then joins the next batch.
 * The server serves batch after batch until ``shutdown``.
 """
 
+import inspect
 import queue
 import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from websockets.protocol import State
 from websockets.sync.server import ServerConnection, serve
+
+if TYPE_CHECKING:
+    # websockets 12 names this class otherwise.
+    from websockets.sync.server import Server
 
 # Isolated interpreters can import these modules as a package or as flat files.
 if __package__:
@@ -89,6 +99,14 @@ class EnvProtocol(ABC):
         in seconds. Either metadata dict may be empty when the client supplies it. A slot whose scene draws a goal
         other than its task's listed instruction also carries ``goal``.
         """
+
+    def reset_slot(self, token: Any, slot: int) -> dict[str, Any]:
+        """Re-randomize env slot ``slot`` alone, while the other slots of the batch keep their state.
+
+        ``token`` is the token of the last reset of the batch. Return the fields of ``reset``; ``slots`` holds at least
+        the entry of ``slot``. An env that cannot reset one slot alone raises.
+        """
+        raise NotImplementedError(f'{type(self).__name__} resets no slot alone')
 
     @abstractmethod
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
@@ -144,15 +162,25 @@ class EnvServer:
     thread. ``serve_forever`` returns on shutdown.
     """
 
-    def __init__(self, env: EnvProtocol, host: str, port: int, *, join_deadline: float = DEFAULT_JOIN_DEADLINE):
+    def __init__(
+        self,
+        env: EnvProtocol,
+        host: str,
+        port: int,
+        *,
+        join_deadline: float = DEFAULT_JOIN_DEADLINE,
+        ping_timeout: float = protocol.HEARTBEAT_TIMEOUT_S,
+    ):
         self._env = env
         self._host = host
         self._port = port
         self._join_deadline = join_deadline
+        self._ping_timeout = ping_timeout
         self._join_started: float | None = None  # when the first slot asked for the reset that starts a batch
         self._slots = [_Slot() for _ in range(env.num_slots)]
         self._batch_size = env.num_slots
         self._env_slots: dict[int, int] = {}  # the env slot of each slot of the batch
+        self._batch_token: bytes | None = None  # the encoded token of the batch, while the env holds its scene
         self._requests: queue.Queue[_Request | _Disconnect] = queue.Queue()
         self._lock = threading.Lock()  # guards slot claims and ``_stopped``
         self._stopped = False
@@ -224,6 +252,8 @@ class EnvServer:
                     request.reply.put({protocol.OK: True})
                 case protocol.Command.TASKS:
                     request.reply.put({protocol.TASKS: self._env.tasks(request.msg[protocol.SPEC])})
+                case protocol.Command.RESET if request.msg.get(protocol.REFILL):
+                    self._refill(request)
                 case protocol.Command.RESET:  # from a running slot too: its client gave up on the episode
                     in_batch = slot.phase in (_Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
                     if not in_batch:
@@ -235,6 +265,39 @@ class EnvServer:
                     slot.phase, slot.pending = _Phase.RUNNING, request
         except Exception as e:
             request.reply.put(_error(e))
+
+    def _refill(self, request: _Request) -> None:
+        """Reset the slot of ``request`` alone into the batch that runs, and answer it."""
+        index, slot = request.slot, self._slots[request.slot]
+        token = request.msg[protocol.TOKEN]
+        if self._batch_token is None or protocol.encode(token) != self._batch_token:
+            raise ValueError('a refill resets a slot into the batch that runs, with the token of that batch')
+        if request.msg.get(protocol.BATCH_SIZE, self._batch_size) != self._batch_size:
+            raise ValueError(f'the batch that runs has {self._batch_size} slots, but this refill asks for another size')
+        if self._joining_batch_size() is not None:
+            raise RuntimeError('a slot waits to join the next batch, so this batch takes no refill')
+        if slot.phase is _Phase.RUNNING:
+            raise RuntimeError('a refill resets a clone whose episode ended, and this slot still runs its episode')
+        in_batch = slot.phase in (_Phase.ENDED, _Phase.RESET_FAILED)
+        env_slot = self._env_slots[index] if in_batch else self._free_env_slot()
+        try:
+            answer = self._env.reset_slot(token, env_slot)
+        except Exception:
+            if in_batch:
+                slot.phase = _Phase.RESET_FAILED
+            raise
+        self._env_slots[index] = env_slot
+        slot.phase = _Phase.RUNNING
+        request.reply.put(protocol.slot_frame(answer, env_slot))
+
+    def _free_env_slot(self) -> int:
+        """The first env slot of the batch that no slot of the batch holds."""
+        in_batch = (_Phase.WAITING, _Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
+        held = {self._env_slots[index] for index, slot in enumerate(self._slots) if slot.phase in in_batch}
+        free = [env_slot for env_slot in range(self._batch_size) if env_slot not in held]
+        if not free:
+            raise RuntimeError(f'every env slot of the batch of {self._batch_size} is held')
+        return free[0]
 
     def _asked_batch_size(self, request: _Request) -> int:
         return request.msg.get(protocol.BATCH_SIZE, len(self._slots))
@@ -276,12 +339,14 @@ class EnvServer:
                     f'{len(requests)} slots asked for {len(tokens)} different resets at once, but all slots of one env '
                     'server share one scene and one task: run every client of this server in one task order'
                 )
+            self._batch_token = None  # a reset that raises leaves the env in no known scene
             answer = self._env.reset(next(iter(requests.values())).msg[protocol.TOKEN], self._batch_size)
         except Exception as e:
             for index, request in requests.items():
                 self._slots[index].phase = _Phase.RESET_FAILED
                 request.reply.put(_error(e))
             return
+        self._batch_token = next(iter(tokens))
         for index, request in requests.items():
             self._slots[index].phase = _Phase.RUNNING
             request.reply.put(protocol.slot_frame(answer, self._env_slots[index]))
@@ -352,11 +417,22 @@ class EnvServer:
             if isinstance(request, _Request):
                 request.reply.put(stopped)
 
+    def _serve(self) -> 'Server':
+        """A websockets server for ``_handle`` with the settings of the env server.
+
+        Reset tokens can exceed the default frame size. No deflate: see "The env-server wire" in
+        positronic/simulator/README.md. A native scene load blocks the server's keepalive too, so the server waits
+        ``ping_timeout`` for a pong. websockets 12, which a simulator's venv can carry, has no keepalive here.
+        """
+        if 'ping_timeout' not in inspect.signature(serve).parameters:
+            return serve(self._handle, self._host, self._port, max_size=None, compression=None)
+        return serve(
+            self._handle, self._host, self._port, max_size=None, compression=None, ping_timeout=self._ping_timeout
+        )
+
     def serve_forever(self) -> None:
-        # Reset tokens can exceed the default frame size.
         # Bare TCP probes never reach ``_handle``, so they take no slot.
-        # No deflate: see "The env-server wire" in positronic/simulator/README.md.
-        with serve(self._handle, self._host, self._port, max_size=None, compression=None) as server:
+        with self._serve() as server:
             self._server = server
             accept = threading.Thread(target=server.serve_forever, daemon=True)
             accept.start()

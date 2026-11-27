@@ -5,7 +5,7 @@ import pytest
 
 import pimm
 from positronic.drivers.roboarm import RobotStatus, command
-from positronic.drivers.webxr import LEFT, RIGHT
+from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons
 from positronic.geom import Rotation, Transform3D
 from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition
 from positronic.teleop.debug import Arm, ArmControl, Panel, debug
@@ -22,11 +22,11 @@ def _state(status: RobotStatus = RobotStatus.AVAILABLE) -> types.SimpleNamespace
     return types.SimpleNamespace(ee_pose=ROBOT_POSE, status=status)
 
 
-def _buttons(trigger: float = 0.0, a: float = 0.0, b: float = 0.0, stick: float = 0.0) -> list[float]:
-    """The values of a controller: A and B are X and Y on the left controller."""
+def _values(trigger: float = 0.0, a: float = 0.0, b: float = 0.0, stick: float = 0.0) -> tuple[float, ...]:
+    """The button values of a controller: A and B are X and Y on the left controller."""
     values = [0.0] * (max(Button) + 1)
     values[Button.TRIGGER], values[Button.A], values[Button.B], values[Button.STICK] = trigger, a, b, stick
-    return values
+    return tuple(values)
 
 
 def _raised(pose: Transform3D, dz: float) -> Transform3D:
@@ -53,6 +53,8 @@ class _Rig:
         self.control.target_grip._bind(self.grips, clock=world.clock)
         self.control.report._bind(self.reports, clock=world.clock)
         self.calls: list = []
+        # The buttons that the page sent last for each controller
+        self._sent = {side: ControllerButtons(_values(), (0,) * len(_values())) for side in (LEFT, RIGHT)}
 
     def take_calls(self) -> None:
         self.calls.extend(self.sync_move.incoming())
@@ -60,8 +62,18 @@ class _Rig:
     def hand(self, pose: Transform3D | None, side: str = RIGHT) -> None:
         self.poses.emit({LEFT: None, RIGHT: None, side: pose})
 
-    def press(self, side: str = RIGHT, **values: float) -> None:
-        self.buttons.emit({LEFT: None, RIGHT: None, side: _buttons(**values)})
+    def press(self, side: str = RIGHT, more: dict[Button, int] | None = None, **values: float) -> None:
+        """Send the buttons of the controller on ``side`` with ``values``. Count a press of each button that goes
+        down, as the page does, and ``more`` presses that came and went between two samples."""
+        sent, now = self._sent[side], _values(**values)
+        counts = [
+            count + int(value >= 0.5 > before)
+            for count, value, before in zip(sent.presses, now, sent.values, strict=True)
+        ]
+        for button, count in (more or {}).items():
+            counts[button] += count
+        self._sent[side] = ControllerButtons(now, tuple(counts))
+        self.buttons.emit({LEFT: None, RIGHT: None, side: self._sent[side]})
 
     def events(self) -> list[str]:
         """The texts of the events in the last report, with no time."""
@@ -101,6 +113,36 @@ def test_control_moves_the_arm_from_where_it_came_on_and_a_second_press_turns_it
     assert np.linalg.norm(shift) == pytest.approx(0.05)
     np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
     assert rig.events()[-2:] == ['control on', 'control off']
+
+
+def test_two_presses_of_a_between_two_samples_leave_control_off_when_it_was_off(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(more={Button.A: 2}), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert not rig.commands.emitted
+    assert rig.events()[-2:] == ['control on', 'control off']
+
+
+def test_two_presses_of_a_between_two_samples_turn_control_on_again_from_the_new_place_of_the_hand(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+        (lambda: rig.press(more={Button.A: 2}), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.08)), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    shift = rig.commands.emitted[-1][1].pose.translation - ROBOT_POSE.translation
+    assert np.linalg.norm(shift) == pytest.approx(0.03)
+    assert rig.events()[-3:] == ['control on', 'control off', 'control on']
 
 
 def test_a_lost_controller_turns_control_off_and_its_return_does_not_move_the_arm(world):

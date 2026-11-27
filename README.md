@@ -153,7 +153,6 @@ The Franka robot's system version sets the libfranka version: 0.15.3 for system 
 needs, and how to rebuild the extension after a change of libfranka.
 
 After installation, the following command-line scripts will be available:
-- `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-dataset-viewer`: Browse and inspect datasets
 - `lerobot-0_3_3-convert`: Convert datasets to model format
 - `positronic`: Run evals in simulation or on hardware, and read back the ones sent to the platform
@@ -167,13 +166,18 @@ For training and inference servers, use vendor-specific Docker services (see [Tr
 
 ## Quick Start — 30 Seconds to Data Collection
 
+In terminal 1, start the teleop service for a phone. In terminal 2, start a MuJoCo run that the person drives:
+
 ```bash
-uv run --locked positronic-data-collection sim \
-    --output_dir=~/datasets/stack_cubes_raw \
-    --sound=None --webxr=.iphone
+uv run --locked positronic teleop --webxr=@positronic.cfg.webxr.iphone
+uv run --locked positronic eval run \
+    --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
+    --policy=@positronic.cfg.policy.teleop_collect \
+    --output_dir=~/datasets/stack_cubes_raw
 ```
 
-Opens MuJoCo simulation with phone-based teleoperation. Record demonstrations by moving your phone to control the robot arm and using the on-screen controls to open/close the gripper and start/stop recording.
+Open the page that the service prints on the phone. Move the phone to control the arm, and use the on-screen controls
+for the grip and for the end of each trial.
 
 Then browse your episodes:
 
@@ -189,30 +193,12 @@ The usual loop is: collect demonstrations → review and curate → train → va
 
 ### 1. Collect Demonstrations
 
-Use the [data collection script](positronic/data_collection.py) for both simulation and hardware captures.
-
-**Quick start in simulation:**
-
-```bash
-uv run --locked positronic-data-collection sim \
-    --output_dir=~/datasets/stack_cubes_raw \
-    --sound=None --webxr=.iphone --operator_position=.BACK
-```
-
-Loads the MuJoCo scene, starts the DearPyGui UI, and records episodes into the local dataset.
-
-**Teleoperation:**
-- Phone (iPhone/Android) or VR headset (Oculus) control the robot in 6-DOF
-- Browser shows AR interface with Track, Record, Reset buttons
-- See [Data Collection Guide](docs/data-collection.md) for complete setup
-
-**Physical robots:**
-
-```bash
-uv run --locked positronic-data-collection real  --output_dir=~/datasets/franka_kitchen
-uv run --locked positronic-data-collection so101 --output_dir=~/datasets/so101_runs
-uv run --locked positronic-data-collection droid --output_dir=~/datasets/droid_runs
-```
+A person records demonstrations through the teleop service, `positronic teleop`, as the policy of an ordinary
+`eval run`. The same run works in simulation and on a rig:
+- a phone (iPhone or Android) or a VR headset (Meta Quest, PlayStation VR2) controls the robot in 6-DOF;
+- the [Teleoperation Guide](positronic/teleop/README.md) gives the commands for MuJoCo, MolmoSpaces and the bimanual
+  YAM, and the controls;
+- the [Data Collection Guide](docs/data-collection.md) gives the headset setup and the hardware setup.
 
 ### 2. Review and Curate
 

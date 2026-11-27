@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>WebXR iPhone Controller</title>
+    <title>WebXR Phone Controller</title>
     <script src="/three.min.js"></script>
     <style>
       html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
@@ -19,18 +19,9 @@
       .btn:active { transform: translateY(1px); }
       .btn__title { line-height: 1; }
       .btn__status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; line-height: 1; transition: background-color 0.2s ease, color 0.2s ease; }
-      .btn--toggle .btn__status { background: rgba(0,0,0,0.18); color: #111; }
-      .btn--toggle[data-state="on"] .btn__status { color: #fff; }
-      .btn--track .btn__status { background: rgba(7,59,76,0.18); color: #073b4c; }
-      .btn--track[data-state="on"] .btn__status { background: rgba(255,209,102,0.35); color: #073b4c; }
-      .btn--record .btn__status { background: rgba(239,71,111,0.18); color: #ef476f; }
-      .btn--record[data-state="on"] .btn__status { background: rgba(239,71,111,0.45); color: #fff; }
-      .btn--track-off { background: #ffd166; color: #111; }
-      .btn--track-on { background: #073b4c; color: #fff; }
-      .btn--record-off { background: #06d6a0; color: #111; }
-      .btn--record-on { background: #ef476f; color: #fff; }
-      .btn--reset-off { background: #6c757d; color: #fff; }
-      .btn--reset-on { background: #118ab2; color: #fff; }
+      .btn--pill .btn__status { background: rgba(0,0,0,0.18); color: #111; }
+      .btn--cancel-off { background: #6c757d; color: #fff; }
+      .btn--cancel-on { background: #118ab2; color: #fff; }
       /* Make the control area 5x+ larger for easy touch */
       .slider { position: relative; width: 100%; height: 200px; touch-action: none; -webkit-tap-highlight-color: transparent; }
       .slider__track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 24px; background: rgba(255,255,255,0.25); border-radius: 999px; }
@@ -50,7 +41,7 @@
   <body>
     <header>
       <details open>
-        <summary style="color:#333; background:#fff; padding:6px 10px; border-radius:8px; display:inline-block">WebXR iPhone</summary>
+        <summary style="color:#333; background:#fff; padding:6px 10px; border-radius:8px; display:inline-block">WebXR Phone</summary>
       </details>
     </header>
     <div class="hud">
@@ -66,19 +57,19 @@
           <div class="slider__handle" id="sliderHandle" style="left: 0%;"></div>
         </div>
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
-        <div class="phase" id="phase" hidden></div>
+        <div class="phase" id="phase"></div>
         <div class="row" style="margin-top: 12px;">
           <div class="buttons">
-            <button class="btn btn--toggle btn--track btn--track-off" id="btnA" title="Tracking disabled" aria-label="Tracking off">
-              <span class="btn__title" data-title>Tracking</span>
-              <span class="btn__status" data-status>Off</span>
+            <button class="btn btn--pill" id="btnA" title="Control (tap: on / off)" aria-label="Control">
+              <span class="btn__title" data-title>Control</span>
+              <span class="btn__status" data-status>tap: on / off</span>
             </button>
-            <button class="btn btn--toggle btn--record btn--record-off" id="btnB" title="Recording stopped" aria-label="Recording stopped">
-              <span class="btn__title" data-title>Recording</span>
-              <span class="btn__status" data-status>Stopped</span>
+            <button class="btn btn--pill" id="btnB" title="Ready (hold: Complete)" aria-label="Ready">
+              <span class="btn__title" data-title>Ready</span>
+              <span class="btn__status" data-status>hold: Complete</span>
             </button>
-            <button class="btn btn--reset btn--reset-off" id="btnReset" title="Reset (press and hold)" aria-label="Reset">
-              <span class="btn__title" data-title>Reset</span>
+            <button class="btn btn--cancel btn--cancel-off" id="btnCancel" title="Cancel" aria-label="Cancel">
+              <span class="btn__title" data-title>Cancel</span>
               <span class="btn__status" data-status></span>
             </button>
           </div>
@@ -87,14 +78,13 @@
     </div>
 
     <script type="module">
-      import { startXRApp } from '/core.js';
+      import { controllerSample, startXRApp } from '/core.js';
 
       // The xr-standard gamepad layout of `buttons`.
       const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
-      // `?mode=teleop` labels the buttons for `positronic teleop`. Every button then sends its value only while it is
-      // touched.
-      const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
+      // The presses of each button since the page loaded
+      const presses = new Array(8).fill(0);
 
       // Gripper slider state
       let gripValue = 0.0;
@@ -161,7 +151,7 @@
       }
 
       // The label of the B button: what its next press does.
-      function recordLabel(phase) {
+      function trialLabel(phase) {
         if (phase === PHASE.running) return 'Complete';
         return 'Ready';
       }
@@ -171,7 +161,6 @@
 
       function showTeleopState(configs, applyVisual, setGrip) {
         const phaseEl = document.getElementById('phase');
-        phaseEl.hidden = false;
         let shownPhase = null;
         const show = async () => {
           try {
@@ -181,17 +170,16 @@
             shownPhase = phase;
             phaseEl.textContent = phaseText(state);
             const control = state[STATE_FIELD.control] === true;
-            configs.track.el.classList.toggle('btn--control-on', control);
-            configs.track.el.classList.toggle('btn--control-off', !control);
-            configs.reset.baseLabel = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
-            applyVisual('reset');
+            configs.control.el.classList.toggle('btn--control-on', control);
+            configs.control.el.classList.toggle('btn--control-off', !control);
+            configs.cancel.label = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
+            applyVisual('cancel');
             const running = phase === PHASE.running;
-            configs.record.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
-            configs.record.el.classList.toggle('btn--task-running', running);
-            configs.record.baseLabel = recordLabel(phase);
-            const hold = running ? 'hold 1 s' : '';
-            configs.record.labels = { off: hold, on: hold };
-            applyVisual('record');
+            configs.trial.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
+            configs.trial.el.classList.toggle('btn--task-running', running);
+            configs.trial.label = trialLabel(phase);
+            configs.trial.status = running ? 'hold 1 s' : '';
+            applyVisual('trial');
           } catch (e) {
             phaseEl.textContent = 'The teleop service does not answer';
           }
@@ -200,161 +188,71 @@
         show();
       }
 
+      // Each button sends its value only while it is touched. The service gives the colour of Control and of B, and the
+      // labels of B and of Cancel.
       function setupButtons(setGrip) {
         const configs = {
-          reset: {
+          cancel: {
             idx: BUTTON.stick,
-            el: document.getElementById('btnReset'),
-            type: 'momentary',
-            baseLabel: 'Reset',
-            labels: { off: '', on: 'Resetting...' },
-            aria: { off: 'Reset', on: 'Resetting' },
-            titles: { off: 'Reset (press and hold)', on: 'Resetting...' },
-            classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
+            el: document.getElementById('btnCancel'),
+            label: 'Cancel',
+            status: '',
+            classes: { off: 'btn--cancel-off', on: 'btn--cancel-on' }
           },
-          track: {
-            idx: BUTTON.a,
-            el: document.getElementById('btnA'),
-            type: 'toggle',
-            baseLabel: 'Tracking',
-            labels: { off: 'Off', on: 'On' },
-            aria: { off: 'Tracking off', on: 'Tracking on' },
-            titles: { off: 'Tracking disabled', on: 'Tracking active' },
-            classes: { off: 'btn--track-off', on: 'btn--track-on' }
-          },
-          record: {
-            idx: BUTTON.b,
-            el: document.getElementById('btnB'),
-            type: 'toggle',
-            baseLabel: 'Recording',
-            labels: { off: 'Stopped', on: 'Active' },
-            aria: { off: 'Recording stopped', on: 'Recording active' },
-            titles: { off: 'Recording stopped', on: 'Recording active' },
-            classes: { off: 'btn--record-off', on: 'btn--record-on' }
-          }
+          control: { idx: BUTTON.a, el: document.getElementById('btnA'), label: 'Control', status: 'tap: on / off' },
+          trial: { idx: BUTTON.b, el: document.getElementById('btnB'), label: 'Ready', status: 'hold: Complete' }
         };
-
-        if (TELEOP) {
-          const teleop = (cfg, label, status) => Object.assign(cfg, {
-            type: 'momentary',
-            baseLabel: label,
-            labels: { off: status, on: status },
-            aria: { off: label, on: label },
-            titles: { off: `${label} (${status})`, on: `${label} (${status})` },
-          });
-          teleop(configs.track, 'Control', 'tap: on / off');
-          teleop(configs.record, 'Ready', 'hold: Complete');
-          teleop(configs.reset, 'Cancel', '');
-          // The service gives the colour of Control and of B, so a press does not change it. B gets its label from the
-          // service too.
-          configs.track.classes = null;
-          configs.track.el.classList.remove('btn--track', 'btn--track-off');
-          Object.assign(configs.record, { classes: null, aria: null, titles: null });
-          configs.record.el.classList.remove('btn--record', 'btn--record-off');
-        }
-
-        const state = {
-          reset: { pressed: false },
-          track: { pressed: false, latched: false },
-          record: { pressed: false, latched: false }
-        };
+        const pressed = { cancel: false, control: false, trial: false };
 
         const applyVisual = (name) => {
           const cfg = configs[name];
-          const st = state[name];
-          const active = cfg.type === 'toggle' ? st.latched : st.pressed;
-          const key = active ? 'on' : 'off';
-
-          const label = cfg.labels?.[key];
-          const titleEl = cfg.el.querySelector('[data-title]');
-          if (titleEl) titleEl.textContent = cfg.baseLabel ?? (label ?? titleEl.textContent);
-
-          const statusEl = cfg.el.querySelector('[data-status]');
-          if (statusEl) statusEl.textContent = label ?? '';
-
-          const aria = (cfg.aria && cfg.aria[key]) ?? cfg.baseLabel ?? label;
-          if (aria !== undefined) cfg.el.setAttribute('aria-label', aria);
-
-          const titleAttr = (cfg.titles && cfg.titles[key]) ?? aria;
-          if (titleAttr !== undefined) cfg.el.setAttribute('title', titleAttr);
-
+          cfg.el.querySelector('[data-title]').textContent = cfg.label;
+          cfg.el.querySelector('[data-status]').textContent = cfg.status;
+          cfg.el.setAttribute('aria-label', cfg.label);
+          cfg.el.setAttribute('title', cfg.status ? `${cfg.label} (${cfg.status})` : cfg.label);
           if (cfg.classes) {
-            const allClasses = Object.values(cfg.classes).filter(Boolean);
-            if (allClasses.length) cfg.el.classList.remove(...allClasses);
-            const activeClass = cfg.classes[key];
-            if (activeClass) cfg.el.classList.add(activeClass);
+            cfg.el.classList.remove(...Object.values(cfg.classes));
+            cfg.el.classList.add(cfg.classes[pressed[name] ? 'on' : 'off']);
           }
-
-          if (cfg.type === 'toggle') cfg.el.dataset.state = key;
-          else delete cfg.el.dataset.state;
         };
 
-        const setPressed = (name, pressed) => {
-          const cfg = configs[name];
-          const st = state[name];
-          if (st.pressed === pressed) return;
-          st.pressed = pressed;
-          buttons[cfg.idx] = pressed ? 1.0 : 0.0;
+        const setPressed = (name, value) => {
+          if (pressed[name] === value) return;
+          pressed[name] = value;
+          buttons[configs[name].idx] = value ? 1.0 : 0.0;
+          if (value) presses[configs[name].idx] += 1;
           applyVisual(name);
         };
 
-        const setLatched = (name, latched) => {
-          const cfg = configs[name];
-          if (cfg.type !== 'toggle') return;
-          const st = state[name];
-          if (st.latched === latched) return;
-          st.latched = latched;
-          applyVisual(name);
-        };
-
-        const press = (name) => setPressed(name, true);
-
-        const release = (name, shouldToggle) => {
-          const cfg = configs[name];
-          const st = state[name];
-          if (!st.pressed) return;
-          setPressed(name, false);
-          if (cfg.type === 'toggle' && shouldToggle) {
-            setLatched(name, !st.latched);
-          }
-          if (name === 'reset' && shouldToggle) {
-            setLatched('track', false);
-            setLatched('record', false);
-          }
-        };
-
-        const releaseAll = (shouldToggle) => {
-          for (const name of Object.keys(configs)) {
-            release(name, shouldToggle);
-          }
+        const releaseAll = () => {
+          for (const name of Object.keys(configs)) setPressed(name, false);
         };
 
         for (const name of Object.keys(configs)) {
           applyVisual(name);
           const el = configs[name].el;
-          el.addEventListener('touchstart', () => press(name), { passive: true });
-          el.addEventListener('touchend', () => release(name, true));
-          el.addEventListener('touchcancel', () => release(name, true));
+          el.addEventListener('touchstart', () => setPressed(name, true), { passive: true });
+          el.addEventListener('touchend', () => setPressed(name, false));
+          el.addEventListener('touchcancel', () => setPressed(name, false));
         }
 
-        if (TELEOP) showTeleopState(configs, applyVisual, setGrip);
+        showTeleopState(configs, applyVisual, setGrip);
 
-        window.addEventListener('touchend', () => releaseAll(true));
-        window.addEventListener('touchcancel', () => releaseAll(true));
+        window.addEventListener('touchend', releaseAll);
+        window.addEventListener('touchcancel', releaseAll);
       }
 
       function onInit() {
-        // Nothing specific to initialize in 3D scene for iPhone
+        // Nothing specific to initialize in 3D scene for the phone
       }
 
       function onFrame({ view }) {
         // Build right-controller from viewer pose
         const p = view.transform.position;
         const q = view.transform.orientation;
-        const btns = buttons.slice();
         const controllers = {
           left: null,
-          right: { position: [p.x, p.y, p.z], orientation: [q.w, q.x, q.y, q.z], buttons: btns }
+          right: controllerSample([p.x, p.y, p.z], [q.w, q.x, q.y, q.z], buttons.slice(), presses.slice()),
         };
         return controllers;
       }

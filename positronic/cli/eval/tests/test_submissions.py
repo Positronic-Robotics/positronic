@@ -90,6 +90,7 @@ def test_status_prints_no_score_for_a_failed_run_that_published_no_episodes(plat
         '  resolved: None',
         '  reason_code: policy_oom',
         '  reason: out of memory',
+        '  started_at: None',
         '  scores: None',
         '  artifacts: None',
         "  episodes: {'total': 0, 'done': 0, 'outstanding': 0}",

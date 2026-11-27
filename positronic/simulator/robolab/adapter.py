@@ -41,6 +41,7 @@ class RobolabAdapter(WireCommandAdapter):
         return {
             robolab_keys.TOKEN_TASK: params[eval_keys.TASK],
             robolab_keys.TOKEN_INSTRUCTION_TYPE: params[robolab_keys.INSTRUCTION_TYPE],
+            robolab_keys.TOKEN_CAMERAS: params[robolab_keys.CAMERAS],
             **(
                 {robolab_keys.TOKEN_EPISODE_LENGTH_S: params[robolab_keys.EPISODE_LENGTH_OVERRIDE]}
                 if robolab_keys.EPISODE_LENGTH_OVERRIDE in params
@@ -94,7 +95,7 @@ class RobolabDroidAdapter(RobolabAdapter):
         eef_pose = geom.Transform3D(
             raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
-        ee_pose = self._measure(eef_pose)
+        ee_pose = self._measure(eef_pose, raw_obs[protocol.OBS_JOINT_POS])
         state = MujocoFrankaState()
         state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
         return {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[protocol.OBS_GRIP])}

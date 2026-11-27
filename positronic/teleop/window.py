@@ -28,6 +28,7 @@ class WindowStatus(BaseModel):
     task: str
     control: bool
     cameras: list[str]
+    tracked: bool
 
 
 def window_app(service: TeleopService) -> FastAPI:
@@ -51,7 +52,13 @@ def window_app(service: TeleopService) -> FastAPI:
 
     def status() -> WindowStatus:
         state = service.state()
-        return WindowStatus(phase=state.phase, task=state.task, control=state.control, cameras=list(state.cameras))
+        return WindowStatus(
+            phase=state.phase,
+            task=state.task,
+            control=state.control,
+            cameras=list(state.cameras),
+            tracked=state.tracked,
+        )
 
     @app.get('/')
     async def page():

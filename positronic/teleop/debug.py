@@ -33,7 +33,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.webxr
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command
-from positronic.drivers.webxr import LEFT, RIGHT, WebXR
+from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons, WebXR
 from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, OperatorPosition, Tracker
@@ -112,7 +112,7 @@ class ArmControl(pimm.ControlSystem):
         self._states_since_target: int | None = None
 
         self.controller_positions = pimm.DefaultingReceiver[dict[str, geom.Transform3D | None]](self, default={})
-        self.buttons = pimm.DefaultingReceiver[dict[str, Sequence[float] | None]](self, default={})
+        self.buttons = pimm.DefaultingReceiver[dict[str, ControllerButtons | None]](self, default={})
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.grip = pimm.ControlSystemReceiver[float](self)
         self.robot_commands = pimm.ControlSystemEmitter[command.CommandType](self)
@@ -204,17 +204,18 @@ class ArmControl(pimm.ControlSystem):
             self._note('control on')
 
     def _read_buttons(
-        self, message: pimm.Message[dict[str, Sequence[float] | None]], now_ns: int, silent: bool
-    ) -> set[Button]:
-        """The new presses of the controller in ``message``, and the grip of a new sample to the gripper."""
-        values = message.data.get(self.side)
-        if values is None or silent:
+        self, message: pimm.Message[dict[str, ControllerButtons | None]], now_ns: int, silent: bool
+    ) -> dict[Button, int]:
+        """The number of presses of each button of the controller in ``message``, and the grip of a new sample to the
+        gripper."""
+        buttons = message.data.get(self.side)
+        if buttons is None or silent:
             self._buttons.cancel_holds()
-            return set()
+            return {}
         if message.updated:
-            self._trigger = ButtonMap.grip(values)
+            self._trigger = ButtonMap.grip(buttons.values)
             self.target_grip.emit(self._trigger)
-        return self._buttons.presses(values, now_ns)
+        return self._buttons.new_presses(buttons, now_ns)
 
     def _check_availability(self, hand: geom.Transform3D | None, silent: bool) -> None:
         """Turn control off when the controller or the arm is not available, and note an error of the arm once."""
@@ -298,7 +299,8 @@ class ArmControl(pimm.ControlSystem):
             self._check_availability(hand, silent)
 
             if Button.A in presses:
-                self._toggle_control(hand)  # a silent headset gives no press
+                for _ in range(ButtonMap.clutches(presses[Button.A])):
+                    self._toggle_control(hand)  # a silent headset gives no press
             elif Button.STICK in presses:
                 yield from self._go_to_start(should_stop, clock)
             elif self._tracker.on and positions.updated and hand is not None:
