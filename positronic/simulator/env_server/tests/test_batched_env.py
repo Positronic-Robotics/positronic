@@ -12,13 +12,16 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
+from websockets.frames import OP_PING
 from websockets.sync.client import connect
+from websockets.sync.server import serve as websocket_serve
 
 import pimm
 from positronic.eval import keys as eval_keys
@@ -57,6 +60,7 @@ class _ClonedScene(EnvProtocol):
         self._grips = [0.0] * len(ends_at)
         self.resets: list[Any] = []
         self.built: list[int] = []  # the clone count of each reset
+        self.slot_resets: list[tuple[Any, int]] = []  # the token and the env slot of each reset of one slot
         self.stepped: list[set[int]] = []  # the slots each env step received an action for
 
     @property
@@ -79,6 +83,16 @@ class _ClonedScene(EnvProtocol):
         self._grips = [0.0] * len(self._ends_at)
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observed(slot)} for slot in range(len(self._ends_at))],
+            protocol.FRAME_META: {},
+            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_CONTROL_DT: 0.1,
+        }
+
+    def reset_slot(self, token: Any, slot: int) -> dict[str, Any]:
+        self.slot_resets.append((token, slot))
+        self._steps[slot], self._grips[slot] = 0, 0.0
+        return {
+            protocol.SLOTS: {slot: {protocol.FRAME_OBS: self._observed(slot)}},
             protocol.FRAME_META: {},
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: 0.1,
@@ -242,6 +256,91 @@ def test_a_client_that_never_asks_for_a_reset_sits_out_after_the_join_deadline()
         first.reset(None)
         first.step(_action(0.0))
     assert env.stepped == [{0}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refill_resets_an_ended_slot_while_its_neighbour_runs():
+    env = _ClonedScene(ends_at=[1, 5])
+    with _clients(env) as (first, second):
+        _together(lambda: first.reset('scene'), lambda: second.reset('scene'))
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+        refilled = first.reset('scene', 2, refill=True)
+        stepped, neighbour = _together(lambda: first.step(_action(0.5)), lambda: second.step(_action(0.0)))
+
+    assert _steps(refilled) == 0.0 and _steps(stepped) == 1.0 and _steps(neighbour) == 2.0
+    assert stepped[protocol.FRAME_OBS][_GRIP] == pytest.approx(0.5)
+    assert env.resets == ['scene'] and env.slot_resets == [('scene', 0)]
+    assert env.stepped == [{0, 1}, {0, 1}]
+
+
+def test_a_refill_of_a_slot_whose_episode_still_runs_is_refused():
+    env = _ClonedScene(ends_at=[5, 5])
+    with _clients(env) as (first, second):
+        _together(lambda: first.reset('scene'), lambda: second.reset('scene'))
+        with pytest.raises(RuntimeError, match='still runs'):
+            first.reset('scene', 2, refill=True)
+
+    assert env.slot_resets == []
+
+
+@pytest.mark.timeout(60.0)
+def test_a_new_client_refills_the_env_slot_that_a_client_left():
+    env = _ClonedScene(ends_at=[1, 5])
+    with serve_env(env) as (host, port):
+        first, second = _connect(host, port), _connect(host, port)
+        _together(lambda: first.reset('scene'), lambda: second.reset('scene'))
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+        first.close()
+        third = _connect(host, port)
+        third.reset('scene', refill=True)
+        stepped, _ = _together(lambda: third.step(_action(0.7)), lambda: second.step(_action(0.0)))
+        third.close()
+        second.close()
+
+    assert stepped[protocol.FRAME_OBS][_GRIP] == pytest.approx(0.7)
+    assert env.slot_resets == [('scene', 0)]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refill_finds_no_env_slot_while_every_slot_of_the_batch_is_held():
+    env = _ClonedScene(ends_at=[5, 5, 5])
+    with _clients(env) as (first, second, third):
+        _together(lambda: first.reset('scene', 2), lambda: second.reset('scene', 2))
+        with pytest.raises(RuntimeError, match='every env slot of the batch of 2 is held'):
+            third.reset('scene', refill=True)
+    assert env.slot_resets == []
+
+
+@pytest.mark.timeout(60.0)
+@pytest.mark.parametrize(
+    ('token', 'batch_size', 'error'),
+    [('another scene', None, 'the token of that batch'), ('scene', 1, 'the batch that runs has 2 slots')],
+)
+def test_a_refill_into_another_batch_is_refused(token, batch_size, error):
+    env = _ClonedScene(ends_at=[1, 5])
+    with _clients(env) as (first, second):
+        _together(lambda: first.reset('scene'), lambda: second.reset('scene'))
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+        with pytest.raises(RuntimeError, match=error):
+            first.reset(token, batch_size, refill=True)
+    assert env.slot_resets == []
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refill_is_refused_while_a_slot_waits_to_join_the_next_batch():
+    env = _ClonedScene(ends_at=[1, 5, 5])
+    with serve_env(env) as (host, port), ThreadPoolExecutor(1) as pool:
+        first, second, third = (_connect(host, port) for _ in range(3))
+        _together(lambda: first.reset('scene', 2), lambda: second.reset('scene', 2))
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+        joining = pool.submit(third.reset, 'scene', 1)
+        assert _held_back(joining)
+        with pytest.raises(RuntimeError, match='waits to join the next batch'):
+            first.reset('scene', 2, refill=True)
+        first.close()
+        second.close()
+        joining.result(timeout=10.0)
+        third.close()
 
 
 def _watch_resets(monkeypatch) -> Callable[..., None]:
@@ -590,11 +689,11 @@ class _GripAdapter(EnvAdapter):
 
 
 def _drive_one_proxy(
-    host: str, port: int, grip: float, started: threading.Barrier, batch_size: int | None = None
+    host: str, port: int, grip: float, started: threading.Barrier, batch_size: int | None = None, refill: bool = False
 ) -> float:
     """Run one proxy in a World of its own through a reset and a few steps; return the grip it observed."""
     with pimm.World(virtual_time=True) as world:
-        proxy = RemoteEnvControlSystem(_GripAdapter(grip), nullcontext((host, port)), batch_size)
+        proxy = RemoteEnvControlSystem(_GripAdapter(grip), nullcontext((host, port)), batch_size, refill=refill)
         grip_rx = world.pair(proxy.observations[_GRIP])
         scheduler = world.start([proxy])
         started.wait(timeout=10.0)
@@ -626,6 +725,17 @@ def test_two_proxies_start_a_batch_of_two_on_an_env_of_four_clones():
     assert grips == [0.25, 0.75] and env.built == [2]
 
 
+@pytest.mark.timeout(60.0)
+def test_a_refill_proxy_resets_its_clone_alone_into_the_batch():
+    env = _ClonedScene(ends_at=[99, 99])
+    with serve_env(env, join_deadline=0.2) as (host, port):
+        first = _connect(host, port)
+        first.reset(None, 2)  # the deadline starts the batch with one of its two clones
+        first.close()
+        grip = _drive_one_proxy(host, port, 0.5, threading.Barrier(1), batch_size=2, refill=True)
+    assert grip == 0.5 and env.resets == [None] and env.slot_resets == [(None, 0)]
+
+
 def test_an_env_serves_one_slot_unless_it_says_otherwise():
     assert make_mujoco_env([]).num_slots == 1
 
@@ -641,3 +751,32 @@ def test_a_one_scene_benchmark_keeps_the_default_of_one_slot(env_source):
     ]
     members = {node.name for node in env_class.body if isinstance(node, ast.FunctionDef)}
     assert 'num_slots' not in members, f'{env_class.name} serves more than the one slot its single scene holds'
+
+
+class _SlowScene(_ClonedScene):
+    """A scene whose reset takes `load_s` seconds, as a native scene load does."""
+
+    def __init__(self, load_s: float):
+        super().__init__([1])
+        self._load_s = load_s
+
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
+        time.sleep(self._load_s)
+        return super().reset(token, slots)
+
+
+@pytest.mark.timeout(10.0)
+def test_a_scene_load_past_the_websockets_ping_timeout_keeps_its_client(monkeypatch):
+    """A native scene load blocks the server's heartbeat, so the server states its own ping timeout. Here the
+    websockets default is 0.05 s, and the client answers no ping."""
+    monkeypatch.setattr(server_module, 'serve', partial(websocket_serve, ping_interval=0.01, ping_timeout=0.05))
+    with serve_env(_SlowScene(load_s=0.5)) as (host, port):
+        conn = EnvConnection(host, port)
+        receive_frame = conn._ws.protocol.recv_frame
+        monkeypatch.setattr(
+            conn._ws.protocol, 'recv_frame', lambda frame: None if frame.opcode == OP_PING else receive_frame(frame)
+        )
+        try:
+            assert protocol.FRAME_OBS in conn.reset(_SCENE)
+        finally:
+            conn.close()

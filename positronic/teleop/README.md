@@ -37,8 +37,8 @@ The plain form of the policy works too:
 
 | Device | Browser | Service config | Page |
 |---|---|---|---|
-| iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone_teleop` (http) | `http://<laptop>:5005/?mode=teleop` |
-| Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android_teleop` (https) | `https://<laptop>:5005/?mode=teleop` |
+| iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone` (http) | `http://<laptop>:5005/` |
+| Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android` (https) | `https://<laptop>:5005/` |
 | Meta Quest | Oculus Browser | `--webxr=@positronic.cfg.webxr.oculus` (https, the default) | `https://<laptop>:5005/` |
 | PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/` |
 
@@ -89,8 +89,9 @@ controller, as for one arm.
 | Each phase | press or hold Y | | the camera and the panel (see Cameras) |
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
-the right controller. The headset video shows the control state of each arm, for example `Left on (X: off). Right off
-(A: on)`. The window and the phone page show "Control on" while control of at least one arm is on.
+the right controller. The headset video shows the control state of each arm on its own line, for example
+`Left on (X: off)` and `Right off (A: on)`. The window and the phone page show "Control on" while control of at least
+one arm is on.
 
 The phone is one controller, so a phone drives only a one-arm session. In a one-arm session, the left controller
 drives no arm.
@@ -100,8 +101,15 @@ off. The B button is labelled with what it does: Ready, or Complete while the tr
 trial waits for Ready, and it is green while the trial runs. At each new trial and at each end the page opens the grip
 slider, so a closed gripper does not close again at the next Control.
 
-The Quest shows the phase, the task and the control state on its video. The window on the laptop shows the same state,
-and the control state.
+The Quest shows the phase, the task and the control state on its video. While a trial waits for Ready, the video shows
+no task. The control state of an arm is on green while control is on, and on yellow while it is off. The window on the
+laptop shows the same state, and the control state.
+
+The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
+window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits
+for Ready or runs, the window and the headset page show a notice when `tracked` is false. To send controller data again:
+1. On the headset page, press ENTER VR.
+2. If the button shows EXIT VR, press it, reload the page, and press ENTER VR again.
 
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
 comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
@@ -136,8 +144,10 @@ Conversion for training picks its own keys from the recording.
   images came in the last 30 s (also between trials), and the camera that the headset shows.
 - In the headset, Y on the left controller works the video panel. On the PlayStation VR2 it is Triangle (△). A press
   of Y makes the next camera whose images come now the main camera. A hold of 1 s cycles the panel: on black with the
-  camera, the text alone over the room (the service then sends the view with no camera, and the page shows black as
-  clear), and hidden. The bottom of the view names the camera and the use of Y, with the Quest names as for B and A.
+  camera, on black with the camera and no task (the control line and the hints stay), the text alone over the room
+  (the service then sends the view with no camera, and the page shows black as clear), and hidden. A page that loads
+  starts on black with the task, and the stage holds over the trials. The bottom of the view names the camera and the
+  use of Y, with the Quest names as for B and A.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
@@ -152,7 +162,7 @@ Conversion for training picks its own keys from the recording.
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -287,7 +297,7 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 
    ```bash
    export AUTH_TOKEN=<a long random string>
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop \
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone \
      --served_address=@positronic.teleop.command.network
    ```
 
@@ -343,7 +353,8 @@ and vary how you come to the object.
 ## Limits
 
 - A Cancel while the trial waits for Ready ends the whole `eval run`. The end of the ready limit does the same. To skip
-  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
+  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up. When no controller data came in
+  the wait, the error of the ready limit says so.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
 - A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
@@ -380,5 +391,5 @@ On a bimanual rig, use `--policy=@positronic.cfg.policy.teleop_yam`, and do step
 
 ## See Also
 
-- [Data Collection](../../docs/data-collection.md) – headset setup, and collection with `positronic-data-collection`
+- [Data Collection](../../docs/data-collection.md) – headset setup, hardware setup and review of the data
 - [Inference Guide](../../docs/inference.md) – the eval run and the station console

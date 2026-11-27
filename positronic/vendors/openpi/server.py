@@ -11,6 +11,8 @@ import numpy as np
 import pos3
 from openpi_client import msgpack_numpy
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
+from platform_client.policy_container import WARMUP_DEADLINE_S
+from websockets.protocol import State
 from websockets.sync.client import ClientConnection, connect
 
 from pimm.logging import init_logging
@@ -54,6 +56,10 @@ class DeadlineWebsocketClientPolicy(WebsocketClientPolicy):
             ping_timeout=self.PING_TIMEOUT_S,
         )
         return connection, msgpack_numpy.unpackb(connection.recv())
+
+    @property
+    def is_open(self) -> bool:
+        return self._ws.state is State.OPEN
 
     def infer(self, obs: dict) -> dict:
         self._ws.send(self._packer.pack(obs))
@@ -132,12 +138,19 @@ class OpenpiSubprocess:
         assert self.process is not None
         process = self.process
         wait_for_subprocess_ready(
-            self._is_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
+            self._is_ready,
+            lambda: (process.poll() is not None, process.returncode),
+            'OpenPI subprocess',
+            max_wait=WARMUP_DEADLINE_S,
         )
 
     @property
     def client(self) -> DeadlineWebsocketClientPolicy:
-        """Get or create WebSocket client for inference."""
+        """The open WebSocket client for inference. A closed connection, after a keepalive or a deadline failure,
+        gets a new one, so that failure costs one inference and not every later session."""
+        if self._client is not None and not self._client.is_open:
+            logger.warning(f'The connection to the OpenPI subprocess on port {self.ws_port} is closed; reconnecting')
+            self._client = None
         if self._client is None:
             logger.info(f'Creating WebSocket client to OpenPI subprocess on port {self.ws_port}...')
             self._client = DeadlineWebsocketClientPolicy(

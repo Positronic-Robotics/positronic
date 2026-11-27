@@ -19,6 +19,7 @@ from positronic.drivers.roboarm.models import (
     EEFrame,
     parse_ee_frames,
 )
+from positronic.offboard import server_utils
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
@@ -27,6 +28,7 @@ from positronic.vendors.openpi import codecs
 pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
+from platform_client.policy_container import WARMUP_DEADLINE_S
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
@@ -136,6 +138,51 @@ def test_an_inference_past_the_deadline_fails_and_closes_the_connection():
             client.infer({'value': 2})
 
 
+def _first_answer_waits(wait: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
+    """A ``before_answer`` that awaits ``wait`` before the first answer and answers every later one at once."""
+    waited = threading.Event()
+
+    async def before_answer() -> None:
+        if not waited.is_set():
+            waited.set()
+            await wait()
+
+    return before_answer
+
+
+def _subprocess_on(port: int, infer_timeout: float) -> OpenpiSubprocess:
+    return OpenpiSubprocess(
+        checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_droid', infer_timeout=infer_timeout, ws_port=port
+    )
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_the_inference_after_a_keepalive_timeout_reaches_the_subprocess_again():
+    async def block_the_event_loop() -> None:
+        time.sleep(1.0)
+
+    with _openpi_server(_first_answer_waits(block_the_event_loop)) as port:
+        subproc = _subprocess_on(port, infer_timeout=30.0)
+        try:
+            with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):
+                subproc.client.infer({'value': 1})
+            assert subproc.client.infer({'value': 2}) == {'echo': 2}
+        finally:
+            subproc.stop()
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_the_inference_after_a_missed_deadline_reaches_the_subprocess_again():
+    with _openpi_server(_first_answer_waits(lambda: asyncio.sleep(1.5))) as port:
+        subproc = _subprocess_on(port, infer_timeout=0.5)
+        try:
+            with pytest.raises(TimeoutError, match='no inference result'):
+                subproc.client.infer({'value': 1})
+            assert subproc.client.infer({'value': 2}) == {'echo': 2}
+        finally:
+            subproc.stop()
+
+
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
 @pytest.mark.parametrize('overrides', [{}, {'config_name': 'pi0_libero'}], ids=['default', 'config-override'])
 def test_libero_server_converts_predictions_before_command_decoding(dtype, overrides):
@@ -183,3 +230,36 @@ def test_other_server_presets_preserve_native_predictions(preset):
         chunk = model({}, session_id='test')
 
     np.testing.assert_array_equal(np.stack([record[ACTION] for record in chunk]), predictions, strict=True)
+
+
+class _Clock:
+    """A monotonic clock that each sleep moves forward."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _start_ready_after(monkeypatch, seconds: float) -> None:
+    """Start the subprocess on a fake clock, with a server that accepts connections `seconds` after the start."""
+    clock = _Clock()
+    monkeypatch.setattr(server_utils.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(server_utils.time, 'sleep', clock.sleep)
+    monkeypatch.setattr(OpenpiSubprocess, '_is_ready', lambda self: clock.now >= seconds)
+    with mock.patch('subprocess.Popen') as popen:
+        popen.return_value.poll.return_value = None
+        OpenpiSubprocess(checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_droid', infer_timeout=120.0).start()
+
+
+def test_a_subprocess_that_starts_slower_than_300_s_still_serves(monkeypatch):
+    _start_ready_after(monkeypatch, 301.0)
+
+
+def test_a_subprocess_that_does_not_start_within_the_published_deadline_fails(monkeypatch):
+    with pytest.raises(RuntimeError, match='did not become ready'):
+        _start_ready_after(monkeypatch, WARMUP_DEADLINE_S + 10.0)

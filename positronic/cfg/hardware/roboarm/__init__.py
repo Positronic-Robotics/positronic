@@ -10,6 +10,7 @@ from positronic.drivers.roboarm.models import DROID_EE_FRAME
 
 if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.compensation import Compensation, FrictionFade
+    from positronic.drivers.roboarm.yam.grasp import GraspTuning
     from positronic.drivers.roboarm.yam.settle import SettleTuning
     from positronic.drivers.roboarm.yam.stream import StreamTuning
 
@@ -134,6 +135,13 @@ def yam_move_tuning(**fields: float) -> 'SettleTuning':
 
 
 @cfn.config()
+def yam_grasp_tuning(**fields: float) -> 'GraspTuning':
+    from positronic.drivers.roboarm.yam.grasp import DEFAULT_GRASP
+
+    return dataclasses.replace(DEFAULT_GRASP, **fields)
+
+
+@cfn.config()
 def yam_compensation(**fields) -> 'Compensation':
     from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION
 
@@ -188,6 +196,7 @@ def yambox_stream(max_joint_accel_rad_s2: float | None, obstacle_margin_m: float
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
+    grasp_tuning=None,
     gripper_force_cap_n=None,
     stream=yam_stream,
 )
@@ -199,6 +208,7 @@ def yam(
     park_after_idle_s: float | None,
     park_tuning: 'SettleTuning',
     move_tuning: 'SettleTuning',
+    grasp_tuning: 'GraspTuning | None',
     gripper_force_cap_n: float | None,
     stream: 'StreamTuning',
 ):
@@ -212,6 +222,7 @@ def yam(
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
+        grasp_tuning=grasp_tuning,
         gripper_force_cap_n=gripper_force_cap_n,
         stream=stream,
     )

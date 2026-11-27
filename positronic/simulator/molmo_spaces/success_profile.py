@@ -2,9 +2,14 @@
 
 This module must work in MolmoSpaces' isolated interpreter without Positronic installed.
 
-``molmo_native`` is MolmoSpaces' own verdict. ``strict_v1`` judges each task family by a predicate of its own, which
-must hold for ``HOLD_SEC``; the episode then runs for ``RECORD_AFTER_SEC`` more, so that its video shows the result.
-At each step, a ``strict_v1`` episode records each fact of its predicate under ``strict_v1.<fact>``.
+``molmo_native`` is MolmoSpaces' own verdict, and the episode ends at the first success. ``molmo_native_tail_v1`` is
+the same verdict, and the episode runs for ``RECORD_AFTER_SEC`` more, so that its video shows the result.
+``strict_v1`` judges each task family by a predicate of its own, which must hold for ``HOLD_SEC``; the episode then
+runs for ``RECORD_AFTER_SEC`` more. At each step, a strict episode records each fact of its predicate under
+``<profile>.<fact>``.
+
+``strict_v2`` is ``strict_v1`` with one change: the opening of a joint counts only the travel toward its open end. A
+joint that a push takes past its closed position reads as closed under ``strict_v2``, and as open under ``strict_v1``.
 """
 
 import dataclasses
@@ -18,10 +23,12 @@ import numpy as np
 
 class SuccessProfile(enum.StrEnum):
     MOLMO_NATIVE = 'molmo_native'
+    MOLMO_NATIVE_TAIL_V1 = 'molmo_native_tail_v1'
     STRICT_V1 = 'strict_v1'
+    STRICT_V2 = 'strict_v2'
 
 
-# The `strict_v1` thresholds. A change to one is a new profile version.
+# The thresholds of the versioned profiles. A change to one is a new profile version.
 HOLD_SEC = 1.0
 RECORD_AFTER_SEC = 1.0
 MIN_LIFT_M = 0.03
@@ -63,6 +70,53 @@ class MolmoNativeJudge:
     def step(self, info: dict[str, Any]) -> Judged:
         success = bool(self._task.judge_success())
         return Judged(success, success or bool(self._task.is_done()), {})
+
+
+def _steps(seconds: float, control_dt: float) -> int:
+    """The fewest control steps that span ``seconds``."""
+    return math.ceil(round(seconds / control_dt, 9))
+
+
+class _RecordAfter:
+    """The first success of an episode, which stays, and the end of the episode ``RECORD_AFTER_SEC`` after it, or
+    when ``task`` is done."""
+
+    def __init__(self, profile: SuccessProfile, task: Any, control_dt: float):
+        # The task's ``is_done`` must not include its native success, or that would end the episode first.
+        if task.config.terminate_upon_success:
+            raise ValueError(f'{profile} needs a task config with terminate_upon_success off')
+        self._task = task
+        self._after_steps = _steps(RECORD_AFTER_SEC, control_dt)
+        self._steps_since_success: int | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self._steps_since_success is not None
+
+    def step(self, success: bool) -> Judged:
+        """The verdict of the episode after a step whose own verdict is ``success``, with no metrics."""
+        if self._steps_since_success is not None:
+            self._steps_since_success += 1
+        elif success:
+            self._steps_since_success = 0
+        since = self._steps_since_success
+        recorded_after = since is not None and since >= self._after_steps
+        return Judged(since is not None, recorded_after or bool(self._task.is_done()), {})
+
+
+class MolmoNativeTailJudge:
+    """MolmoSpaces' own verdict, ``judge_success`` at each step. The first success stays, and the episode ends
+    ``RECORD_AFTER_SEC`` after it, or when the task is done."""
+
+    def __init__(self, task: Any, control_dt: float):
+        self._task = task
+        self._after = _RecordAfter(SuccessProfile.MOLMO_NATIVE_TAIL_V1, task, control_dt)
+
+    def observe(self, info: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    def step(self, info: dict[str, Any]) -> Judged:
+        return self._after.step(bool(self._task.judge_success()))
 
 
 def _root(model: mujoco.MjModel, geom: int) -> int:
@@ -262,31 +316,45 @@ class JointFacts:
     opening: float
 
 
-def _opening(data: mujoco.MjData, joint: int) -> float:
-    """How far ``joint`` is open, from 0 at its closed position 0 to 1 at the full width of its range."""
+def _distance_from_closed(data: mujoco.MjData, joint: int) -> float:
+    """How far ``joint`` is from its closed position, in either direction, as a fraction of the width of its range."""
     low, high = data.model.jnt_range[joint]
     return float(abs(data.qpos[data.model.jnt_qposadr[joint]]) / abs(high - low))
+
+
+def _opening(data: mujoco.MjData, joint: int) -> float:
+    """How far ``joint`` is open: 0 at its closed position, 1 at its open end, and below 0 past its closed position."""
+    low, high = data.model.jnt_range[joint]
+    # MolmoSpaces puts the closed position of a joint at 0, and its open end at the end of its range farther from 0.
+    open_end = high if abs(high) >= abs(low) else low
+    return float(data.qpos[data.model.jnt_qposadr[joint]] / open_end)
+
+
+# The opening of a joint that ``Open`` and ``Close`` read, by strict profile.
+_JOINT_OPENING = {SuccessProfile.STRICT_V1: _distance_from_closed, SuccessProfile.STRICT_V2: _opening}
 
 
 class Open:
     """The joint that the task names is open at least ``MIN_OPEN_FRAC`` of its range."""
 
-    def __init__(self, data: mujoco.MjData, joint: int):
+    def __init__(self, data: mujoco.MjData, joint: int, profile: SuccessProfile):
         self._data, self._joint = data, joint
+        self._opening = _JOINT_OPENING[profile]
 
     def facts(self, info: dict[str, Any]) -> JointFacts:
-        opening = _opening(self._data, self._joint)
+        opening = self._opening(self._data, self._joint)
         return JointFacts(holds=opening >= MIN_OPEN_FRAC, joint=self._joint, opening=opening)
 
 
 class Close:
     """The joint that the task names is closed at least ``MIN_CLOSED_FRAC`` of its range."""
 
-    def __init__(self, data: mujoco.MjData, joint: int):
+    def __init__(self, data: mujoco.MjData, joint: int, profile: SuccessProfile):
         self._data, self._joint = data, joint
+        self._opening = _JOINT_OPENING[profile]
 
     def facts(self, info: dict[str, Any]) -> JointFacts:
-        opening = _opening(self._data, self._joint)
+        opening = self._opening(self._data, self._joint)
         return JointFacts(holds=1.0 - opening >= MIN_CLOSED_FRAC, joint=self._joint, opening=opening)
 
 
@@ -303,36 +371,23 @@ class Check(Protocol):
     def facts(self, info: dict[str, Any]) -> Facts: ...
 
 
-def _steps(seconds: float, control_dt: float) -> int:
-    """The fewest control steps that span ``seconds``."""
-    return math.ceil(round(seconds / control_dt, 9))
-
-
 class StrictJudge:
-    """The ``strict_v1`` verdict of one episode.
+    """The verdict of one episode under the strict profile ``profile``.
 
     The episode succeeds at the step where ``check`` held for ``HOLD_SEC`` of consecutive steps, and the success
     stays. It ends ``RECORD_AFTER_SEC`` after that step, or when ``task`` is done.
     """
 
-    def __init__(self, task: Any, check: Check, control_dt: float):
-        # The task's ``is_done`` must not include its native success, or that would end the episode first.
-        if task.config.terminate_upon_success:
-            raise ValueError(f'{SuccessProfile.STRICT_V1} needs a task config with terminate_upon_success off')
-        self._task = task
+    def __init__(self, profile: SuccessProfile, task: Any, check: Check, control_dt: float):
+        self._profile = profile
         self._check = check
         self._hold_steps = _steps(HOLD_SEC, control_dt)
-        self._after_steps = _steps(RECORD_AFTER_SEC, control_dt)
         self._held_steps = 0
-        self._steps_since_success: int | None = None
+        self._after = _RecordAfter(profile, task, control_dt)
 
     def _metrics(self, facts: Facts) -> dict[str, Any]:
-        fields = {
-            **dataclasses.asdict(facts),
-            'held_steps': self._held_steps,
-            'success': self._steps_since_success is not None,
-        }
-        return {f'{SuccessProfile.STRICT_V1}.{name}': value for name, value in fields.items()}
+        fields = {**dataclasses.asdict(facts), 'held_steps': self._held_steps, 'success': self._after.succeeded}
+        return {f'{self._profile}.{name}': value for name, value in fields.items()}
 
     def observe(self, info: dict[str, Any]) -> dict[str, Any]:
         """The metrics of the current state, with no step of the hold window."""
@@ -341,10 +396,5 @@ class StrictJudge:
     def step(self, info: dict[str, Any]) -> Judged:
         facts = self._check.facts(info)
         self._held_steps = self._held_steps + 1 if facts.holds else 0
-        if self._steps_since_success is not None:
-            self._steps_since_success += 1
-        elif self._held_steps >= self._hold_steps:
-            self._steps_since_success = 0
-        since = self._steps_since_success
-        recorded_after = since is not None and since >= self._after_steps
-        return Judged(since is not None, recorded_after or bool(self._task.is_done()), self._metrics(facts))
+        judged = self._after.step(self._held_steps >= self._hold_steps)
+        return judged._replace(metrics=self._metrics(facts))

@@ -16,8 +16,7 @@ HARNESS_WORLD = 'harness.world'
 RECORDED_TIME = 'recorded'
 
 # The timelines that a reader reads a recording's sample times from, in the order that it tries them.
-# TODO: Remove the received.world fallback when teleoperation becomes a Harness policy and `data_collection.py`
-# is removed.
+# `RECEIVED_WORLD` reads the datasets on disk that a Harness run did not record.
 RECORDING_TIMELINE_ORDER = (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME)
 
 
