@@ -344,7 +344,7 @@ class FakeTimer:
 
     made: list['FakeTimer'] = []
 
-    def __init__(self, interval: float, function, args) -> None:
+    def __init__(self, interval: float, function, args=()) -> None:
         self.interval, self.function, self.args = interval, function, args
         self.daemon = False
         FakeTimer.made.append(self)
@@ -363,7 +363,7 @@ def test_a_dropped_session_no_dial_takes_ends_after_the_idle_timeout(modal_wire,
     monkeypatch.setattr(FakeTimer, 'made', [])
     monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
     _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
-    [timer] = FakeTimer.made
+    timer = FakeTimer.made[-1]
 
     timer.fire()
 
@@ -382,7 +382,7 @@ def test_a_wire_given_an_idle_timeout_starts_and_parks_its_sessions_with_it(edge
     _drop(client_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
 
     assert edge.starts[0][modal.IDLE_TIMEOUT_HEADER] == '30'
-    assert FakeTimer.made[0].interval == 30
+    assert FakeTimer.made[-1].interval == 30
     client_wire.end_all()
 
 
@@ -390,9 +390,10 @@ def test_a_dropped_session_a_dial_took_is_not_ended_by_its_timer(modal_wire, edg
     monkeypatch.setattr(FakeTimer, 'made', [])
     monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
     _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+    parked = FakeTimer.made[-1]
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
-    FakeTimer.made[0].fire()
+    parked.fire()
 
     modal_wire._wait_for_ends()
     assert edge.ended == []
@@ -596,3 +597,129 @@ def test_a_start_answer_without_a_token_a_header_holds_is_final(modal_wire, answ
         modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
     assert refused.value.refusal is wire.Refusal.FINAL
+
+
+def _keepalive_waits(inner: FakeWire) -> tuple[threading.Event, threading.Event]:
+    """Make the next keepalive on ``inner`` wait: the first event says it runs, and the second lets it answer."""
+    running, answer = threading.Event(), threading.Event()
+    keepalive = inner.keepalive
+
+    def waiting(address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int:
+        running.set()
+        answer.wait(5.0)
+        return keepalive(address, headers, timeout)
+
+    inner.keepalive = waiting  # type: ignore[method-assign]
+    return running, answer
+
+
+def _close(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0).close()
+
+
+def _drop_and_time_out(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+    FakeTimer.made[-1].fire()
+
+
+def _spare_times_out(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    FakeTimer.made[-1].fire()
+
+
+def _end_all(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    modal_wire.end_all()
+
+
+def _start_refused(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    edge.refuse = [HTTPStatus.UNAUTHORIZED]
+    with pytest.raises(wire.ConnectRefused):
+        modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+
+@pytest.mark.parametrize('last_session_ends', [_close, _drop_and_time_out, _spare_times_out, _end_all, _start_refused])
+def test_an_endpoint_keeps_no_credentials_after_its_last_session_ends(modal_wire, edge, monkeypatch, last_session_ends):
+    monkeypatch.setattr(FakeTimer, 'made', [])
+    monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
+
+    last_session_ends(modal_wire, edge)
+
+    modal_wire._wait_for_ends()
+    assert modal_wire._endpoints == {}
+
+
+def test_a_spare_no_call_uses_ends_after_the_idle_timeout(modal_wire, edge, inner, monkeypatch):
+    monkeypatch.setattr(FakeTimer, 'made', [])
+    monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    timer = FakeTimer.made[-1]
+
+    timer.fire()
+
+    assert timer.interval == modal.IDLE_TIMEOUT
+    assert edge.ended == ['token-1']
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    assert inner.called == ['token-1', 'token-2']
+
+
+def _hold(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+
+def _park(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    dropped, closed = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0), modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+    _drop(dropped)
+    closed.close()
+
+
+def _keep_a_spare(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+
+
+def _keep_a_spare_past_its_first_timeout(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    first = FakeTimer.made[-1]
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+    first.fire()
+
+
+def _start_on_a_cold_app(modal_wire: modal.ModalClientWire, edge: FakeEdge) -> None:
+    edge.container_free.clear()
+    with pytest.raises(wire.ConnectRefused):
+        modal_wire.dial(_ADDRESS, _CREDENTIALS, 0.05)
+
+
+@pytest.mark.parametrize(
+    'session', [_hold, _park, _keep_a_spare, _keep_a_spare_past_its_first_timeout, _start_on_a_cold_app]
+)
+def test_an_endpoint_with_a_live_session_or_a_running_start_keeps_its_credentials(
+    modal_wire, edge, monkeypatch, session
+):
+    monkeypatch.setattr(FakeTimer, 'made', [])
+    monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
+
+    session(modal_wire, edge)
+
+    modal_wire._wait_for_ends()
+    [endpoint] = modal_wire._endpoints.values()
+    assert endpoint.headers == _CREDENTIALS
+    assert 'token-1' not in edge.ended
+
+
+def test_a_call_in_flight_keeps_its_endpoint_after_the_last_session_ends(modal_wire, edge, inner):
+    conn = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+    running, answer = _keepalive_waits(inner)
+    keepalive = threading.Thread(target=modal_wire.keepalive, args=(_ADDRESS, _CREDENTIALS, 5.0))
+    keepalive.start()
+    assert running.wait(5.0)
+
+    conn.close()
+    modal_wire._wait_for_ends()
+    kept = dict(modal_wire._endpoints)
+    answer.set()
+    keepalive.join(5.0)
+
+    assert len(kept) == 1
+    assert modal_wire._endpoints == {}
