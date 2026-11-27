@@ -393,6 +393,37 @@ def _values(element: ET.Element | None, name: str, default: str) -> np.ndarray:
     return np.array([float(value) for value in text.split()])
 
 
+def _link(joint: ET.Element, tag: str) -> str:
+    element = joint.find(tag)
+    assert element is not None  # every joint of a URDF names its parent link and its child link
+    return str(element.get('link'))
+
+
+def _joints_to(urdf: ET.Element, link: str) -> list[ET.Element]:
+    """The joints of ``urdf`` from the root link to ``link``, in order."""
+    by_child = {_link(joint, 'child'): joint for joint in urdf.findall('joint')}
+    joints = []
+    while link in by_child:
+        joints.append(by_child[link])
+        link = _link(by_child[link], 'parent')
+    return joints[::-1]
+
+
+def _moving_joint(element: ET.Element, rot: np.ndarray, pos: np.ndarray) -> _Joint:
+    axis = _values(element.find('axis'), 'xyz', '1 0 0')
+    x, y, z = axis = axis / np.linalg.norm(axis)
+    skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+    return _Joint(str(element.get('name')), element.get('type') == 'prismatic', rot, pos, axis, skew, skew @ skew)
+
+
+def _limits(element: ET.Element) -> tuple[float, float]:
+    """The limits of a moving joint. A continuous joint and a joint with no limit have infinite ones."""
+    limit = element.find('limit')
+    if element.get('type') == 'continuous' or limit is None:
+        return -math.inf, math.inf
+    return float(limit.get('lower', 0)), float(limit.get('upper', 0))
+
+
 class UrdfChain:
     """The joints of a URDF from the root link to ``link``, and the kinematics of ``link`` in the root link's frame.
 
@@ -401,41 +432,17 @@ class UrdfChain:
     """
 
     def __init__(self, urdf: ET.Element, link: str):
-        by_child = {}
-        for joint in urdf.findall('joint'):
-            child = joint.find('child')
-            assert child is not None  # every joint of a URDF names its child link
-            by_child[child.get('link')] = joint
-        elements = []
-        while link in by_child:
-            elements.append(by_child[link])
-            parent = by_child[link].find('parent')
-            assert parent is not None  # every joint of a URDF names its parent link
-            link = parent.get('link')
         self._joints: list[_Joint] = []
         limits = []
         rot, pos = np.eye(3), np.zeros(3)  # the fixed transform since the last moving joint
-        for element in reversed(elements):
+        for element in _joints_to(urdf, link):
             origin = element.find('origin')
             pos = pos + rot @ _values(origin, 'xyz', '0 0 0')
             rot = rot @ rpy_matrix(_values(origin, 'rpy', '0 0 0'))
-            kind = element.get('type')
-            if kind not in _MOVING_JOINTS:
-                continue
-            axis = _values(element.find('axis'), 'xyz', '1 0 0')
-            x, y, z = axis = axis / np.linalg.norm(axis)
-            skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
-            self._joints.append(
-                _Joint(str(element.get('name')), kind == 'prismatic', rot, pos, axis, skew, skew @ skew)
-            )
-            limit = element.find('limit')
-            bounded = kind != 'continuous' and limit is not None
-            limits.append(
-                (float(limit.get('lower', 0)), float(limit.get('upper', 0)))
-                if bounded and limit is not None
-                else (-math.inf, math.inf)
-            )
-            rot, pos = np.eye(3), np.zeros(3)
+            if element.get('type') in _MOVING_JOINTS:
+                self._joints.append(_moving_joint(element, rot, pos))
+                limits.append(_limits(element))
+                rot, pos = np.eye(3), np.zeros(3)
         self._tip_rot, self._tip_pos = rot, pos
         self.joints = tuple(joint.name for joint in self._joints)
         self.lower, self.upper = np.array(limits, dtype=np.float64).reshape(-1, 2).T
