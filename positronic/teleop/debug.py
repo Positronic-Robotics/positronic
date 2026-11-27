@@ -87,6 +87,8 @@ class ArmControl(pimm.ControlSystem):
     SETTLE_SEC = 0.5
     # An arm whose driver sends no new state for this long gives no state: its last state can be from before a stall
     STALE_STATE_SEC = 0.5
+    # How often the arm reads its signals: twice in a frame of a headset at 120 Hz, the highest rate of a Quest
+    POLL_SEC = 1 / 240
 
     def __init__(
         self,
@@ -245,7 +247,7 @@ class ArmControl(pimm.ControlSystem):
             if clock.now() >= next_report:
                 self._send_report()
                 next_report = clock.now() + self.REPORT_SEC
-            yield pimm.Sleep(0.001)
+            yield pimm.Sleep(self.POLL_SEC)
         if answer.done():
             answer.result()
 
@@ -261,7 +263,7 @@ class ArmControl(pimm.ControlSystem):
             if message is not None and message.updated:
                 states += 1
                 self._state_at = clock.now()
-            yield pimm.Sleep(0.001)
+            yield pimm.Sleep(self.POLL_SEC)
 
     def _to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         """Clear the errors of the arm and its gripper, and put the arm at its start pose. Raise what a device failed
@@ -316,7 +318,7 @@ class ArmControl(pimm.ControlSystem):
             if clock.now() >= next_report:
                 self._send_report()
                 next_report = clock.now() + self.REPORT_SEC
-            yield pimm.Sleep(0.001)
+            yield pimm.Sleep(self.POLL_SEC)
 
 
 def _shift_text(shift: np.ndarray | None) -> str:
