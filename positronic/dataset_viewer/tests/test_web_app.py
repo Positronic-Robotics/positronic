@@ -219,6 +219,14 @@ def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
     assert not current.exists()
 
 
+def test_a_cached_rrd_with_raw_clock_axes_is_not_reused(rrd_cache):
+    current = rrd_cache(30.0, 640)
+    old = current.parent / ('v4-' + current.name.split('-', 1)[1])
+    old.write_bytes(b'recording with raw clock axes')
+    assert current != old
+    assert not current.exists()
+
+
 _GRIP_LAYOUT = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
@@ -301,6 +309,7 @@ class _StubEpisode:
     meta = {META_PATH: '/datasets/run-7/episode_3', 'size_mb': 12.5}
     static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
     timelines = (RECORDED_TIME,)
+    signals = {'value': DummySignal([1000, 2000], [0, 1])}
 
     def bounds(self, timelines: str) -> TimeBounds[int]:
         return TimeBounds(1000, 2000)
@@ -480,6 +489,13 @@ def test_the_episode_page_links_its_recording_and_its_downloads_at_their_routes(
     assert 'appUrl("api/episode_rrd/0")' in body
     assert '"api/episode/0/static/scene"' in body
     assert viewer.get('/api/episode/0/static/scene').content == b'a mesh'
+
+
+def test_the_episode_page_hands_the_script_the_start_of_its_seek_clock_as_a_string(viewer):
+    body = viewer.get('/episode/0').text
+
+    assert 'const seekTimeline = "recorded";' in body
+    assert 'const seekStartNs = "1000";' in body
 
 
 def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_encoded(viewer, monkeypatch):
