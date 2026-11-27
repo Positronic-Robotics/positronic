@@ -1,7 +1,7 @@
 """What the platform offers: the evals a caller may name, and the tasks a caller may compose into one.
 
-Both lists depend on the caller's grant. Every registered user sees the evals a submission
-names, and a customer grant adds the rig's evals and tasks.
+Every registered user sees the evals a submission names and the tasks its personal organization can run.
+A customer grant adds the rig's evals and tasks.
 """
 
 from __future__ import annotations
