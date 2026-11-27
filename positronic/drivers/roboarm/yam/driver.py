@@ -160,9 +160,10 @@ class _MotorSpace(Protocol):
 
 @runtime_checkable
 class _GripperLoop(Protocol):
-    """What the gripper force cap reads and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update`` ends in
-    ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its P-D command. The
-    gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before that call.
+    """What the gripper force cap and the grasp read and wrap on i2rt's hardware chain, ``MotorChainRobot``: each
+    ``update`` ends in ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its
+    P-D command. The gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before
+    that call.
 
     HACK: these members are private to i2rt, which takes a gripper force limit only when it opens the chain.
     """
