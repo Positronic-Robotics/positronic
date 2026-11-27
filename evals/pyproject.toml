@@ -15,7 +15,7 @@ dependencies = [
     # The labelers read the time of each sample from an episode's signal files.
     "pyarrow",
     # The names an episode records, which the labelers read. The root pins it exactly at the same version.
-    "positronic-eval-vocabulary==0.7.7",
+    "positronic-eval-vocabulary==0.7.8",
 ]
 
 [build-system]
