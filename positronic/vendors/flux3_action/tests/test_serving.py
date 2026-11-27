@@ -12,6 +12,7 @@ import pytest
 from positronic_model_server import serialization, server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_model_server.server import ModelServer
+from positronic_model_server.spec import ARGS, NAME, SEQ
 from positronic_wire import websocket, wire
 
 from positronic import keys as obs_keys
@@ -21,6 +22,7 @@ from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.processors import InferenceSchedule
 from positronic.vendors.flux3_action.serving import keys, recipe, server
 
 
@@ -238,8 +240,8 @@ def test_invalid_session_settings_fail(name, value, rtc):
 
 
 def _schedule_args(client_stack: dict) -> dict:
-    (schedule,) = (node for node in client_stack['seq'] if node['name'] == 'inference_schedule')
-    return schedule['args']
+    (schedule,) = (node for node in client_stack[SEQ] if node.get(NAME) == InferenceSchedule.WIRE_NAME)
+    return schedule[ARGS]
 
 
 def test_session_inference_lead_requests_before_the_chunk_ends():
