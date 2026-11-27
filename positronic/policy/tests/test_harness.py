@@ -1998,12 +1998,14 @@ POLICY, TELEOPERATOR = policy_keys.POLICY_SOURCE, policy_keys.TELEOPERATOR
 SHADOW_MOTOR = f'{policy_keys.SHADOW}.{POLICY}.{MOTOR}'
 
 
-def _control_records(episode):
-    return [
-        (name, data, timestamps[HARNESS_STEP])
-        for name, data, timestamps in episode.records
-        if name.startswith((f'{policy_keys.CONTROL}.', f'{policy_keys.SHADOW}.'))
-    ]
+def _control_records(episode) -> dict[str, list[tuple[Any, int]]]:
+    """The value and the step number of each ``control.*`` and ``shadow.*`` sample of ``episode``, in order, by
+    signal."""
+    records: dict[str, list[tuple[Any, int]]] = {}
+    for name, data, timestamps in episode.records:
+        if name.startswith((f'{policy_keys.CONTROL}.', f'{policy_keys.SHADOW}.')):
+            records.setdefault(name, []).append((data, timestamps[HARNESS_STEP]))
+    return records
 
 
 def test_take_over_and_hand_back_switch_the_commands_that_the_rig_gets_in_the_step_of_the_press(episode_harness):
@@ -2016,18 +2018,13 @@ def test_take_over_and_hand_back_switch_the_commands_that_the_rig_gets_in_the_st
     [episode] = h.dataset.episodes
     take_over = Event(kind=EventKind.SWITCH, from_=POLICY, to=TELEOPERATOR, cause=policy_keys.HELPER_TAKE_OVER)
     hand_back = Event(kind=EventKind.SWITCH, from_=TELEOPERATOR, to=POLICY, cause=policy_keys.HELPER_HAND_BACK)
-    assert _control_records(episode) == [
-        (policy_keys.CONTROL_SOURCE, POLICY, 0),
-        (policy_keys.CONTROL_USES, encode_uses(frozenset({POLICY})), 0),
-        (policy_keys.CONTROL_SOURCE, TELEOPERATOR, 1),
-        (policy_keys.CONTROL_USES, encode_uses(frozenset({TELEOPERATOR})), 1),
-        (policy_keys.CONTROL_EVENT, take_over.encode(), 1),
-        (SHADOW_MOTOR, 2, 1),
-        (SHADOW_MOTOR, 3, 2),
-        (policy_keys.CONTROL_SOURCE, POLICY, 3),
-        (policy_keys.CONTROL_USES, encode_uses(frozenset({POLICY})), 3),
-        (policy_keys.CONTROL_EVENT, hand_back.encode(), 3),
-    ]
+    by_policy, by_teleoperator = encode_uses(frozenset({POLICY})), encode_uses(frozenset({TELEOPERATOR}))
+    assert _control_records(episode) == {
+        policy_keys.CONTROL_SOURCE: [(POLICY, 0), (TELEOPERATOR, 1), (POLICY, 3)],
+        policy_keys.CONTROL_USES: [(by_policy, 0), (by_teleoperator, 1), (by_policy, 3)],
+        policy_keys.CONTROL_EVENT: [(take_over.encode(), 1), (hand_back.encode(), 3)],
+        SHADOW_MOTOR: [(2, 1), (3, 2)],
+    }
     assert [(data, timestamps[HARNESS_STEP]) for name, data, timestamps in episode.records if name == MOTOR] == [
         (1, 0),
         (102, 1),
@@ -2044,7 +2041,7 @@ def test_a_rollout_with_no_helper_records_no_control_signal(episode_harness):
     answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=3), h.dataset))
     _until_answered(h, answer)
     [episode] = h.dataset.episodes
-    assert _control_records(episode) == []
+    assert _control_records(episode) == {}
     assert not any(name.startswith(f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}.') for name in episode.static)
 
 
@@ -2128,9 +2125,7 @@ def test_the_teleoperator_sends_each_new_console_message_and_the_rig_keeps_it_wh
     _until_answered(h, answer)
     assert [value for _, value in h.commands.values] == [1, 60, 60, 4, 5]
     [episode] = h.dataset.episodes
-    assert [
-        (data, step) for name, data, step in _control_records(episode) if name.startswith(f'{policy_keys.SHADOW}.')
-    ] == [(2, 1), (3, 2)]
+    assert _control_records(episode)[SHADOW_MOTOR] == [(2, 1), (3, 2)]
     teleoperator_meta = f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}'
     assert episode.static[f'{teleoperator_meta}.{policy_keys.TYPE}'] == policy_keys.TELEOPERATOR
     assert episode.static[f'{teleoperator_meta}.{policy_keys.LICENSE}'] == 'cc-by-4.0'
@@ -2152,7 +2147,7 @@ def test_a_press_from_the_episode_before_is_not_new_in_the_next_episode_of_the_t
     console_out.emit({MOTOR: 60, policy_keys.HELPER_TAKE_OVER: 3})
     _until_answered(h, answer)
     _, second = h.dataset.episodes
-    assert [data for name, data, _ in _control_records(second) if name == policy_keys.CONTROL_SOURCE] == [POLICY]
+    assert _control_records(second)[policy_keys.CONTROL_SOURCE] == [(POLICY, 0)]
 
 
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
