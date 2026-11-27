@@ -40,16 +40,6 @@ class _Presses(BaseModel):
     hand_back: StrictInt | None = Field(default=None, alias=HELPER_HAND_BACK)
 
 
-def _presses(element: Mapping[str, Any]) -> _Presses | None:
-    """The press fields of ``element``, or ``None`` when it has none."""
-    if not (fields := {name: value for name, value in element.items() if name in HELPER_FIELDS}):
-        return None
-    try:
-        return _Presses.model_validate(fields)
-    except ValidationError as e:
-        raise PolicyCommandError(f'The press fields of an element of the helper are not well formed: {e}') from e
-
-
 def helper_commands(element: Mapping[str, Any]) -> Commands:
     """The commands of ``element``, an element of the helper: each field but the press fields."""
     return {name: value for name, value in element.items() if name not in HELPER_FIELDS}
@@ -82,6 +72,16 @@ class Takeover:
         return ControlObservation(source=self._driver, event=self._event).model_dump(mode='json')
 
     @staticmethod
+    def _parse_presses(element: Mapping[str, Any]) -> _Presses | None:
+        """The press fields of ``element``, or ``None`` when it has none."""
+        if not (fields := {name: value for name, value in element.items() if name in HELPER_FIELDS}):
+            return None
+        try:
+            return _Presses.model_validate(fields)
+        except ValidationError as e:
+            raise PolicyCommandError(f'The press fields of an element of the helper are not well formed: {e}') from e
+
+    @staticmethod
     def _new_press(presses: _Presses, last: _Presses) -> str | None:
         """The name of the newest press in ``presses`` that ``last`` does not have, or ``None``."""
         new: dict[str, int] = {}
@@ -95,7 +95,7 @@ class Takeover:
         """The commands that the rig gets and the record of the step, for the commands of the policy and the element
         of the helper. While the helper drives, the record keeps the commands of the policy as its shadow actions."""
         events: tuple[Event, ...] = ()
-        presses = _presses(element)
+        presses = self._parse_presses(element)
         if self._presses is None:
             self._presses = presses if presses is not None else _Presses()
         elif presses is not None:
