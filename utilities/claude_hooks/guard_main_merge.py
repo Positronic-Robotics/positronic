@@ -94,6 +94,9 @@ MERGE_NOT_ALONE_MSG = (
     ' reads the stack before the call runs, and another command in the call can change the stack'
     ' before the merge does.'
 )
+PIN_LOOKUP_MSG = (
+    'BLOCKED: the guard cannot tell whether #{number} only moves a pin: {reason}.' + DENY_TAIL + MERGE_ESCAPE
+)
 STACK_LOOKUP_MSG = (
     'BLOCKED: the guard cannot tell which pull requests the merge of #{number} takes: {reason}.'
     ' Get the stack from GitHub before you try the merge again.'
@@ -553,7 +556,8 @@ def only_moves_pins(number: int, guarded_slug: str, gh_json=_gh_json) -> bool:
     """Whether the pull request only moves pins, each revision to a commit on the guarded branch.
 
     A merge of such a pull request adds no code that a human did not review on that branch, so it
-    needs no receipt. A diff that cannot be read is not a pin move.
+    needs no receipt. Raises `StackLookupError` when GitHub does not answer a read, an unknown
+    revision included.
     """
     deadline = time.monotonic() + PIN_MOVE_LOOKUP_BUDGET_S
 
@@ -561,12 +565,9 @@ def only_moves_pins(number: int, guarded_slug: str, gh_json=_gh_json) -> bool:
         compared = gh_json(f'repos/{guarded_slug}/compare/{revision}...{GUARDED_BRANCH}', deadline)
         return isinstance(compared, dict) and compared.get('status') in ('ahead', 'identical')
 
-    try:
-        # One page holds a pin move. A pull request with more files than a page is not one.
-        files = gh_json(f'repos/{guarded_slug}/pulls/{number}/files?per_page=100', deadline)
-        return isinstance(files, list) and len(files) < 100 and pin_move.is_pin_move(files, on_guarded_branch)
-    except StackLookupError:
-        return False
+    # One page holds a pin move. A pull request with more files than a page is not one.
+    files = gh_json(f'repos/{guarded_slug}/pulls/{number}/files?per_page=100', deadline)
+    return isinstance(files, list) and len(files) < 100 and pin_move.is_pin_move(files, on_guarded_branch)
 
 
 # Each lookup of a repository's name. A merge makes two, which together stay inside the hook timeout.
@@ -1200,8 +1201,12 @@ def _authorize_merge(
     A pin move of `number` itself needs no authorization. Each pull request below it in a stack still needs one.
     """
     has_receipt = authorized(number, guarded_slug)
-    if not has_receipt and not pins_only(number, guarded_slug):
-        return refused
+    if not has_receipt:
+        try:
+            if not pins_only(number, guarded_slug):
+                return refused
+        except StackLookupError as e:
+            return PIN_LOOKUP_MSG.format(number=number, reason=e)
     try:
         below = stack_below(number, guarded_slug)
     except StackLookupError as e:

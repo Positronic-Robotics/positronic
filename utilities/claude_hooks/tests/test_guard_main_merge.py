@@ -702,8 +702,12 @@ def test_only_moves_pins_reads_the_diff_and_asks_whether_the_revision_is_on_main
     assert not gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH, compare_status='diverged'))
 
 
-def test_only_moves_pins_is_false_when_github_does_not_know_the_revision():
-    assert not gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
+def test_a_pin_lookup_github_does_not_answer_refuses_naming_the_reason(git):
+    def unknown_revision(number, slug):
+        return gmm.only_moves_pins(number, slug, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
+
+    denial = verdict(git, 'gh pr merge 103', authorized=lambda n, slug: False, pins_only=unknown_revision)
+    assert denial is not None and 'only moves a pin: `gh api` failed: Not Found' in denial
 
 
 def fake_github(stack_members, bases, stack_base='main'):
