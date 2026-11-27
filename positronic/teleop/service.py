@@ -297,8 +297,7 @@ class _ArmControl:
 
 @dataclass(frozen=True)
 class _ViewSnapshot:
-    """What the headset view shows, read in one hold of the lock: the state of the trial, the shown camera, whether
-    the trial answered a frame, the control of each arm, the cameras, and the last image of each camera."""
+    """What the headset view shows, read in one hold of the lock."""
 
     state: TrialState
     shown: str | None
