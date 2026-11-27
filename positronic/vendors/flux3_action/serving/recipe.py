@@ -71,6 +71,7 @@ def client_stack(
     image_mappings: dict[str, str],
     compress_images: bool,
     jpeg_quality: int,
+    inference_lead: float,
     rtc: dict[str, float] | None,
 ) -> dict:
     player = {'replan_on_error': True}
@@ -82,7 +83,7 @@ def client_stack(
         merge = {'start': 'observation'}
     parts = [
         component('trajectory_player', **player),
-        component('inference_schedule', fps=fps, request_timing=request, merge=merge, latency_estimate=0.0),
+        component('inference_schedule', fps=fps, request_timing=request, merge=merge, latency_estimate=inference_lead),
         inference(image_mappings, rtc=rtc is not None),
         component('metadata', values={keys.ACTION_FPS: fps}),
     ]

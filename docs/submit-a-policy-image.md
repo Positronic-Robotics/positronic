@@ -121,6 +121,9 @@ submission.
 - The default command is `droid`: wrist plus `image.exterior` in both exterior slots. Run the image
   with `droid_3cam` to use `image.exterior_2` as the second exterior view.
 - Ordinary sessions play each chunk whole. `horizon_sec=<seconds>` limits playback before replanning.
+- `inference_lead=<seconds>` requests the next chunk that long before the current chunk ends. The default `0`
+  requests it at the end, and the arm holds its last target while the call runs. `--inference_lead=0.4` sets
+  the default of every session at launch. An RTC session refuses a lead.
 - `--offload_text_encoder=True` keeps the text encoder on CPU between prompt-cache misses,
   reducing GPU memory use on cards such as the 32 GB RTX 5090.
 - `droid_rtc` and `droid_3cam_rtc` use the client's remaining plan and recent round-trip durations

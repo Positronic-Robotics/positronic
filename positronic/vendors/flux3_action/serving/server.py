@@ -87,7 +87,15 @@ class Flux3Session(Session):
 class Flux3Model(Model):
     """Shared stateless DROID weights; each session owns its latency history and random sequence."""
 
-    def __init__(self, policy: Any, *, metadata: dict, image_mappings: dict[str, str], rtc: dict[str, float] | None):
+    def __init__(
+        self,
+        policy: Any,
+        *,
+        metadata: dict,
+        image_mappings: dict[str, str],
+        rtc: dict[str, float] | None,
+        inference_lead: float = 0.0,
+    ):
         self._policy = policy
         super().__init__(
             parameters={
@@ -95,6 +103,7 @@ class Flux3Model(Model):
                 'image_mappings': image_mappings,
                 'compress_images': True,
                 'jpeg_quality': 90,
+                keys.INFERENCE_LEAD: inference_lead,
                 keys.RTC.FIELD: rtc,
             },
             metadata={**metadata, keys.ACTION_FPS: policy.config.fps},
@@ -131,9 +140,14 @@ class Flux3Model(Model):
         check_int_range(params['jpeg_quality'], 0, 100, 'jpeg_quality')
         if type(params['compress_images']) is not bool:
             raise ValueError('compress_images must be a boolean')
+        lead = params[keys.INFERENCE_LEAD]
+        if type(lead) not in (int, float) or not 0 <= lead < math.inf:
+            raise ValueError(f'{keys.INFERENCE_LEAD} must be finite and not negative')
         rtc = params[keys.RTC.FIELD]
         if rtc is not None:
             self._validate_rtc(rtc, horizon)
+            if lead:
+                raise ValueError(f'RTC uses call_after_sec; set {keys.INFERENCE_LEAD}=0')
         return Flux3Session(self._policy, recipe.client_stack(fps=self._policy.config.fps, **params), rtc=rtc)
 
     def close(self) -> None:
@@ -161,6 +175,7 @@ def load_model(
     *,
     image_mappings: dict[str, str],
     rtc: dict[str, float] | None,
+    inference_lead: float = 0.0,
     device: str = 'cuda',
     compile_dit: bool = True,
     offload_text_encoder: bool = False,
@@ -181,6 +196,7 @@ def load_model(
             policy,
             image_mappings=image_mappings,
             rtc=rtc,
+            inference_lead=inference_lead,
             metadata={
                 keys.TYPE: 'flux3_action',
                 keys.CHECKPOINT_ID: checkpoint,
@@ -201,6 +217,7 @@ def load_model(
     subfolder=None,
     image_mappings=recipe.droid_cameras(),
     rtc=None,
+    inference_lead=0.0,
     device='cuda',
     compile_dit=True,
     offload_text_encoder=False,
@@ -213,6 +230,7 @@ def serve(
     subfolder: str | None,
     image_mappings: dict[str, str],
     rtc: dict[str, float] | None,
+    inference_lead: float,
     device: str,
     compile_dit: bool,
     offload_text_encoder: bool,
@@ -227,6 +245,7 @@ def serve(
             subfolder,
             image_mappings=image_mappings,
             rtc=rtc,
+            inference_lead=inference_lead,
             device=device,
             compile_dit=compile_dit,
             offload_text_encoder=offload_text_encoder,
