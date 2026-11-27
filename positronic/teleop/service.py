@@ -799,7 +799,7 @@ class TeleopService:
 
     def show_heads_up(self) -> None:
         """Show the heads-up of a run that has a teleop episode, in place of the trial that the service kept."""
-        with self._locked():
+        with self._locked():  # Field writes only: no reader sees the heads-up with the fields of the old trial.
             self._clear_trial('a warm-up session starts')
             self._set_phase(Phase.HEADS_UP, 'a warm-up session starts')
             self._heads_up_until = time.monotonic() + self.heads_up_limit
