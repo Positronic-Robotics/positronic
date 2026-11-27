@@ -10,8 +10,9 @@ from positronic import keys
 from positronic.dataset import transforms
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.policy.dagger import DaggerDataset, teleoperator_runs
-from positronic.policy.keys import CONTROL_SOURCE, LICENSE, SHADOW, SOURCES, TELEOPERATOR
+from positronic.policy.keys import CONTROL_SOURCE, LICENSE, POLICY_SOURCE, SHADOW, SOURCES, TELEOPERATOR
 from positronic.policy.license import LicenseRule
 from positronic.policy.record import RecordSamples, StepRecord
 
@@ -22,11 +23,11 @@ STATE = keys.JOINTS
 OBSERVATIONS = [keys.ROBOT_STATE]
 # Signals of the record that are not observations of the rig: the ground truth of the simulator.
 GROUND_TRUTH = ['sim_state', 'gt_state.objects.cube.pose']
-POLICY = 'policy'
+POLICY = POLICY_SOURCE
 VLA = 'vla'
 SHADOW_ARM = f'{SHADOW}.{POLICY}.{ARM}'
 PERIOD_NS = 20_000_000
-TASK = 'task'
+TASK = keys.TASK
 ALLOWED = 'apache-2.0'
 RULE = LicenseRule({ALLOWED})
 # The licenses of the policy and the teleoperator, which the rule allows.
@@ -55,11 +56,13 @@ def _record(
     rig: bool = False,
     repeated_at: int | None = None,
     static: Mapping[str, Any] = LICENSED,
+    instructions: Mapping[int, str] | None = None,
 ):
     """The record with ``steps`` and the static items ``static``, as the harness writes it, added to the dataset at
     ``tmp_path``. Step ``i`` is at ``(i + 1) * PERIOD_NS``. Its observation and ground truth are ``[i]``, its command
     is ``[10 + i]`` with the grip ``i``, and each of its shadow actions is ``[20 + i]``. Step ``grip_missing_at`` sends
-    no grip. Step ``repeated_at`` is at the time of the step before it.
+    no grip. Step ``repeated_at`` is at the time of the step before it. Step ``i`` in ``instructions`` records its
+    instruction.
 
     On the virtual clock, each sample of a step has the time of the step. On a ``rig``, the harness reads the
     observation between the step before and the step, and the control record, the command and the grip have later
@@ -67,13 +70,14 @@ def _record(
     samples = RecordSamples({ARM: None})
     read, command, grip = (-PERIOD_NS // 2, 1_000, 2_000) if rig else (0, 0, 0)
     with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as episode:
-        episode.set_static(TASK, 'lift the cube')
-        for name, value in static.items():
+        for name, value in {TASK: 'lift the cube', **static}.items():
             episode.set_static(name, value)
         for i, step in enumerate(steps):
             ns = (i if i == repeated_at else i + 1) * PERIOD_NS
             for name in [STATE, *GROUND_TRUTH]:
                 episode.append(name, np.array([float(i)]), _at(ns + read, i))
+            if instructions is not None and i in instructions:
+                episode.append(eval_keys.INSTRUCTION, instructions[i], _at(ns + read, i))
             shadow = {name: {ARM: np.array([20.0 + i])} for name in step.shadow}
             recorded = StepRecord(step.source, step.uses, events=step.events, shadow=shadow)
             for signal, value, time in samples.of(recorded, _at(ns, i)):
@@ -122,6 +126,16 @@ def test_two_teleoperator_runs_split_by_policy_steps_are_two_episodes_with_the_s
     assert _values(second.episode[ARM]) == [14.0]
     assert _values(second.episode[SHADOW_ARM]) == [24.0]
     assert first.steps_without_shadow == second.steps_without_shadow == {POLICY: 0}
+
+
+def test_a_teleoperator_run_splits_at_a_new_instruction_and_each_episode_has_the_instruction_of_its_steps(tmp_path):
+    goals = {0: 'lift the cube', 2: 'place the cube'}
+    record = _record(tmp_path, [_teleoperator()] * 4, static={**LICENSED, TASK: goals[2]}, instructions=goals)
+
+    first, second = teleoperator_runs(record, OBSERVATIONS, [ARM])
+
+    assert (first.episode[TASK], _values(first.episode[ARM])) == ('lift the cube', [10.0, 11.0])
+    assert (second.episode[TASK], _values(second.episode[ARM])) == ('place the cube', [12.0, 13.0])
 
 
 def test_a_step_with_no_shadow_action_stays_with_no_shadow_action_and_counts(tmp_path):

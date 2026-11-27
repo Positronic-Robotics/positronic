@@ -5,9 +5,10 @@
 
 The reader finds the samples of each step of a record by the step number on ``harness.step``. The steps are the
 numbers from the step number of the first ``control.source`` sample to the highest step number of a label sample. Each
-run of consecutive steps whose ``control.source`` names the teleoperator becomes one training episode. Each label and
-each shadow action ``shadow.<name>.<channel>`` of that episode has its samples at the steps of the run. Each
-observation has one sample at each step: the last value at or before the step. On ``harness.step`` and
+run of consecutive steps whose ``control.source`` names the teleoperator and whose instruction (``eval.instruction``) is
+the same becomes one training episode. Its ``task`` is that instruction. Each label and each shadow action
+``shadow.<name>.<channel>`` of that episode has its samples at the steps of the run. Each observation has one sample at
+each step: the last value at or before the step. On ``harness.step`` and
 ``harness.world``, the samples of one step have one time: the step number, and the latest ``harness.world`` time of the
 samples that the training episode used up to that step. Each other timeline keeps the time of its sample.
 ``steps_without_shadow`` counts the steps where a source has no shadow action::
@@ -28,10 +29,12 @@ from itertools import groupby
 import numpy as np
 
 from pimm import Time
+from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import META_UID, Episode, EpisodeContainer
 from positronic.dataset.signal import Signal
 from positronic.drivers.recording import HARNESS_STEP, HARNESS_WORLD
+from positronic.eval import keys as eval_keys
 from positronic.policy.keys import CONTROL_SOURCE, SHADOW, TELEOPERATOR
 from positronic.policy.license import LicenseRule
 
@@ -86,6 +89,16 @@ def _shadow_source(name: str) -> str:
     return name.removeprefix(_SHADOW_PREFIX).split('.', 1)[0]
 
 
+def _instructions(record: Episode, steps: np.ndarray) -> list[str | None]:
+    """The instruction at each of ``steps``: the last ``eval.instruction`` sample at or before the step, or ``None``
+    when it has none."""
+    if eval_keys.INSTRUCTION not in record:
+        return [None] * len(steps)
+    signal = record[eval_keys.INSTRUCTION]
+    values = signal.values()
+    return [values[i] if i >= 0 else None for i in _last_at(signal, steps)]
+
+
 def teleoperator_runs(record: Episode, observations: Collection[str], labels: Sequence[str]) -> list[TeleoperatorRun]:
     """The training episode of each teleoperator run in ``record``, in order. A signal is an observation when its
     name is one of ``observations``, or one of them with a suffix that starts with ``.``."""
@@ -108,6 +121,7 @@ def teleoperator_runs(record: Episode, observations: Collection[str], labels: Se
     steps = np.arange(_steps(control)[0], last + 1)
     values = control.values()
     sources = [values[i] for i in _last_at(control, steps)]
+    instructions = _instructions(record, steps)
     sent = {label: np.isin(steps, label_steps[label]) for label in labels}
     shadowed = {
         name: np.isin(steps, _steps(signal)) for name, signal in signals.items() if name.startswith(_SHADOW_PREFIX)
@@ -123,7 +137,7 @@ def teleoperator_runs(record: Episode, observations: Collection[str], labels: Se
         if name not in sent and _is_observation(name, observations) and len(signal)
     }
     runs = []
-    for source, group in groupby(range(len(steps)), key=sources.__getitem__):
+    for (source, instruction), group in groupby(range(len(steps)), key=lambda i: (sources[i], instructions[i])):
         if source != TELEOPERATOR:
             continue
         run = np.fromiter(group, dtype=int)
@@ -139,6 +153,8 @@ def teleoperator_runs(record: Episode, observations: Collection[str], labels: Se
         used.update({name: has[run] for name, has in shadowed.items() if has[run].any()})
         times = _step_times([(signals[name], uses) for name, uses in used.items()], steps[run])
         data = dict(record.static)
+        if instruction is not None:
+            data[keys.TASK] = instruction
         data.update({
             name: signals[name].time[[time for time, use in zip(times, uses, strict=True) if use]]
             for name, uses in used.items()
