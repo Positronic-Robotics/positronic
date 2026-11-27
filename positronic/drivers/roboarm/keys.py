@@ -28,5 +28,8 @@ USE_COULOMB_FRICTION = 'use_coulomb_friction'
 COULOMB_FRICTION_FADE = 'coulomb_friction_fade'
 # The cap that an arm's driver puts on the force its gripper closes with, in newtons; None sets no cap.
 GRIPPER_FORCE_CAP = 'gripper_force_cap'
+# How an arm's driver closes its gripper, as a dumped ``GraspTuning``: with one, the force cap acts in the launch of a
+# close and after a touch. None runs the force cap at all times.
+GRIPPER_GRASP_TUNING = 'gripper_grasp_tuning'
 # The force that an arm's controller holds a stalled gripper with, in newtons, as the controller reports it.
 GRIPPER_STALL_FORCE_LIMIT = 'gripper_stall_force_limit'
