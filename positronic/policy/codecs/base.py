@@ -53,19 +53,27 @@ class Codec:
         return False
 
     @overload
-    def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
+    def wrap(
+        self, function: cabc.Callable[[dict], Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> cabc.Callable[[Obs], Any]: ...
 
     @overload
-    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+    def wrap(
+        self, function: ProcessorRun[Obs, Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> ProcessorRun[Obs, Any]: ...
 
     def wrap(
-        self, function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any]
+        self,
+        function: cabc.Callable[[dict], Any] | ProcessorRun[Obs, Any],
+        *,
+        level: telemetry.Level = telemetry.Level.CALL,
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
         Steps retain their wake-up time and auxiliary outputs; commands are decoded even when empty.
         A decode error becomes a ``PolicyCommandError``. The caller owns the wrapped dependency,
-        including closing it when it is a generator.
+        including closing it when it is a generator. The spans of a wrapped callable have ``level``, and those of a
+        wrapped run, which the harness resumes at each step, have ``STEP``.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -73,10 +81,10 @@ class Codec:
             return run
 
         encode = telemetry.traced(
-            telemetry_keys.SPAN_POLICY_ENCODE, **{telemetry_keys.ATTR_CODEC: type(self).__name__}
+            telemetry_keys.SPAN_POLICY_ENCODE, level, **{telemetry_keys.ATTR_CODEC: type(self).__name__}
         )(self.encode)
 
-        @telemetry.traced(telemetry.component_name(self))
+        @telemetry.traced(telemetry.component_name(self), level)
         def call(obs: Obs) -> Any:
             encoded = encode(dict(obs))
             result = function(encoded)
@@ -94,7 +102,7 @@ class Codec:
         return call
 
     def _wrap_run(self, inner: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]:
-        call = self.wrap(inner.send)
+        call = self.wrap(inner.send, level=telemetry.Level.STEP)
         obs = yield
         while True:
             try:

@@ -367,7 +367,7 @@ class Harness(pimm.ControlSystem):
 
     @staticmethod
     def _record_io_span() -> AbstractContextManager[object]:
-        return telemetry.span(telemetry_keys.SPAN_RECORD_IO)
+        return telemetry.span(telemetry_keys.SPAN_RECORD_IO, telemetry.Level.STEP)
 
     def _append(
         self,
@@ -536,7 +536,7 @@ class Harness(pimm.ControlSystem):
         channel whose pose is not in ``stated_poses`` fails the step.
         """
         step_ms: dict[str, float] = {}
-        with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span, gc_steps.step(span):
+        with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP, telemetry.Level.STEP) as span, gc_steps.step(span):
             self._record_wait.stamp(step_ms)
             try:
                 if due_ns is not None and runtime.time_ns >= due_ns:
@@ -571,7 +571,8 @@ class Harness(pimm.ControlSystem):
                     for name, message in messages.items():
                         self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
             finally:
-                telemetry.set_attrs(span, **step_ms)
+                if span.is_recording():
+                    telemetry.set_attrs(span, **step_ms)
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
         return started_at_ns + round(period_sec * 1e9)
@@ -665,7 +666,12 @@ class Harness(pimm.ControlSystem):
                     resume_at_ns = stepped
                 sample_at_ns = sampled_ns + self._recording_period_ns
             elif self._writer is not None and sampled_ns >= sample_at_ns:
-                self._sample(timing=self._record_wait.timing)
+                # The summed wait goes on the next step span, so it is timed only while step spans record.
+                self._sample(
+                    timing=self._record_wait.timing
+                    if telemetry.enabled(telemetry.Level.STEP)
+                    else self._record_io_span
+                )
                 sample_at_ns = sampled_ns + self._recording_period_ns
             # No complete observation yet: read the sensors again after one poll period.
             wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns
@@ -802,7 +808,7 @@ class Harness(pimm.ControlSystem):
             emitter._clock = clock
         # Episode spans must end before leaving the scope that closes the telemetry provider.
         with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS), ExitStack() as gc_scope:
-            if telemetry.enabled():
+            if telemetry.enabled(telemetry.Level.STEP):
                 gc_scope.enter_context(self._gc.counting())
             while not should_stop.value:
                 call = next(self.perform_task.incoming(), None)

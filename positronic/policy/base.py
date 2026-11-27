@@ -129,7 +129,7 @@ class Runtime(ABC):
                     resume = partial(run.throw, exc)
                 else:
                     resume = partial(run.send, value)
-                with telemetry.span(name):
+                with telemetry.span(name, telemetry.Level.STEP):
                     try:
                         result = resume()
                     except StopIteration as end:
@@ -149,7 +149,7 @@ class Runtime(ABC):
         if initial is not None:
             run.close()
             raise AssertionError('a processor must yield None before receiving its first input')
-        if not telemetry.enabled():
+        if not telemetry.enabled(telemetry.Level.STEP):
             return run
         timed = self._timed_run(run, telemetry.component_name(processor))
         next(timed)
