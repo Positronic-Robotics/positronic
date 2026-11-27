@@ -136,7 +136,14 @@ def banana_in_bowl(timeout_sec: float, first_seed: int, move_m: float, turn_deg:
 # gripper close 40.8 mm off ``GRIPPER_SITE``. Its grip points straight down at the grasp height up to 0.48 m from the
 # mount. Joint 6 is at 0 at the yaw 90 degrees from the mount heading, and spans +-120 degrees. The IK misses past about
 # 110 degrees, so the expert keeps to 100.
-@cfn.config(grip_point=(0.0, 0.0408, -0.003), reach=0.48, rest_yaw_deg=90.0, wrist_turn_deg=100.0, park=YAM_PARK)
+@cfn.config(
+    grip_point=(0.0, 0.0408, -0.003),
+    reach=0.48,
+    rest_yaw_deg=90.0,
+    wrist_turn_deg=100.0,
+    park=YAM_PARK,
+    rise_margin=0.03,
+)
 def banana_in_bowl_expert(
     license: str,
     grip_point: Sequence[float],
@@ -144,10 +151,11 @@ def banana_in_bowl_expert(
     rest_yaw_deg: float,
     wrist_turn_deg: float,
     park: Sequence[float],
+    rise_margin: float,
 ) -> MakeTeleoperator:
     """The scripted expert of ``BananaInBowlTask`` on the YAM, which states the license ``license``. Each arm has the
-    statics of ``ReachStatics``: ``grip_point`` (a position from ``GRIPPER_SITE``), ``reach``, ``park``, and the rest
-    yaw and the wrist turn in degrees."""
+    statics of ``ReachStatics``: ``grip_point`` (a position from ``GRIPPER_SITE``), ``reach``, ``park``,
+    ``rise_margin``, and the rest yaw and the wrist turn in degrees."""
     return partial(
         BananaInBowlExpert.for_yam,
         license,
@@ -156,6 +164,7 @@ def banana_in_bowl_expert(
         rest_yaw=math.radians(rest_yaw_deg),
         wrist_turn=math.radians(wrist_turn_deg),
         park=np.asarray(park, dtype=np.float64),
+        rise_margin=rise_margin,
     )
 
 

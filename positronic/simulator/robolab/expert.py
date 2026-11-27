@@ -87,9 +87,6 @@ STILL_M = 0.003  # m, the largest move of a grip point that stays still
 STILL_RAD = 0.03  # rad, the largest turn of a grip point that stays still
 STUCK_NS = 500_000_000  # how long a grip point stays still, short of its goal, before the expert gives up on it
 CLEAR_M = 0.12  # m, the least distance in y of the grip point of an arm out of the way from the banana
-# m, how far past the approach height ``RISE`` goes, and past the carry height ``LIFT`` goes, so that an arm that sags
-# gets to it. An arm in ``ABOVE`` or ``CARRY`` that sags by more than this goes back to ``RISE`` or ``LIFT``.
-RISE_MARGIN = 0.03
 # The poses of the banana and the bowl in the scene file of ``BananaInBowlTask``, from the env origin: the position, and
 # the rotation as a quaternion wxyz.
 BANANA_AT = ((0.5097271, -0.1158069, 0.0211774), (0.99999917, -0.00061546825, -0.0011157601, -0.0000106499065))
@@ -134,6 +131,9 @@ class ReachStatics(ArmStatics):
     # of its range, and the largest turn from it that the wrist can take, in rad.
     rest_yaw: float
     wrist_turn: float
+    # m, how far past the approach height ``RISE`` goes, and past the carry height ``LIFT`` goes, so that an arm that
+    # sags gets to it. An arm in ``ABOVE`` or ``CARRY`` that sags by more than this goes back to ``RISE`` or ``LIFT``.
+    rise_margin: float = 0.03
 
     def __post_init__(self):
         # Above pi / 2, one of two grasp yaws pi apart is in the range. At pi, the wrist has no limit.
@@ -255,7 +255,7 @@ class BananaInBowl:
                 stuck = self.phase in (Phase.LOWER, Phase.OPEN) and now_ns - self._still[1] >= STUCK_NS
                 return Phase.OPEN if low or stuck else Phase.LOWER
             carry_z = bowl[2] + BOWL_HALF_HEIGHT + CARRY_CLEAR
-            if pose.translation[2] >= carry_z - (RISE_MARGIN if self.phase == Phase.CARRY else REACH_M):
+            if pose.translation[2] >= carry_z - (self._statics.rise_margin if self.phase == Phase.CARRY else REACH_M):
                 return Phase.CARRY
             return Phase.LIFT
         if self.phase == Phase.OPEN and now_ns - self._phase_ns < OPEN_NS:
@@ -278,7 +278,7 @@ class BananaInBowl:
                 return Phase.CLOSE
             if 0.0 < offset[2] <= APPROACH_HEIGHT + REACH_M:
                 return Phase.DOWN
-        if offset[2] < APPROACH_HEIGHT - (RISE_MARGIN if self.phase == Phase.ABOVE else REACH_M):
+        if offset[2] < APPROACH_HEIGHT - (self._statics.rise_margin if self.phase == Phase.ABOVE else REACH_M):
             return Phase.RISE
         return Phase.ABOVE
 
@@ -287,7 +287,9 @@ class BananaInBowl:
         carry_z = bowl[2] + BOWL_HALF_HEIGHT + CARRY_CLEAR
         match self.phase:
             case Phase.LIFT | Phase.RETREAT:
-                return geom.Transform3D(np.append(here.translation[:2], carry_z + RISE_MARGIN), here.rotation)
+                return geom.Transform3D(
+                    np.append(here.translation[:2], carry_z + self._statics.rise_margin), here.rotation
+                )
             case Phase.CARRY:
                 drop = self._drop(pose, banana, bowl)
                 return geom.Transform3D(drop, self._tilted(self._yaw, drop))
@@ -300,7 +302,7 @@ class BananaInBowl:
                 return geom.Transform3D(self._statics.mount + self._statics.park, down(here.rotation))
         point = grasp_point(banana) + [0.0, 0.0, GRASP_HEIGHT]
         if self.phase == Phase.RISE:
-            height = point[2] + APPROACH_HEIGHT + RISE_MARGIN
+            height = point[2] + APPROACH_HEIGHT + self._statics.rise_margin
             return geom.Transform3D(np.append(here.translation[:2], height), self._grasp(banana))
         height = APPROACH_HEIGHT if self.phase == Phase.ABOVE else 0.0
         return geom.Transform3D(point + [0.0, 0.0, height], self._grasp(banana))
@@ -370,10 +372,11 @@ class BananaInBowlExpert(Policy):
         rest_yaw: float,
         wrist_turn: float,
         park: np.ndarray,
+        rise_margin: float = 0.03,
         takes_over_at_start: bool = False,
     ) -> Self:
         """The expert of the two-arm YAM of the RoboLab env server (``yam_spec``). Each arm has the statics
-        ``grip_point``, ``park``, ``reach``, ``rest_yaw`` and ``wrist_turn`` of ``ReachStatics``."""
+        ``grip_point``, ``park``, ``reach``, ``rest_yaw``, ``wrist_turn`` and ``rise_margin`` of ``ReachStatics``."""
         arms = {
             side: ReachStatics(
                 grip_point,
@@ -382,6 +385,7 @@ class BananaInBowlExpert(Policy):
                 reach=reach,
                 rest_yaw=rest_yaw,
                 wrist_turn=wrist_turn,
+                rise_margin=rise_margin,
             )
             for side in keys.BIMANUAL_ARMS
         }
