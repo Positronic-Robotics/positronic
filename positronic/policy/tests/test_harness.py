@@ -2491,6 +2491,28 @@ def test_each_source_observes_only_the_poses_that_it_states():
     assert keys.EE_POSE in helper.observations[0]
 
 
+class RuntimeFramedHelper(Helper):
+    """A ``Helper`` whose run writes ``frames`` as its ``EE_FRAMES`` to its runtime as it starts, as a remote run
+    does."""
+
+    def __init__(self, frames, **kwargs):
+        super().__init__(**kwargs)
+        self.frames = frames
+
+    def run(self, runtime):
+        for name, value in ee_frames_entry(self.frames).items():
+            runtime.set_metadata(name, value)
+        return super().run(runtime)
+
+
+def test_a_helper_whose_run_states_its_frames_on_its_runtime_observes_the_poses_and_keeps_its_metadata(tmp_path):
+    helper = RuntimeFramedHelper(RIG_FRAMES, commands=lambda call: {})
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    assert run_robot_rollout(policy, helper=helper).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE in helper.observations[0]
+    assert keys.EE_POSE not in policy.observations[0]
+
+
 @pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
 def test_a_helper_that_states_no_frames_fails_at_its_first_pose_command(command):
     helper = Helper(commands=lambda call: {keys.ROBOT_COMMAND: command})

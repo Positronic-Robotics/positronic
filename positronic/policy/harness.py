@@ -29,7 +29,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import PolicyCommandError
-from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.executor import Executor, SourceRuntime, WaitStatus
 from positronic.policy.record import RecordSamples, StepRecord
 from positronic.policy.takeover import Takeover, helper_commands
 from positronic.utils import flatten_dict, frozen_view, merge_dicts
@@ -267,8 +267,7 @@ class Harness(pimm.ControlSystem):
         # The values of the last message of each privileged signal, by signal. The harness reads them in an episode
         # that records or that has a helper, which gets them as ``GROUND_TRUTH``.
         self._ground_truth: dict[str, dict[str, Any]] = {}
-        self._has_helper = False
-        # The samples of the control record of an episode with a helper.
+        # The samples of the control record of an episode with a helper, and ``None`` in an episode with no helper.
         self._control: RecordSamples | None = None
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         # The emission time of each camera's frame in ``_obs_by_signal``, on the timeline of the policy runtime's clock.
@@ -361,7 +360,9 @@ class Harness(pimm.ControlSystem):
         merged = deepcopy(flatten_dict(own_meta)) | flatten_dict(runtime_meta)
         return {f'{policy_keys.SOURCES}.{name}.{k}': v for k, v in merged.items()}
 
-    def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
+    def _build_episode_meta(
+        self, rollout: Rollout, runtime: Executor, helper_runtime: SourceRuntime | None
+    ) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
@@ -371,7 +372,10 @@ class Harness(pimm.ControlSystem):
             meta[eval_keys.TIMEOUT] = task.timeout_sec
         meta.update(self._recorded_meta(policy_keys.POLICY_SOURCE, rollout.policy.meta(), runtime.metadata_snapshot()))
         if rollout.helper is not None:
-            meta.update(self._recorded_meta(policy_keys.TELEOPERATOR, rollout.helper.meta(), {}))
+            assert helper_runtime is not None, 'a rollout with a helper runs it on a runtime of its own'
+            meta.update(
+                self._recorded_meta(policy_keys.TELEOPERATOR, rollout.helper.meta(), helper_runtime.metadata_snapshot())
+            )
         meta.update(task.meta)
         meta[keys.TASK] = self._instruction(task)
         return meta
@@ -468,7 +472,7 @@ class Harness(pimm.ControlSystem):
                     self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
                     if is_frame and emitted_ns is not None:
                         self._frame_ns_by_signal[name] = emitted_ns
-        if self._writer is None and not self._has_helper:
+        if self._writer is None and self._control is None:
             return
         for name, receiver in self.privileged.items():
             message = receiver.read()
@@ -648,7 +652,6 @@ class Harness(pimm.ControlSystem):
     @contextmanager
     def _recording(self, dataset_writer: DatasetWriter | None, has_helper: bool) -> Iterator[None]:
         """Record the episode to ``dataset_writer``, if any."""
-        self._has_helper = has_helper
         try:
             with ExitStack() as stack:
                 if dataset_writer is not None:
@@ -665,7 +668,6 @@ class Harness(pimm.ControlSystem):
                 yield
         finally:
             self._writer = None
-            self._has_helper = False
             self._control = None
             self._recorded_signals.clear()
             self._ground_truth.clear()
@@ -726,7 +728,7 @@ class Harness(pimm.ControlSystem):
         return payload
 
     @staticmethod
-    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
+    def _policy_frames(policy: Policy, runtime: Executor | SourceRuntime) -> dict[str, EEFrame]:
         """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
 
         The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
@@ -789,16 +791,16 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
-        policy_run = helper_run = None
+        policy_run = helper_run = helper_runtime = None
         try:
             policy_run = runtime.start(rollout.policy)
             policy = self._source(policy_keys.POLICY_SOURCE, policy_run, self._policy_frames(rollout.policy, runtime))
             helper = None
             if rollout.helper is not None:
-                # TODO: Give the helper its own runtime, so that its metadata and calls do not mix with the policy's.
-                helper_run = runtime.start(rollout.helper)
-                source = self._source(policy_keys.TELEOPERATOR, helper_run, ee_frames(rollout.helper.meta()))
-                helper = _Helper(source, Takeover())
+                helper_runtime = SourceRuntime(runtime)
+                helper_run = helper_runtime.start(rollout.helper)
+                frames = self._policy_frames(rollout.helper, helper_runtime)
+                helper = _Helper(self._source(policy_keys.TELEOPERATOR, helper_run, frames), Takeover())
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
@@ -810,7 +812,8 @@ class Harness(pimm.ControlSystem):
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
-                            self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                            self._build_episode_meta(rollout, runtime, helper_runtime) | (payload or {}),
+                            self._recorded_signals,
                         )
                         for name, value in static.items():
                             self._writer.set_static(name, value)
@@ -829,6 +832,8 @@ class Harness(pimm.ControlSystem):
             logging.info('Closing the policy runtime')
             runtime.close()
             logging.info('Policy runtime closed')
+            if helper_runtime is not None:
+                helper_runtime.close()
             if policy_run is not None:
                 logging.info('Closing the policy')
                 policy_run.close()

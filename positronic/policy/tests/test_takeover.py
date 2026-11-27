@@ -54,6 +54,14 @@ def test_the_presses_of_the_first_element_are_not_new():
     assert record.events == ()
 
 
+@pytest.mark.parametrize('first', [{}, HELPER], ids=['no element', 'no press field'])
+def test_when_the_first_element_has_no_press_field_the_first_later_press_is_new(first):
+    takeover = Takeover()
+    _, (commands, record) = _steps(takeover, first, _element(take_over=5))
+    assert commands == HELPER
+    assert record.events == (TAKE_OVER,)
+
+
 def test_an_element_with_no_press_field_keeps_the_last_presses():
     takeover = Takeover()
     steps = _steps(takeover, _element(take_over=5), HELPER, _element(take_over=5), {}, _element(take_over=7))

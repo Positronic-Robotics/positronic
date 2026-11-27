@@ -9,6 +9,7 @@ Take over gives the rig to the helper, and Hand back gives it back to the policy
 """
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_serializer
@@ -35,8 +36,8 @@ class ControlObservation(BaseModel):
 class _Presses(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid')
 
-    take_over: StrictInt | None = Field(None, alias=HELPER_TAKE_OVER)
-    hand_back: StrictInt | None = Field(None, alias=HELPER_HAND_BACK)
+    take_over: StrictInt | None = Field(default=None, alias=HELPER_TAKE_OVER)
+    hand_back: StrictInt | None = Field(default=None, alias=HELPER_HAND_BACK)
 
 
 def _presses(element: Mapping[str, Any]) -> _Presses | None:
@@ -54,17 +55,25 @@ def helper_commands(element: Mapping[str, Any]) -> Commands:
     return {name: value for name, value in element.items() if name not in HELPER_FIELDS}
 
 
-# The source that each press gives the rig to.
-_PRESS_TO = {HELPER_TAKE_OVER: TELEOPERATOR, HELPER_HAND_BACK: POLICY_SOURCE}
+class Driver(StrEnum):
+    """The top-level source whose commands pass to the rig."""
+
+    POLICY = POLICY_SOURCE
+    TELEOPERATOR = TELEOPERATOR
+
+
+# The driver that each press gives the rig to.
+_PRESS_TO = {HELPER_TAKE_OVER: Driver.TELEOPERATOR, HELPER_HAND_BACK: Driver.POLICY}
 
 
 class Takeover:
     """The driver of one episode with a helper. The presses of the first element of the helper are not new: they
-    came before the episode. An element with no press field keeps the last presses. When both presses are new, the
-    later press wins, and at one time Hand back wins."""
+    came before the episode. When the first element has no press field, each later press is new. An element with no
+    press field keeps the last presses. When both presses are new, the later press wins, and at one time Hand back
+    wins."""
 
     def __init__(self):
-        self._driver = POLICY_SOURCE
+        self._driver = Driver.POLICY
         self._presses: _Presses | None = None
         self._event: Event | None = None
 
@@ -72,10 +81,9 @@ class Takeover:
         """The ``CONTROL`` observation of the helper, as plain data."""
         return ControlObservation(source=self._driver, event=self._event).model_dump(mode='json')
 
-    def _new_press(self, presses: _Presses) -> str | None:
-        """The name of the newest press in ``presses`` that the last presses do not have, or ``None``."""
-        if (last := self._presses) is None:
-            return None
+    @staticmethod
+    def _new_press(presses: _Presses, last: _Presses) -> str | None:
+        """The name of the newest press in ``presses`` that ``last`` does not have, or ``None``."""
         new: dict[str, int] = {}
         if presses.take_over is not None and presses.take_over != last.take_over:
             new[HELPER_TAKE_OVER] = presses.take_over
@@ -87,13 +95,19 @@ class Takeover:
         """The commands that the rig gets and the record of the step, for the commands of the policy and the element
         of the helper. While the helper drives, the record keeps the commands of the policy as its shadow actions."""
         events: tuple[Event, ...] = ()
-        if (presses := _presses(element)) is not None:
-            if (press := self._new_press(presses)) is not None and _PRESS_TO[press] != self._driver:
+        presses = _presses(element)
+        if self._presses is None:
+            self._presses = presses if presses is not None else _Presses()
+        elif presses is not None:
+            press = self._new_press(presses, self._presses)
+            if press is not None and _PRESS_TO[press] is not self._driver:
                 self._event = Event(kind=EventKind.SWITCH, from_=self._driver, to=_PRESS_TO[press], cause=press)
                 self._driver = _PRESS_TO[press]
                 events = (self._event,)
             self._presses = presses
-        if self._driver == TELEOPERATOR:
-            shadow = {POLICY_SOURCE: policy} if policy else {}
-            return helper_commands(element), StepRecord(TELEOPERATOR, frozenset({TELEOPERATOR}), events, shadow)
-        return policy, StepRecord(POLICY_SOURCE, frozenset({POLICY_SOURCE}), events)
+        match self._driver:
+            case Driver.TELEOPERATOR:
+                shadow: dict[str, Commands] = {Driver.POLICY: policy} if policy else {}
+                return helper_commands(element), StepRecord(self._driver, frozenset({self._driver}), events, shadow)
+            case Driver.POLICY:
+                return policy, StepRecord(self._driver, frozenset({self._driver}), events)
