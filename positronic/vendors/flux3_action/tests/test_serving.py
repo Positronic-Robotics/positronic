@@ -22,7 +22,7 @@ from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.processors import InferenceSchedule
+from positronic.policy.processors import InferenceSchedule, RTCSchedule
 from positronic.vendors.flux3_action.serving import keys, recipe, server
 
 
@@ -249,10 +249,10 @@ def test_session_inference_lead_requests_before_the_chunk_ends():
     default = served.prepare_session(served.parameters)
     leading = served.prepare_session({**served.parameters, keys.INFERENCE_LEAD: 0.4})
 
-    assert _schedule_args(default.client_stack)['latency_estimate'] == 0.0
+    assert _schedule_args(default.client_stack)[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.0
     args = _schedule_args(leading.client_stack)
     assert args['request_timing'] == {'reference': 'before_end'}
-    assert args['latency_estimate'] == 0.4
+    assert args[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.4
     spec.from_spec(leading.client_stack)
 
 
