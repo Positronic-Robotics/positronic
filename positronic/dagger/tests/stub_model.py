@@ -23,7 +23,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
-from positronic.policy.codecs import AbsolutePositionAction, ChangeEEFrame
+from positronic.policy.codecs import ACTION, AbsolutePositionAction, ChangeEEFrame
 from positronic.policy.codecs.observation import StateObservationCodec
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
@@ -33,7 +33,6 @@ CHECKPOINT = 'checkpoint.json'
 WIRE_NAME = 'dagger_stub'
 RISE = 0.01  # m
 _STATE = 'observation.state'
-_ACTION = 'action'
 # The measured pose and grip of the arm, in the order of the action of ``AbsolutePositionAction``.
 _FEATURES = {keys.EE_POSE: 7, keys.GRIP: 1}
 # The index of the height of the pose in the state and in the action.
@@ -74,7 +73,7 @@ class _Rises(Model):
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         action = np.asarray(obs[_STATE], dtype=np.float64)
         action[_HEIGHT] += RISE
-        return [{_ACTION: action}]
+        return [{ACTION: action}]
 
     def meta(self) -> dict[str, Any]:
         return {policy_keys.TYPE: WIRE_NAME, policy_keys.LICENSE: self._license, policy_keys.CHECKPOINT_ID: self._id}
