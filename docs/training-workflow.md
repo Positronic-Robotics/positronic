@@ -25,7 +25,7 @@ GR00T and OpenPI training scripts expect the 0.3.3 LeRobot dataset format, so th
 
 ```bash
 cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
-  --dataset.dataset=.local \
+  --dataset.dataset=@positronic.cfg.ds.local \
   --dataset.dataset.path=~/datasets/stack_cubes_raw \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --output_dir=~/datasets/lerobot/stack_cubes
@@ -35,13 +35,13 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `--dataset.dataset` | Dataset configuration | `.local` for local directories, `@positronic.cfg.phail.v1_0.ds.teleop` for public datasets |
-| `--dataset.dataset.path` | Path to raw Positronic dataset (only for `.local`, not needed for phail datasets) | `~/datasets/stack_cubes_raw` |
+| `--dataset.dataset` | Dataset configuration | `@positronic.cfg.ds.local` for local directories, `@positronic.cfg.phail.v1_0.ds.teleop` for public datasets |
+| `--dataset.dataset.path` | Path to raw Positronic dataset (only for `@positronic.cfg.ds.local`, not needed for phail datasets) | `~/datasets/stack_cubes_raw` |
 | `--dataset.codec` | Codec for observation/action encoding | `@positronic.vendors.lerobot_0_3_3.codecs.ee` |
 | `--output_dir` | Destination for converted dataset | `~/datasets/lerobot/stack_cubes` or `s3://bucket/path` |
 | `--task` | (Optional) Task description to embed | `"pick up the green cube"` |
 
-**Note:** `--dataset.dataset.path` is only required when providing your own local datasets (with `--dataset.dataset=.local`). For available phail datasets (like `@positronic.cfg.ds.sim.sim_stack_cubes`), this parameter is not needed.
+**Note:** `--dataset.dataset.path` is only required when providing your own local datasets (with `--dataset.dataset=@positronic.cfg.ds.local`). For available phail datasets (like `@positronic.cfg.ds.sim.sim_stack_cubes`), this parameter is not needed.
 
 ### Available Public Datasets
 
@@ -90,7 +90,7 @@ To add more data to an existing LeRobot dataset:
 ```bash
 cd docker && docker compose run --rm lerobot-0_3_3-convert append \
   --output_dir=~/datasets/lerobot/stack_cubes \
-  --dataset.dataset=.local \
+  --dataset.dataset=@positronic.cfg.ds.local \
   --dataset.dataset.path=~/datasets/stack_cubes_new \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 ```

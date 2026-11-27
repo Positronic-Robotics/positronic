@@ -8,19 +8,9 @@ from positronic_wire import wire
 
 from positronic import geom, keys
 from positronic.cfg import codecs
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.time import Time
 from positronic.dataset.transforms import TransformedDataset
-from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.models import (
-    FRANKA_HAND_FRAME,
-    GRIPPER_SITE,
-    PANDA_HAND_FRAME,
-    EEFrame,
-    ee_frames_entry,
-    parse_ee_frames,
-)
+from positronic.drivers.roboarm.models import FRANKA_HAND_FRAME, GRIPPER_SITE, PANDA_HAND_FRAME, parse_ee_frames
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -38,6 +28,7 @@ from positronic.offboard.server import PolicyServer  # noqa: E402
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs  # noqa: E402
 from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
 from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, warm_observation  # noqa: E402
+from positronic.vendors.lerobot_0_3_3.tests import records  # noqa: E402
 
 STATE_FEATURE = 'observation.state'
 CAMERA_FEATURE = 'observation.images.left'
@@ -177,48 +168,15 @@ def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
 
 
 QUAT = geom.Rotation.Representation.QUAT
-TWO_ARM_TASK = 'put the banana in the bowl'
-TWO_ARM_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE)
-TWO_ARM_IMAGE = np.full((32, 32, 3), 120, np.uint8)
-# The y of each arm, so that the poses of the two arms differ.
-ARM_Y = {keys.LEFT_ARM: 0.3, keys.RIGHT_ARM: -0.3}
-
-
-def _arm_pose(arm: str, sample: int) -> np.ndarray:
-    return np.array([0.3 + 0.01 * sample, ARM_Y[arm], 0.4, 1.0, 0.0, 0.0, 0.0])
-
-
-def _arm_grip(arm: str, sample: int) -> float:
-    return sample / 8 if arm == keys.LEFT_ARM else 1.0 - sample / 8
-
-
-def _two_arm_record(root) -> LocalDataset:
-    """A record of the two-arm YAM: at each sample, the pose and the grip of each arm, and the pose and the grip of
-    the sample after it as the command of the arm. The poses are at ``GRIPPER_SITE``."""
-    poses = [keys.arm_key(key, arm) for arm in keys.BIMANUAL_ARMS for key in (keys.EE_POSE, keys.TARGET_EE_POSE)]
-    frames = ee_frames_entry(dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE)))
-    with LocalDatasetWriter(root) as dataset, dataset.new_episode() as writer:
-        writer.set_static(keys.TASK, TWO_ARM_TASK)
-        writer.set_static(roboarm_keys.EE_FRAMES, frames[roboarm_keys.EE_FRAMES])
-        for sample in range(4):
-            ts = Time(**{HARNESS_WORLD: sample * 100_000_000})
-            for arm in keys.BIMANUAL_ARMS:
-                writer.append(keys.arm_key(keys.EE_POSE, arm), _arm_pose(arm, sample), ts)
-                writer.append(keys.arm_channel(keys.GRIP, arm), np.float32(_arm_grip(arm, sample)), ts)
-                writer.append(keys.arm_key(keys.TARGET_EE_POSE, arm), _arm_pose(arm, sample + 1), ts)
-                writer.append(keys.arm_channel(keys.TARGET_GRIP, arm), np.float32(_arm_grip(arm, sample + 1)), ts)
-            for camera in TWO_ARM_CAMERAS:
-                writer.append(camera, TWO_ARM_IMAGE, ts)
-    return LocalDataset(root)
 
 
 def _two_arm_observation(sample: int, grips: dict[str, float] | None = None) -> dict:
-    grips = grips or {arm: _arm_grip(arm, sample) for arm in keys.BIMANUAL_ARMS}
+    grips = grips or {arm: records.arm_grip(arm, sample) for arm in keys.BIMANUAL_ARMS}
     return {
-        **{keys.arm_key(keys.EE_POSE, arm): _arm_pose(arm, sample) for arm in keys.BIMANUAL_ARMS},
+        **{keys.arm_key(keys.EE_POSE, arm): records.arm_pose(arm, sample) for arm in keys.BIMANUAL_ARMS},
         **{keys.arm_channel(keys.GRIP, arm): grip for arm, grip in grips.items()},
-        **dict.fromkeys(TWO_ARM_CAMERAS, TWO_ARM_IMAGE),
-        keys.TASK: TWO_ARM_TASK,
+        **dict.fromkeys(records.TWO_ARM_CAMERAS, records.IMAGE),
+        keys.TASK: records.TASK,
     }
 
 
@@ -231,30 +189,30 @@ def test_the_two_arm_codec_and_its_server_pipeline_give_one_state_and_one_comman
     # A frame with an offset, so that a pose that the frame change does not move gives a different state or command.
     frame = codecs.yam_grasp_site_frame
     training = lerobot_codecs.ee_bimanual.override(ee_frame=frame).instantiate().training_encoder
-    episode = TransformedDataset(_two_arm_record(tmp_path), training)[0]
+    record = records.write_record(tmp_path, keys.BIMANUAL_ARMS, records.TWO_ARM_CAMERAS)
+    episode = TransformedDataset(record, training)[0]
     codec = _pipeline('ee_bimanual').override(ee_frame=frame).instantiate().codec
     one_arm = _pipeline('ee').override(ee_frame=frame).instantiate().codec
 
     states = [state for state, _ts in episode[STATE_FEATURE]]
-    assert len(states) == 4
+    assert len(states) == records.SAMPLES
     for sample, state in enumerate(states):
         np.testing.assert_allclose(state, codec.encode(_two_arm_observation(sample))[STATE_FEATURE], atol=1e-6)
         # The state of each arm is the state that the one-arm pipeline gives for the pose and the grip of that arm.
         for i, arm in enumerate(keys.BIMANUAL_ARMS):
             alone = one_arm.encode({
-                keys.EE_POSE: _arm_pose(arm, sample),
-                keys.GRIP: _arm_grip(arm, sample),
-                keys.WRIST_IMAGE: TWO_ARM_IMAGE,
-                keys.EXTERIOR_IMAGE: TWO_ARM_IMAGE,
-                keys.TASK: TWO_ARM_TASK,
+                keys.EE_POSE: records.arm_pose(arm, sample),
+                keys.GRIP: records.arm_grip(arm, sample),
+                **dict.fromkeys(records.ONE_ARM_CAMERAS, records.IMAGE),
+                keys.TASK: records.TASK,
             })[STATE_FEATURE]
             np.testing.assert_allclose(state[i * 8 : (i + 1) * 8], alone, atol=1e-6)
     for sample, (action, _ts) in enumerate(episode['action']):
         decoded = codec.decode({'action': action})
         for arm in keys.BIMANUAL_ARMS:
             pose = decoded[keys.arm_channel(keys.ROBOT_COMMAND, arm)].pose.as_vector(QUAT)
-            np.testing.assert_allclose(pose, _arm_pose(arm, sample + 1), atol=1e-6)
-            assert decoded[keys.arm_channel(keys.TARGET_GRIP, arm)] == pytest.approx(_arm_grip(arm, sample + 1))
+            np.testing.assert_allclose(pose, records.arm_pose(arm, sample + 1), atol=1e-6)
+            assert decoded[keys.arm_channel(keys.TARGET_GRIP, arm)] == pytest.approx(records.arm_grip(arm, sample + 1))
 
 
 def test_the_two_arm_pipeline_states_the_frame_of_the_poses_of_each_arm():

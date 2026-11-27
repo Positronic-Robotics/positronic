@@ -1,9 +1,15 @@
+import json
 import pickle
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 
 from pimm.time import RECEIVED_WORLD
+from positronic import keys
+from positronic.cfg import dagger
+from positronic.dagger.rounds import ROUND_FOLDERS
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time
 from positronic.dataset.transforms import Elementwise, TransformedDataset, lazy_sequence
@@ -13,6 +19,7 @@ from positronic.drivers.recording import HARNESS_WORLD
 
 pytest.importorskip('lerobot')
 
+from positronic.vendors.lerobot_0_3_3.tests import records  # noqa: E402
 from positronic.vendors.lerobot_0_3_3.to_lerobot import EpisodeDictDataset  # noqa: E402
 
 
@@ -69,3 +76,23 @@ def test_export_raises_the_error_of_a_frame_that_does_not_decode(tmp_path):
     broken = Derive(value=lambda episode: Elementwise(episode['value'], lazy_sequence(decode)))
     with pytest.raises(IndexError, match='Could not decode frame 1'):
         EpisodeDictDataset(TransformedDataset(LocalDataset(tmp_path), broken), fps=20)[0]
+
+
+@pytest.mark.parametrize(
+    ('codec', 'arms', 'cameras'),
+    [('ee', keys.ONE_ARM, records.ONE_ARM_CAMERAS), ('ee_bimanual', keys.BIMANUAL_ARMS, records.TWO_ARM_CAMERAS)],
+)
+def test_the_convert_command_of_the_dagger_model_converts_the_training_data_of_a_round(tmp_path, codec, arms, cameras):
+    model = dagger.lerobot_act.override(codec=codec, arms=arms, license='test').instantiate()
+    folders = {name: tmp_path / name for name in ROUND_FOLDERS}
+    records.write_record(folders['training_data'], arms, cameras)
+
+    python, *arguments = (argument.format(**folders) for argument in model.convert)
+    assert python == 'python'
+    subprocess.run([sys.executable, *arguments, '--num_workers=0'], check=True)
+
+    info = json.loads((folders['converted'] / 'meta' / 'info.json').read_text())
+    assert info['total_episodes'] == 1
+    width = 8 * len(arms)
+    assert (info['features']['observation.state']['shape'], info['features']['action']['shape']) == ([width], [width])
+    assert sum(name.startswith('observation.images.') for name in info['features']) == len(cameras)

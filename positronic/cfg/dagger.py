@@ -78,7 +78,7 @@ def lerobot_act(codec: str, arms: tuple[str | None, ...], license: str, num_trai
         labels=labels,
         convert=(
             *('python', '-m', f'{_LEROBOT}.to_lerobot', 'convert'),
-            *('--dataset.dataset=.local', '--dataset.dataset.path={training_data}'),
+            *('--dataset.dataset=@positronic.cfg.ds.local', '--dataset.dataset.path={training_data}'),
             *(f'--dataset.codec=@{_LEROBOT}.codecs.{codec}', f'--dataset.codec.ee_frame={_GRIPPER_FRAME}'),
             '--output_dir={converted}',
         ),
