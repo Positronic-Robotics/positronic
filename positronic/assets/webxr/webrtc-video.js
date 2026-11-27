@@ -9,6 +9,16 @@ const TIMING_CHANNEL = 'timing';
 // With no new decoded frame for this long, the page connects again
 const LOST_MS = 5000;
 
+// Put H.264 first, which the headset decodes in hardware. A browser with no codec choice keeps its own order
+function preferH264(transceiver) {
+  if (typeof RTCRtpReceiver.getCapabilities !== 'function' || typeof transceiver.setCodecPreferences !== 'function') {
+    return;
+  }
+  const codecs = RTCRtpReceiver.getCapabilities('video').codecs;
+  const h264 = codecs.filter((codec) => codec.mimeType === 'video/H264');
+  transceiver.setCodecPreferences([...h264, ...codecs.filter((codec) => codec.mimeType !== 'video/H264')]);
+}
+
 export class WebRTCVideo {
   constructor(signaling, video) {
     this.signaling = signaling;
@@ -90,16 +100,6 @@ export class WebRTCVideo {
     this.signaling.onmessage = null;
     this.closeConnection();
   }
-}
-
-// Put H.264 first, which the headset decodes in hardware. A browser with no codec choice keeps its own order
-function preferH264(transceiver) {
-  if (typeof RTCRtpReceiver.getCapabilities !== 'function' || typeof transceiver.setCodecPreferences !== 'function') {
-    return;
-  }
-  const codecs = RTCRtpReceiver.getCapabilities('video').codecs;
-  const h264 = codecs.filter((codec) => codec.mimeType === 'video/H264');
-  transceiver.setCodecPreferences([...h264, ...codecs.filter((codec) => codec.mimeType !== 'video/H264')]);
 }
 
 // A gap between two shown frames above this is a stall

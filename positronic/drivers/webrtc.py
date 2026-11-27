@@ -62,9 +62,6 @@ class Answer(BaseModel):
     sdp: str
 
 
-_PAGE_SIGNAL: TypeAdapter[Offer | Candidate] = TypeAdapter(Annotated[Offer | Candidate, Field(discriminator='type')])
-
-
 class Ping(BaseModel):
     """A ping of the page at ``ping`` ms on the clock of the page."""
 
@@ -117,13 +114,6 @@ class VideoReport(BaseModel):
         )
 
 
-class _Report(BaseModel):
-    report: VideoReport
-
-
-_PAGE_TIMING: TypeAdapter[Ping | _Report] = TypeAdapter(Ping | _Report)
-
-
 class _ConnectionClock:
     """The time from the start of one peer connection: in ms for the page, and in ticks of the RTP clock of video."""
 
@@ -174,6 +164,13 @@ class FrameTrack(MediaStreamTrack):
         return frame
 
 
+class _Report(BaseModel):
+    report: VideoReport
+
+
+_PAGE_TIMING: TypeAdapter[Ping | _Report] = TypeAdapter(Ping | _Report)
+
+
 class _Timing:
     """The service end of the ``TIMING_CHANNEL`` of one connection: it answers each ping, sends the time of each frame,
     and logs each report of the page."""
@@ -207,6 +204,9 @@ class _Timing:
             self._send(Pong(pong=message.ping, service_ms=self._clock.ms()))
         else:
             logger.info('Video over WebRTC: %s', message.report.summary())
+
+
+_PAGE_SIGNAL: TypeAdapter[Offer | Candidate] = TypeAdapter(Annotated[Offer | Candidate, Field(discriminator='type')])
 
 
 class VideoPeer:
