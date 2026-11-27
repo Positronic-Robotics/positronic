@@ -287,6 +287,27 @@ class ViewText:
     footer: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _ArmControl:
+    """Whether control of an arm is on, by the arm name of its channels."""
+
+    arm: str | None
+    on: bool
+
+
+@dataclass(frozen=True)
+class _ViewSnapshot:
+    """What the headset view shows, read in one hold of the lock: the state of the trial, the shown camera, whether
+    the trial answered a frame, the control of each arm, the cameras, and the last image of each camera."""
+
+    state: TrialState
+    shown: str | None
+    answered: bool
+    controls: tuple[_ArmControl, ...]
+    names: tuple[str, ...]
+    images: Mapping[str, np.ndarray]
+
+
 class TeleopService:
     """Serve one teleop session at a time at ``served_address``, as a model server.
 
@@ -648,53 +669,59 @@ class TeleopService:
 
     def view_text(self, task: bool = True) -> ViewText:
         """The text of the headset view in the state of the trial. A running trial shows its task only with ``task``."""
-        with self._changed:  # It reads the state, the shown camera and the frame count, and builds no text.
-            state = self.state()
-            shown = self._shown_camera()
-            # The task and the state of the arms come with the first frame request.
-            answered = self._frames > 0
+        with self._changed:  # It copies the state that the view shows, with one image reference for each camera.
+            snapshot = self._view_snapshot()
+        return self._text_of(snapshot, task)
+
+    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
+        """The image for the headset: the camera image of a running trial, or black with no ``camera``, with
+        `view_text` on it. With more than one camera, a column on the right shows the other cameras."""
+        with self._changed:  # It copies the state that the view shows, with one image reference for each camera.
+            snapshot = self._view_snapshot()
+        text = self._text_of(snapshot, task)
+        shows_images = snapshot.state.phase is Phase.RUNNING and camera
+        shown, names = snapshot.shown, snapshot.names
+        image = snapshot.images.get(shown) if shows_images and shown is not None else None
+        main = shown if shown in names else next(iter(names), None)
+        others = [(name, snapshot.images.get(name) if shows_images else None) for name in names if name != main]
+        return self._view(image, text.lines, text.footer, others)
+
+    def _view_snapshot(self) -> _ViewSnapshot:
+        """Hold the lock."""
+        controls = tuple(_ArmControl(arm, tracker.on) for arm, tracker in self._trackers.items())
+        # The task and the state of the arms come with the first frame request.
+        answered = self._frames > 0
+        state, shown, names = self.state(), self._shown_camera(), self.cameras().names
+        return _ViewSnapshot(state, shown, answered, controls, names, dict(self._images))
+
+    def _text_of(self, snapshot: _ViewSnapshot, task: bool) -> ViewText:
         footer = (CAMERA_HINT,)
-        match state.phase:
+        match snapshot.state.phase:
             case Phase.IDLE:
                 return ViewText(('Waiting for a trial',), footer)
             case Phase.READY_WAIT:
                 return ViewText(('Human trial', 'B: Ready', 'Stick: Cancel'), footer)
             case Phase.ENDED:
                 return ViewText(('The trial ended', 'Give the verdict on the console'), footer)
-        if shown is not None:
-            footer = (f'Camera: {shown}', *footer)
-        if not answered:
+        if snapshot.shown is not None:
+            footer = (f'Camera: {snapshot.shown}', *footer)
+        if not snapshot.answered:
             return ViewText(('Trial starting: waiting for the robot',), footer)
-        lines = (*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up')
-        return ViewText((state.task, *lines) if task else lines, footer)
-
-    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
-        """The image for the headset: the camera image of a running trial, or black with no ``camera``, with
-        `view_text` on it. With more than one camera, a column on the right shows the other cameras."""
-        text = self.view_text(task)
-        with self._changed:  # It reads the state and takes a reference to the image of each camera.
-            shows_images = self.state().phase is Phase.RUNNING and camera
-            image = self._headset_image() if shows_images else None
-            shown = self._shown_camera()
-            names = self.cameras().names
-            main = shown if shown in names else next(iter(names), None)
-            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
-        return self._view(image, text.lines, text.footer, others)
+        lines = (*self._control_lines(snapshot.controls), 'Hold B: Complete. Hold the stick: Give up')
+        return ViewText((snapshot.state.task, *lines) if task else lines, footer)
 
     # The RGB colour behind the control line of an arm whose control is on, and off
     CONTROL_ON_COLOUR = (6, 214, 160)
     CONTROL_OFF_COLOUR = (255, 209, 102)
 
-    def _control_lines(self) -> list[Badge]:
+    def _control_lines(self, controls: Sequence[_ArmControl]) -> list[Badge]:
         """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
-        with self._changed:
-            controls = [(arm, tracker.on) for arm, tracker in self._trackers.items()]
         clutch_labels = {LEFT: 'X', RIGHT: 'A'}
         lines = []
-        for arm, on in controls:
-            name = 'Control' if arm is None else arm.capitalize()
-            clutch = clutch_labels[ARM_CONTROLLERS[arm]]
-            if on:
+        for control in controls:
+            name = 'Control' if control.arm is None else control.arm.capitalize()
+            clutch = clutch_labels[ARM_CONTROLLERS[control.arm]]
+            if control.on:
                 lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
             else:
                 lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
@@ -706,10 +733,6 @@ class TeleopService:
             if name is not None and name in self._trial_cameras:
                 return name
         return next(iter(self._trial_cameras), None)
-
-    def _headset_image(self) -> np.ndarray | None:
-        shown = self._shown_camera()
-        return None if shown is None else self._images.get(shown)
 
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
