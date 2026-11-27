@@ -334,7 +334,7 @@ class AuthConfig(BaseModel):
 
 
 class MeResponse(BaseModel):
-    """`users.me`. `client` is the client a grant lets the caller file rig plans for, unset without one."""
+    """`users.me`. `client` names the client of the caller's customer grant, unset without one."""
 
     user_id: UserId
     alias: str | None = None
