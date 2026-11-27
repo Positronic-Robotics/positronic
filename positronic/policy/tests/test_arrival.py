@@ -1,4 +1,5 @@
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -384,9 +385,8 @@ def test_a_resize_on_arrival_that_takes_time_changes_no_input_and_no_step_of_the
     np.testing.assert_equal(steps_after, steps_before)
 
 
-def test_a_change_on_arrival_that_fails_stops_the_stack_when_nothing_reads_the_frame():
-    def fail(values):
-        raise ValueError('no frame')
+def _send_until_raised(stack: TemporalStack, frames: Callable[[int], dict[str, np.ndarray]]) -> None:
+    """Step ``stack`` with ``frames(step)`` for at most 5 seconds, under an inner stack that reads nothing."""
 
     def reads_nothing():
         while True:
@@ -395,14 +395,37 @@ def test_a_change_on_arrival_that_fails_stops_the_stack_when_nothing_reads_the_f
     inner = reads_nothing()
     next(inner)
     runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
-    run = TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(fail).run(runtime, inner)
+    run = stack.run(runtime, inner)
     next(run)
+    deadline = time.monotonic() + 5
     try:
-        with pytest.raises(ValueError, match='no frame'):
-            for step, cameras in enumerate(_camera_frames(STEPS)):
-                _CLOCK[0] = round(step * 1e9 / FPS)
-                runtime.start_tick(_CLOCK[0])
-                run.send(cameras)
+        step = 0
+        while time.monotonic() < deadline:
+            _CLOCK[0] = round(step * 1e9 / FPS)
+            runtime.start_tick(_CLOCK[0])
+            run.send(frames(step))
+            step += 1
     finally:
         run.close()
         runtime.close()
+
+
+def _fail(values):
+    raise ValueError('no frame')
+
+
+def test_a_change_on_arrival_that_fails_stops_the_stack_when_nothing_reads_the_frame():
+    frames = _camera_frames(STEPS)
+
+    with pytest.raises(ValueError, match='no frame'):
+        _send_until_raised(TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(_fail), lambda step: frames[step % STEPS])
+
+
+def test_a_change_on_arrival_that_fails_stops_the_stack_while_the_camera_repeats_its_frame():
+    first = _camera_frames(1)[0]
+
+    with pytest.raises(ValueError, match='no frame'):
+        _send_until_raised(
+            TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(_fail),
+            lambda step: {name: np.array(frame) for name, frame in first.items()},
+        )

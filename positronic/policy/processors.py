@@ -1024,7 +1024,7 @@ class _ArrivalThread:
     """One background thread that applies ``change`` to the values of each new entry, in the order they come.
 
     The main loop does none of the work. ``check`` raises the first error of a change, also of a change that
-    nothing reads.
+    nothing reads. The stack calls it on each step, also on a step that repeats the previous values.
     """
 
     def __init__(self, change: Callable[[dict[str, Any]], dict[str, Any]]):
@@ -1033,7 +1033,6 @@ class _ArrivalThread:
         self._error: BaseException | None = None
 
     def __call__(self, values: dict[str, np.ndarray]) -> Mapping[str, np.ndarray]:
-        self.check()
         result = self._pool.submit(self._change, values)
         result.add_done_callback(self._keep_error)
         return _Arriving(tuple(values), result)
@@ -1168,6 +1167,8 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
                 now_sec = runtime.time_ns / 1e9
                 step_observed_ns = runtime.observed_ns
                 buffer.append(now_sec, step_observed_ns, {k: obs[k] for k in self._keys})
+                if arrivals is not None:
+                    arrivals.check()
                 stacked_observed_ns = buffer.newest_observed_ns(now_sec)
                 if self._stacks_camera_frames and step_observed_ns is not None and stacked_observed_ns is not None:
                     runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
