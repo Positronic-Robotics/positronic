@@ -993,7 +993,7 @@ class Robot(pimm.ControlSystem):
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
             if not self._is_engaged():
-                asked = yield from self._wait_disengaged(asked, should_stop, clock)
+                asked = yield from self._wait_until_engaged(asked, should_stop, clock)
                 continue
             error = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
             asked = []
@@ -1091,19 +1091,19 @@ class Robot(pimm.ControlSystem):
             serving.failed_move, serving.park_failed = failure, True
             logger.critical('Parking failed; the arm stays powered until the engaged input turns on and off again')
 
-    def _wait_disengaged(
+    def _wait_until_engaged(
         self, asked: list[pimm.calls.Call[None, None]], should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
         """Refuse every move, and keep each ready and recover call with ``asked``, until ``engaged`` turns on or the
         world stops. Return the calls kept, for the start move to answer. A stop fails them."""
         logger.info('The arm is not engaged: the driver opens the chain when the engaged input turns on')
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
-        refused = self._refused_moves()
+        moves = self._new_moves()
         fault = DeviceFault(
             'The YAM arm is not engaged: the driver holds no chain until the engaged input turns on', FaultKind.ARM
         )
         while not should_stop.value and not self._is_engaged():
-            self._refuse(refused, fault)
+            self._refuse(moves, fault)
             asked = [*asked, *self.ready.incoming(), *self._recoveries()]
             yield limiter.wait()
         if should_stop.value:
@@ -1112,14 +1112,14 @@ class Robot(pimm.ControlSystem):
             return []
         return asked
 
-    def _refused_moves(self) -> tuple[Moves[command.CommandType], Moves[float]]:
+    def _new_moves(self) -> tuple[Moves[command.CommandType], Moves[float]]:
         return Moves[command.CommandType](self.sync_move, self.commands), Moves[float](self.sync_grip, self.target_grip)
 
     @staticmethod
-    def _refuse(refused: tuple[Moves[command.CommandType], Moves[float]], error: DeviceFault) -> None:
+    def _refuse(moves: tuple[Moves[command.CommandType], Moves[float]], error: DeviceFault) -> None:
         """Answer each blocking move that waits with ``error``."""
-        for moves in refused:
-            while isinstance(move := moves.next_request(), pimm.calls.Call):
+        for queue in moves:
+            while isinstance(move := queue.next_request(), pimm.calls.Call):
                 move.set_exception(error)
 
     @staticmethod
@@ -1171,9 +1171,9 @@ class Robot(pimm.ControlSystem):
         Return those calls, or none when the world stops first.
         """
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
-        refused = self._refused_moves()
+        moves = self._new_moves()
         while not should_stop.value:
-            self._refuse(refused, error)
+            self._refuse(moves, error)
             if asked := [*self.ready.incoming(), *self._recoveries()]:
                 return asked
             yield limiter.wait()
@@ -1196,7 +1196,7 @@ class Robot(pimm.ControlSystem):
                         yield self._step_grip_move(arm, serving, fingers, clock)
                         continue
                     else:
-                        yield self._hold_unparked(arm, serving, fingers)
+                        yield self._step_unparked_hold(arm, serving, fingers)
                         continue
                     if ready := list(self.ready.incoming()):
                         yield from self._serve_start_calls(
@@ -1231,7 +1231,7 @@ class Robot(pimm.ControlSystem):
         fingers.answer()
         return arm.limiter.wait()
 
-    def _hold_unparked(self, arm: _Arm, serving: _Serving, fingers: Moves[float]) -> pimm.Command:
+    def _step_unparked_hold(self, arm: _Arm, serving: _Serving, fingers: Moves[float]) -> pimm.Command:
         """Refuse every move, and hold the arm where the failed park left it, for one control tick."""
         error = DeviceFault('The YAM arm is not engaged, and its park failed: it refuses moves', FaultKind.ARM)
         self._refuse((arm.moves, fingers), error)
