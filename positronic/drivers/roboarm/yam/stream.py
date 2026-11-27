@@ -25,17 +25,10 @@ class Box:
 class StreamTuning:
     """How a streamed target moves this arm, past the joint speed cap that every stream has.
 
-    ``max_joint_accel_rad_s2`` caps the joint acceleration of a followed Cartesian target, and a joint brakes in time
-    to stop at its target; None caps nothing. A joint target keeps the speed cap alone. A followed step that the
-    obstacles raise or hold can pass the cap. ``obstacles`` are boxes in the
-    world frame. A Cartesian target, streamed or in a blocking move, keeps the gripper ``obstacle_margin_m`` above
-    each obstacle it is over. A followed step that takes the gripper a little lower is raised. Of a step that takes it
-    into an obstacle from its side, the arm takes only the rise. A joint target, streamed or in a blocking move, is
-    taken as it is.
-
-    A park, a start move or a blocking move ramps in joint space. While its ramp takes the gripper lower over an
-    obstacle than ``obstacle_margin_m`` and than both ends, the tool first rises straight up, by ``raise_m`` at most.
-    A ramp that does not keep clear within ``raise_timeout_s`` fails the move.
+    ``max_joint_accel_rad_s2`` caps the joint acceleration of a followed Cartesian target; None caps nothing.
+    ``obstacles`` are boxes in the world frame. A Cartesian target keeps the gripper ``obstacle_margin_m`` above them;
+    a joint target is taken as it is. Before a joint ramp that dips toward an obstacle, the tool rises ``raise_m`` at
+    most, for ``raise_timeout_s`` at most.
     """
 
     max_joint_accel_rad_s2: float | None = None
