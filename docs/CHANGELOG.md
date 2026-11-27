@@ -14,7 +14,7 @@
 - The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
 ### Docs
-- The evaluation guide says that a team can file a run on the real robot itself, as an eval plan paid with credits. The client README, the examples README and the policy image guide say where the rig writes the episodes of a personal organization, and that `submissions.artifacts` lists the episodes of a finished rig plan to the account that filed it
+- The evaluation guide says that a team can file a run on the real robot itself, as an eval plan paid with credits. The client README, the examples README and the policy image guide say where the rig writes the episodes of a personal organization, and that `submissions.artifacts` lists the objects of a finished rig plan to the account that filed it
 
 ## [0.4.6] - 2026-11-12
 

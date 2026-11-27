@@ -314,8 +314,9 @@ episodes per endpoint. `replay` and `report` are absent until the platform has b
 `artifacts.result` names the prefix that the episodes landed under. The rig writes the episodes of an
 organization with a customer grant to the bucket of the grant's client. It writes the episodes of a
 personal organization to a bucket of the platform, and the owner holds no credential for that bucket.
-`submissions.artifacts` lists the episodes of a finished rig plan to the account that filed it, each
-under a signed URL. A personal organization reads its episodes that way.
+`submissions.artifacts` lists the objects that a finished rig plan wrote, each object under a signed
+URL, to the account that filed it. An episode is all the objects under its prefix, so download each
+one. A personal organization reads its episodes that way.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the

@@ -43,8 +43,9 @@ its wire and that wire's address, as the [client README](../../../client/README.
 `eval status --id=<hex id>` reads a filed plan back. A finished plan carries `artifacts.result`, the
 prefix that its episodes landed under. It also carries `outcome`, the kept, judged and successful
 episodes per endpoint, and `replay`, a page that plays the episodes back once the platform has built it.
-`PlatformClient.list_artifacts` lists the episodes to the account that filed the plan, each under a
-signed URL. A personal organization holds no credential for the bucket, so it reads them that way.
+`PlatformClient.list_artifacts` lists the objects that the plan wrote, each object under a signed URL,
+to the account that filed the plan. Download all the objects under the prefix of an episode. A
+personal organization holds no credential for the bucket, so it reads its episodes that way.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list. Read the names
