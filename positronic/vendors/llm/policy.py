@@ -104,10 +104,16 @@ class RevealFrames(BaseModel):
     note: Annotated[str, Field(min_length=1)]
 
 
+# The hand state field of the size of the measured external force. A size has no frame: the observation does not
+# carry the transform from the frame of the wrench to the hand frame.
+_FORCE = 'force_n'
+
+
 @dataclass
 class _Hand:
     pose: geom.Transform3D
     grip: float
+    force: float | None  # newtons, absent on a robot that measures no wrench
 
     @classmethod
     def read(cls, obs: Mapping[str, Any], arm: str | None) -> '_Hand':
@@ -121,14 +127,22 @@ class _Hand:
         grip = float(obs[keys.arm_channel(keys.GRIP, arm)])
         if not np.isfinite(grip) or not 0 <= grip <= 1:
             raise ValueError('Measured gripper position must be in [0, 1]')
-        return cls(geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT), grip)
+        force = None
+        # The robot state serializer leaves out the wrench of a robot that does not measure one.
+        if (wrench := obs.get(f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_WRENCH_SUFFIX}')) is not None:
+            wrench = np.asarray(wrench, dtype=float)
+            if wrench.shape != (6,) or not np.all(np.isfinite(wrench)):
+                raise ValueError('Measured hand wrench must contain six finite values')
+            force = float(np.linalg.norm(wrench[:3]))
+        return cls(geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT), grip, force)
 
     def measured(self) -> dict[str, Any]:
+        force = {} if self.force is None else {_FORCE: self.force}
         return {
             'position_m': self.pose.translation.tolist(),
             'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
             'gripper': self.grip,
-        }
+        } | force
 
     def progress(self, target: Waypoint | None) -> dict[str, Any]:
         if target is None:
@@ -225,6 +239,8 @@ class Conversation:
             'The axes of a hand start at its measured position and turn with its measured rotation. '
             'Hand z points along the approach direction. '
             'Gripper 0 is open and 1 is closed. '
+            f'{_FORCE}, when the hand state has it, is the size in newtons of the external force on the hand that '
+            'the robot estimates. It does not give the direction of the force. '
             'A path plays its waypoints in order before the next observation; '
             'actual arrival must be checked from the measured state. '
             'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '
@@ -232,6 +248,7 @@ class Conversation:
             'independently. A waypoint sets its gripper at the start of its segment. When a waypoint changes the '
             'gripper, the hand holds still at it for grip_hold seconds. ',
             'Every hand holds still during it. ' if named else '',
+            'At the last waypoint, the hand holds still for at least settle_hold seconds before the next observation. ',
             'The tool result reports the clamped waypoints; check them before planning the next path. '
             'Put several waypoints in one path when the next motions do not depend on what you will see. '
             'Camera frames remain fixed during a decision. ',

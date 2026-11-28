@@ -13,13 +13,14 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 
 import pimm
 from pimm.time import RECEIVED_WORLD
-from positronic import keys
+from positronic import geom, keys
 from positronic.cfg import analysis
 from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.tests.fakes import make_robot_state
+from positronic.drivers import roboarm
+from positronic.drivers.roboarm.tests.fakes import FakeRobotState
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.offboard.server import PolicyServer
@@ -33,6 +34,10 @@ from positronic.vendors.llm.server import LLMModel, deployment
 
 
 class Arm(pimm.ControlSystem):
+    """An arm that reaches each commanded position at once and measures a constant hand wrench."""
+
+    WRENCH = np.array([0.0, 3.0, 4.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
     def __init__(self):
         self.commands = pimm.ControlSystemReceiver(self)
         self.target_grip = pimm.ControlSystemReceiver(self)
@@ -48,7 +53,8 @@ class Arm(pimm.ControlSystem):
             target = pimm.value_updated(self.target_grip)
             if target is not None:
                 grip = target
-            self.state.emit(make_robot_state(position, np.zeros(7)))
+            pose = geom.Transform3D(translation=np.asarray(position, dtype=np.float32))
+            self.state.emit(FakeRobotState(np.zeros(7), np.zeros(7), pose, roboarm.RobotStatus.AVAILABLE, self.WRENCH))
             self.grip.emit(grip)
             yield pimm.Sleep(0.005)
 
@@ -236,6 +242,7 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
         target_x = before['position_m'][0] + 0.01
         assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
         assert after['gripper'] == pytest.approx(0.2)
+        assert before['force_n'] == after['force_n'] == pytest.approx(5.0)
         assert list(episode[keys.EE_POSE].values())[-1][0] == pytest.approx(target_x)
         # The client plays the move at the local cadence. A charged run also counts the real round trips to the server.
         first, last = episode.bounds(RECEIVED_WORLD)

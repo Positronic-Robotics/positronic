@@ -20,9 +20,14 @@ SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'line
 
 
 def played(motion: Motion, start: geom.Transform3D, grip: float, path: list[Waypoint]):
+    """The clamped waypoints of ``path`` and its commands before the hold at the last waypoint."""
     held = {None: Waypoint.at(start, grip)}
     bounded, parts, _ = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
-    return [targets[None] for targets in bounded], [command for part in parts for command in part]
+    *moves, hold = parts
+    assert len(hold) >= math.ceil(motion.settle_hold * motion.fps)
+    for command in hold:
+        np.testing.assert_allclose(command[keys.ROBOT_COMMAND].pose.translation, bounded[-1][None].pose.translation)
+    return [targets[None] for targets in bounded], [command for part in moves for command in part]
 
 
 def at(x: float, y: float = 0.0, gripper: float = 0.0) -> Waypoint:
@@ -42,9 +47,9 @@ def two_arms(left_x: float = 0.0, right_x: float = 0.0, y: float = 0.3):
 def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
     start = geom.Transform3D([0, 0, 0], geom.Rotation.from_euler([0, 0, math.radians(179)]))
     start.rotation = geom.Rotation.from_quat(quaternion_sign * start.rotation.as_quat)
-    target = Waypoint(x=0.05, y=0, z=0, roll=0, pitch=0, yaw=math.radians(-179), gripper=0.7)
+    target = Waypoint(x=0.05, y=0, z=0, roll=0, pitch=0, yaw=math.radians(-179), gripper=0.3)
     motion = Motion(**SHORT_BOUNDS)
-    (bounded,), trajectory = played(motion, start, 0.7, [target])
+    (bounded,), trajectory = played(motion, start, 0.3, [target])
     assert bounded == target
     previous, previous_time = start, 0
     for index, action in enumerate(trajectory, 1):
@@ -54,7 +59,7 @@ def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
         assert np.linalg.norm(pose.translation - previous.translation) <= motion.linear_speed * dt + 1e-9
         rotation = Rotation.from_matrix(pose.rotation.as_rotation_matrix @ previous.rotation.as_rotation_matrix.T)
         assert rotation.magnitude() <= motion.angular_speed * dt + 1e-9
-        assert action[keys.TARGET_GRIP] == 0.7
+        assert action[keys.TARGET_GRIP] == 0.3
         previous, previous_time = pose, (index / motion.fps)
     np.testing.assert_allclose(previous.translation, target.pose.translation)
     np.testing.assert_allclose(previous.rotation.as_rotation_matrix, target.pose.rotation.as_rotation_matrix, atol=1e-8)
@@ -67,10 +72,10 @@ def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
 def test_translation_clamps_distance_preserving_direction(offset):
     start = geom.Transform3D([0.3, -0.2, 0.1])
     x, y, z = start.translation + offset
-    target = Waypoint(x=x, y=y, z=z, roll=0, pitch=0, yaw=0, gripper=0.7)
+    target = Waypoint(x=x, y=y, z=z, roll=0, pitch=0, yaw=0, gripper=0.3)
     original = target.model_dump()
     motion = Motion(**SHORT_BOUNDS)
-    (bounded,), trajectory = played(motion, start, 0.7, [target])
+    (bounded,), trajectory = played(motion, start, 0.3, [target])
     offset = np.asarray(offset)
     distance = math.hypot(*offset)
     expected = offset / distance * motion.max_translation if distance > motion.max_translation else offset
@@ -168,7 +173,7 @@ def test_a_path_needs_a_waypoint_and_an_arm_waypoint_needs_an_arm(waypoints):
 def test_arms_reach_each_waypoint_together_at_the_pace_of_the_slower_arm():
     motion = Motion(**SHORT_BOUNDS)
     parts = motion.trajectory(*two_arms(), [{'left': at(0.04, 0.3), 'right': at(0.01, -0.3)}]).parts
-    (segment,) = parts
+    segment, _ = parts
     assert len(segment) == round(0.04 / motion.linear_speed * motion.fps)
     left = [arm_command(command, keys.LEFT_ARM) for command in segment]
     right = [arm_command(command, keys.RIGHT_ARM) for command in segment]
@@ -247,6 +252,35 @@ def test_a_gripper_hold_is_a_part_of_its_own():
     parts = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, path).parts
     assert [len(part) for part in parts] == [5, 1, math.ceil(motion.grip_hold * motion.fps)]
     assert {command[keys.TARGET_GRIP] for command in parts[-1]} == {1}
+
+
+@pytest.mark.parametrize('requested', [0.0, 0.49, 0.5, 0.85, 1.0])
+def test_a_partial_close_commands_the_requested_finger_opening(requested):
+    motion = Motion(**SHORT_BOUNDS)
+    start = geom.Transform3D([0, 0, 0])
+    trajectory = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01, gripper=requested)}])
+    assert trajectory.bounded[0][None].gripper == requested
+    assert {command[keys.TARGET_GRIP] for part in trajectory.parts for command in part} == {requested}
+    assert not trajectory.clamped
+
+
+def test_the_default_gripper_hold_lasts_past_a_full_close():
+    # A full close of a Robotiq 2F-85 on a Franka reads 0.97 at 0.69-0.74 s after its command.
+    motion = Motion()
+    assert 1 / motion.fps + motion.grip_hold > 0.74
+
+
+@pytest.mark.parametrize('settle_hold', [0.2, 0.5, 2.0])
+def test_the_hand_holds_still_at_the_last_waypoint_for_at_least_settle_hold(settle_hold):
+    motion = Motion(**SHORT_BOUNDS | {'settle_hold': settle_hold})
+    start = geom.Transform3D([0, 0, 0])
+    held = {None: Waypoint.at(start, 0)}
+    moved = motion.trajectory({None: start}, held, [{None: at(0.01)}]).parts
+    assert [len(part) for part in moved] == [5, math.ceil(settle_hold * motion.fps)]
+    for command in moved[-1]:
+        np.testing.assert_allclose(command[keys.ROBOT_COMMAND].pose.translation, [0.01, 0, 0])
+    closed = motion.trajectory({None: start}, held, [{None: at(0.01, gripper=1)}]).parts
+    assert [len(part) for part in closed] == [5, math.ceil(max(motion.grip_hold, settle_hold) * motion.fps)]
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 import io
 import json
+import math
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -141,7 +142,12 @@ def test_history_keeps_the_frames_of_the_last_observations_and_reports_actual_po
     assert states[1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
     assert Image.open(io.BytesIO(frames(requests[-1][0])[0].data)).size == (8, 4)
-    assert [e[policy_keys.OBS_TIME_NS] for e in states] == [0, 1_000_000_000, 2_000_000_000, 3_000_000_000]
+    # Each path starts late, at the next whole second, and its hold at the last waypoint keeps its duration.
+    hold_ns = round((math.ceil(policy.motion.settle_hold * policy.motion.fps) + 1) / policy.motion.fps * 1e9)
+    assert [e[policy_keys.OBS_TIME_NS] for e in states] == [
+        0,
+        *(second * 1_000_000_000 + hold_ns for second in (1, 2, 3)),
+    ]
     assert [e['call'] for e in events if e['event'] == 'accepted'] == [1, 2, 3, 4]
     assert len([e for e in events if e['event'] == 'instructions']) == 1
     assert 'privileged-value-never-send' not in json.dumps(events)
@@ -590,7 +596,63 @@ def test_a_path_plays_every_waypoint_before_the_next_decision(model):
     assert max(xs) == pytest.approx(0.04)
     assert xs[-1] == pytest.approx(0)
     assert [waypoint['x'] for waypoint in accepted['waypoints']] == [0.04, 0.0]
-    assert accepted['duration_s'] == pytest.approx(0.08 / motion.linear_speed + 1 / motion.fps)
+    settle_s = math.ceil(motion.settle_hold * motion.fps) / motion.fps
+    assert accepted['duration_s'] == pytest.approx(0.08 / motion.linear_speed + settle_s + 1 / motion.fps)
+
+
+def last_state(metadata) -> dict:
+    return [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation'][-1]
+
+
+@pytest.mark.parametrize(
+    ('wrench', 'force'),
+    [
+        # A frame turned against the hand moves the force out of z, and the size stays.
+        ([3.0, 0.0, 4.0, 0.1, 0.2, 0.3], 5.0),
+        ([0.0, 0.0, -3.0, 0.0, 0.0, 0.0], 3.0),
+        ([0.0, 0.0, 0.0, 0.5, -0.5, 0.2], 0.0),
+    ],
+)
+def test_the_hand_state_reports_the_size_of_the_measured_force(wrench, force):
+    metadata = {}
+    conversation = Conversation(llm(model='test'), metadata.__setitem__)
+    conversation.request({**observation(), keys.EE_WRENCH: np.array(wrench)}, 0)
+    assert last_state(metadata)['force_n'] == pytest.approx(force)
+    prompt = metadata[policy_keys.TRANSCRIPT][0]['prompt']
+    assert 'force_n, when the hand state has it, is the size in newtons of the external force on the hand' in prompt
+
+
+def test_a_hand_with_no_measured_wrench_reports_no_force():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test'), metadata.__setitem__)
+    wrench = f'{keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM)}{keys.EE_WRENCH_SUFFIX}'
+    conversation.request({**bimanual_observation(), wrench: np.array([0.0, 0.0, -3.0, 0.0, 0.0, 0.0])}, 0)
+    arms = last_state(metadata)['arms']
+    assert 'force_n' not in arms[keys.LEFT_ARM]
+    assert arms[keys.RIGHT_ARM]['force_n'] == 3.0
+
+
+@pytest.mark.parametrize('wrench', [np.zeros(3), np.array([0.0, 0.0, np.nan, 0.0, 0.0, 0.0])])
+def test_a_malformed_wrench_is_refused(wrench):
+    conversation = Conversation(llm(model='test'), {}.__setitem__)
+    with pytest.raises(ValueError, match='wrench'):
+        conversation.request({**observation(), keys.EE_WRENCH: wrench}, 0)
+
+
+def test_a_partial_close_reports_the_requested_finger_opening_as_its_target():
+    metadata = {}
+    conversation = Conversation(llm(model='test'), metadata.__setitem__)
+    waypoint = {'x': 0.0, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0.7}
+    close = ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': [waypoint], 'note': 'Pinch.'})])
+    parts = decide(conversation, observation(), close)
+    assert {command[keys.TARGET_GRIP] for part in parts for command in part} == {0.7}
+    accepted = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'accepted'][-1]
+    assert accepted['waypoints'][0]['gripper'] == 0.7
+    assert accepted['clamped'] is False
+    conversation.request({**observation(), keys.GRIP: 0.6}, 0)
+    assert last_state(metadata)['previous_target']['gripper'] == 0.7
+    assert last_state(metadata)['remaining_gripper'] == pytest.approx(0.1)
+    assert 'closes the fingers fully' not in metadata[policy_keys.TRANSCRIPT][0]['prompt']
 
 
 def bimanual_observation(left_x=0.0, right_x=0.0):
