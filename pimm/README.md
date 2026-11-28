@@ -20,7 +20,6 @@ both loops alive (with the sensor happily running in a background process).
 
 ```python
 import math
-import time
 
 import pimm
 
@@ -58,8 +57,7 @@ with pimm.World() as world:
 
     world.connect(sensor.signal, logger.source)
 
-    for sleep in world.start(logger, background=sensor):
-        time.sleep(sleep.seconds)
+    world.run(logger, background=sensor)
 ```
 
 Run it and you will see a stream of timestamps and sine values. A few important
@@ -72,9 +70,9 @@ things happened under the hood:
   context. This makes process boundaries explicit and helps catch "it worked under
   fork" foot-guns, but it also means background control systems (and anything they
   capture) must be **picklable**.
-- The loop returned by `world.start(...)` schedules the logger in the main process
-  and forwards `Sleep` values so you can decide how to wait (here we simply
-  `time.sleep`).
+- `world.run(...)` schedules the logger in the main process and waits out each
+  `Sleep`. To decide how to wait yourself, iterate `world.start(...)`: it yields a
+  `pimm.Command` at each pass, a `Sleep` or a `Yield`.
 - When the with-block ends—or the user kills the program—the world notifies every
   loop through the `should_stop` signal so they can exit gracefully.
 - A control system RETURNING raises that same signal, background or foreground alike. So stopping
@@ -259,14 +257,24 @@ sleeps, and `result()` on an unanswered call raises. The full contract is the do
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements
-`run(should_stop, clock) -> Iterator[pimm.Sleep]`. Inside that method you are free
+`run(should_stop, clock) -> Iterator[pimm.Command]`, where a command is `pimm.Sleep` or
+`pimm.Yield`. Inside that method you are free
 to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
-**Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
-group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
-all.
+Each loop in `run`, and each helper loop that `run` calls, keeps these rules:
+
+- **Wait with `yield pimm.Sleep(secs)`, not with a system call such as `time.sleep`.** In the
+  main-process group `interleave` advances the peers while one loop sleeps, so a blocking call there
+  stalls them all.
+- **Yield on each pass.** Yield `pimm.Sleep(secs)` to wait. `pimm.Yield()` runs the loop again at the
+  next instant, which is the nearest wake of a sleeping loop. So yield it only when another loop in the
+  group sleeps to move the clock. A helper that
+  loops is a generator, and `run` yields each command that the helper yields.
+- **Give a helper loop its stop condition as an argument, and check it on each pass.** A wait in the
+  active phase stops on `should_stop`, so it ends when the world stops. A shutdown wait starts after
+  `should_stop` is set, so it stops on its own deadline.
 
 The `World` runtime plays three roles:
 
@@ -278,7 +286,7 @@ The `World` runtime plays three roles:
    transforms) at bind time.
 2. **Scheduler.** `world.start(main, background=None)` starts the chosen control
    systems, spawns background ones in daemon processes (via the **spawn**
-   multiprocessing context), and returns an iterator of `Sleep` commands for the
+   multiprocessing context), and returns an iterator of `pimm.Command` values for the
    main-process group. If you prefer a convenience wrapper you can call
    `world.run(*main_loops)` instead.
 3. **Lifecycle manager.** Entering the `with pimm.World()` block creates shared
@@ -296,15 +304,16 @@ world then immediately wires the pair using the same transport selection logic a
 lives in a background process.
 
 This lets the main process nudge or observe background systems after
-`world.start(...)` begins yielding sleeps. For example, in
-[`positronic/inference.py`](../positronic/inference.py) we pair the
-dataset writer's command receiver:
+`world.start(...)` returns. For example,
+[`positronic/replay_record.py`](../positronic/replay_record.py) pairs the
+dataset writer's command receiver and starts an episode once the loops run:
 
 ```python
-commands = world.pair(ds_agent.command)
-commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
-for sleep in world.start(harness, bg_cs):
-    time.sleep(sleep.seconds)
+ds_cmd = world.pair(ds_agent.command)
+sim_iter = world.start([sim, replay, ds_agent], gui)
+ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
+for _ in sim_iter:
+    p_bar.n = round(world.clock.now(), 1)
 ```
 
 Because the paired emitter shares ownership with the dataset agent, the world
