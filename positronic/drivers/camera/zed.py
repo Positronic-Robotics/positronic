@@ -10,7 +10,7 @@ import numpy as np
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
-from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME, PinholeIntrinsics
 from positronic.drivers.camera.device_open_lock import device_open_lock
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.utils import RecoveryOutcome
@@ -54,6 +54,35 @@ def is_near_black(bgra: np.ndarray) -> bool:
     return bool(bgra[::8, ::8, :3].mean() < NEAR_BLACK_MEAN_LEVEL)
 
 
+class DepthFormat(Enum):
+    """The type and the unit of a depth image."""
+
+    UINT8 = 'uint8'  # 0 to 255 for 0 to the largest depth, which also stands for no depth
+    UINT16_MM = 'uint16_mm'  # millimetres, and 0 for no depth
+    FLOAT32_M = 'float32_m'  # metres, and 0 for no depth
+
+
+def depth_as_uint8(depth_m: np.ndarray, max_depth_m: float) -> np.ndarray:
+    """``depth_m`` on the scale where 255 is ``max_depth_m``. NaN, +Inf and a larger depth are 255, and -Inf and a
+    depth below 0 are 0."""
+    depth_m = np.nan_to_num(depth_m, nan=max_depth_m, posinf=max_depth_m, neginf=0)
+    return (depth_m.clip(0, max_depth_m) / max_depth_m * 255).astype(np.uint8)
+
+
+def depth_as_float32_m(depth_m: np.ndarray) -> np.ndarray:
+    """A copy of ``depth_m`` with 0 in place of each value that is not a finite depth above 0."""
+    metres = np.nan_to_num(depth_m, nan=0, posinf=0, neginf=0).astype(np.float32, copy=False)
+    return np.maximum(metres, 0, out=metres)
+
+
+def depth_as_uint16_mm(depth_m: np.ndarray) -> np.ndarray:
+    """``depth_m`` in millimetres, rounded in ``float32``; 0 for each value not a finite depth from 0 to 65.535 m."""
+    millimetres = depth_as_float32_m(depth_m) * np.float32(1000)
+    np.rint(millimetres, out=millimetres)
+    millimetres[millimetres > np.iinfo(np.uint16).max] = 0
+    return millimetres.astype(np.uint16)
+
+
 USB_DEVICES_DIR = Path('/sys/bus/usb/devices')
 
 
@@ -91,8 +120,11 @@ class SLCamera(pimm.ControlSystem):
         resolution: Literal[
             'hd4k', 'qhdplus', 'hd2k', 'hd1080', 'hd1200', 'hd1536', 'hd720', 'svga', 'vga', 'auto'
         ] = 'auto',
-        depth_mode: Literal['none', 'near', 'far', 'high', 'ultra'] = 'none',
+        depth_mode: Literal[
+            'none', 'performance', 'quality', 'ultra', 'neural_light', 'neural', 'neural_plus'
+        ] = 'none',
         max_depth: float = 10,
+        depth_format: Literal['uint8', 'uint16_mm', 'float32_m'] = 'uint8',
         depth_mask: bool = False,
         image_enhancement: bool = False,
         mono: bool = False,
@@ -104,10 +136,14 @@ class SLCamera(pimm.ControlSystem):
             fps: (int) Frames per second
             view: (sl.VIEW) View to use
             resolution: (sl.RESOLUTION) Resolution to use
-            depth_mode: (sl.DEPTH_MODE) Depth mode to use
+            depth_mode: (sl.DEPTH_MODE) Depth mode to use. The SDK 5.4 calls 'performance', 'quality' and 'ultra'
+                        deprecated.
             coordinate_units: (sl.UNIT) Coordinate units to use
-            max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
-                        -Inf will be set to 0. All values above this will be set to max_depth.
+            max_depth: (float) Maximum depth to use. The uint8 image writes this depth for NaN, +Inf and each larger
+                        depth, and 0 for -Inf and each depth below 0. Only ``depth_format='uint8'`` uses it.
+            depth_format: (DepthFormat) Type and unit of the depth image. The depth is on the pixel grid of the
+                        rectified left view, which ``left_intrinsics`` describes. ``'uint16_mm'`` and ``'float32_m'``
+                        need ``view='left'``, so that the frame and the depth image have the same pixels.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
@@ -122,6 +158,12 @@ class SLCamera(pimm.ControlSystem):
         self._resolution_name = resolution
         self._depth_mode_name = depth_mode
         self._image_enhancement = image_enhancement
+        self._depth_format = DepthFormat(depth_format)
+        if self._depth_format is not DepthFormat.UINT8 and view != 'left':
+            raise ValueError(
+                f'depth_format={depth_format!r} gives the depth of each pixel of the left view, and view is {view!r}. '
+                'Set view="left".'
+            )
         self._depth_mask_requested = depth_mask
         self._mono = mono
 
@@ -137,6 +179,9 @@ class SLCamera(pimm.ControlSystem):
 
         self.depth_mask: pimm.ControlSystemEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
+
+        # The rectified left view at the stream's resolution, sent at each open of a stereo camera
+        self.left_intrinsics = pimm.ControlSystemEmitter[PinholeIntrinsics](self)
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # Releases the camera, reboots it and opens it again, where the SDK reboots the model
@@ -250,7 +295,10 @@ class SLCamera(pimm.ControlSystem):
         return zed
 
     def _hold(self, error: DeviceFault) -> DeviceFault:
-        """Keep ``error`` until a ready call repairs the camera, and send it on every channel in place of data."""
+        """Keep ``error`` until a ready call repairs the camera, and send it on each image channel in place of data.
+
+        ``left_intrinsics`` keeps its last value: an error does not change the calibration of the camera.
+        """
         logger.error('Camera %s holds an error until it is asked to be ready: %s', self._serial_number, error)
         self._error = error
         for emitter in (self.frame, self.depth, self.depth_mask):
@@ -267,9 +315,17 @@ class SLCamera(pimm.ControlSystem):
         self._camera = camera
         # `sl.CameraOne` does not implement `get_camera_information`
         if not self._mono:
-            self._model = camera.get_camera_information().camera_model
+            information = camera.get_camera_information()
+            self._model = information.camera_model
+            self._send_left_intrinsics(information.camera_configuration)
         self._error = None
         self._near_black_since = None
+
+    def _send_left_intrinsics(self, configuration: 'sl.CameraConfiguration') -> None:
+        left, size = configuration.calibration_parameters.left_cam, configuration.resolution
+        intrinsics = PinholeIntrinsics(size.width, size.height, left.fx, left.fy, left.cx, left.cy)
+        logger.info('Camera %s sends its rectified left view with %s', self._serial_number, intrinsics)
+        self.left_intrinsics.emit(intrinsics)
 
     def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
         outcome = self._grab_frame(clock)
@@ -435,11 +491,15 @@ class SLCamera(pimm.ControlSystem):
 
         # Process and emit depth if connected
         if self.depth.num_bound > 0:
-            depth_data = np.nan_to_num(depth_data, copy=False, nan=self.max_depth, posinf=self.max_depth, neginf=0)
-            depth_data = depth_data.clip(max=self.max_depth) / self.max_depth * 255
-            depth_uint8 = depth_data.astype(np.uint8)[..., np.newaxis]
+            match self._depth_format:
+                case DepthFormat.UINT8:
+                    depth_image = depth_as_uint8(depth_data, self.max_depth)
+                case DepthFormat.UINT16_MM:
+                    depth_image = depth_as_uint16_mm(depth_data)
+                case DepthFormat.FLOAT32_M:
+                    depth_image = depth_as_float32_m(depth_data)
 
-            self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
+            self._depth_adapter = NumpySMAdapter.lazy_init(depth_image[..., np.newaxis], self._depth_adapter)
             self.depth.emit(self._depth_adapter, time=self._frame_time(zed, capture_ns))
 
     @property
@@ -502,13 +562,16 @@ class SLCamera(pimm.ControlSystem):
         if self._mono and (self._view_name != 'left' or self._depth_mode_name != 'none' or self._image_enhancement):
             raise RuntimeError('mono cameras support only view="left", depth_mode="none" and no image enhancement')
 
+        if self._mono and self.left_intrinsics.num_bound > 0:
+            raise RuntimeError('left_intrinsics channel is connected but a mono camera sends no intrinsics.')
+
         depth_mask_enabled = self._depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
 
         # Runtime validation: check if depth channels are connected but not enabled
         if self.depth.num_bound > 0 and self._depth_mode == sl.DEPTH_MODE.NONE:
             raise RuntimeError(
                 'depth channel is connected but depth_mode is "none". '
-                'Set depth_mode to "near", "far", "high", or "ultra" to enable depth.'
+                'Set depth_mode to a mode other than "none" to enable depth.'
             )
 
         if self.depth_mask.num_bound > 0 and not depth_mask_enabled:
