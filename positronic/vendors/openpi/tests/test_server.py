@@ -21,6 +21,7 @@ from positronic.drivers.roboarm.models import (
 )
 from positronic.offboard import server_utils
 from positronic.policy.codecs import ACTION
+from positronic.policy.processors import InferenceSchedule
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs
@@ -29,6 +30,7 @@ pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
 from platform_client.policy_container import WARMUP_DEADLINE_S
+from positronic_model_server.spec import ARGS, NAME, SEQ
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
@@ -70,6 +72,27 @@ def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     deployment = COMMANDS[name].kwargs['pipeline'].instantiate()
     frame = parse_ee_frames(deployment.meta()[roboarm_keys.EE_FRAMES])[keys.EE_POSE]
     assert frame == EEFrame(site=GRIPPER_SITE, offset=offset)
+
+
+def _latency_estimate(deployment) -> float:
+    """The lead, in seconds, that the deployment's client schedule declares."""
+    stack = deployment.local.to_spec()[SEQ]
+    (schedule,) = (node for node in stack if node[NAME] == InferenceSchedule.WIRE_NAME)
+    return schedule[ARGS][InferenceSchedule.LATENCY_ESTIMATE_ARG]
+
+
+@pytest.mark.parametrize('name', ['droid', 'droid_jointpos'])
+def test_a_session_inference_lead_requests_before_the_chunk_ends(name):
+    pipeline = COMMANDS[name].kwargs['pipeline']
+
+    assert _latency_estimate(pipeline.instantiate()) == 0.0
+    assert _latency_estimate(pipeline.override_data(inference_lead=0.25).instantiate()) == 0.25
+
+
+@pytest.mark.parametrize('lead', [-0.1, float('inf'), float('nan')])
+def test_a_negative_or_infinite_inference_lead_fails_to_build(lead):
+    with pytest.raises(ValueError, match='seconds'):
+        COMMANDS['droid_jointpos'].kwargs['pipeline'].override_data(inference_lead=lead).instantiate()
 
 
 @contextlib.contextmanager
