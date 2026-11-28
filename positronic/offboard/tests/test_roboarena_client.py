@@ -9,17 +9,26 @@ from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosedError
 
+from positronic import telemetry, telemetry_keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import ConnectRetries
 
 
 def _client(connection) -> roboarena.RoboarenaClient:
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
     client._connection = connection
     return client
 
 
 _ANNOUNCEMENT = serialize({'resolution': [180, 320]})
+
+
+def _dialing(*connections):
+    """The roboarena wire, patched to open each of ``connections`` in turn. Each one announces a config first."""
+    for connection in connections:
+        connection.recv.side_effect = [_ANNOUNCEMENT, *connection.recv.side_effect]
+    return patch.object(roboarena_wire.RoboarenaClientWire, 'dial', side_effect=list(connections))
+
 
 # Each way an exchange on an open connection fails, as the connection raises it.
 _FAILURES = {
@@ -72,7 +81,7 @@ def test_the_send_and_the_answer_of_an_exchange_share_its_timeout(exchange, limi
 )
 def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failure):
     connection = MagicMock(**{'recv.side_effect': failure})
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.dial.return_value = connection
@@ -117,7 +126,7 @@ def test_a_server_that_answers_no_close_ends_the_connect_by_its_deadline(unanswe
 def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each(fake_clock):
     """The server answers the dial and announces its config each just inside one handshake timeout."""
     almost = roboarena.HANDSHAKE_TIMEOUT_S - 1.0
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     def dial(address, headers, open_timeout):
         assert fake_clock.answer(almost, open_timeout), 'the dial timed out'
@@ -132,7 +141,7 @@ def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_tim
 def test_the_client_hands_its_headers_to_every_handshake_it_opens():
     """A server that checks a token reads it on the handshake, so connect and probe carry the same headers."""
     headers = {'Authorization': 'Bearer run-token'}
-    client = roboarena.RoboarenaClient('a-partner-host', 8000, headers)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000, headers)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.dial.return_value = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
@@ -145,7 +154,7 @@ def test_the_client_hands_its_headers_to_every_handshake_it_opens():
 
 
 def test_a_client_given_no_headers_sends_none():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.dial.return_value = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
@@ -158,11 +167,10 @@ def test_a_client_given_no_headers_sends_none():
 
 
 def test_an_inference_with_no_connection_dials_one_and_keeps_it():
-    connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize([0.0] * 8)]})
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    connection = MagicMock(**{'recv.side_effect': [serialize([0.0] * 8)]})
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
-    with patch.object(client, '_wire') as client_wire:
-        client_wire.dial.return_value = connection
+    with _dialing(connection):
         assert client.infer({}) == [0.0] * 8
 
     assert client._connection is connection
@@ -171,7 +179,7 @@ def test_an_inference_with_no_connection_dials_one_and_keeps_it():
 
 def test_a_reset_with_no_connection_dials_one_and_sends_the_keyed_reset():
     connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize({'ok': True})]})
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.dial.return_value = connection
@@ -182,7 +190,7 @@ def test_a_reset_with_no_connection_dials_one_and_sends_the_keyed_reset():
 
 
 def test_a_reset_with_no_connection_raises_when_the_server_refuses_the_dial():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.dial.side_effect = wire.ConnectRefused(wire.Refusal.COLD, 'refused')
@@ -248,7 +256,7 @@ def test_a_readiness_poll_waits_far_less_than_a_handshake():
     """Readiness reads on the short probe timeout, not the handshake's."""
     assert roboarena.READY_PROBE_TIMEOUT_S < roboarena.HANDSHAKE_TIMEOUT_S
 
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = None
         assert client.probe() is None
@@ -257,7 +265,7 @@ def test_a_readiness_poll_waits_far_less_than_a_handshake():
 
 def test_readiness_raises_the_text_a_server_answers_in():
     """A backend that reports a failure is not a backend still starting, so a readiness poll does not retry it."""
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch('positronic_wire.roboarena.connected_socket'), patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.return_value = 'CUDA out of memory'
@@ -266,7 +274,7 @@ def test_readiness_raises_the_text_a_server_answers_in():
 
 
 def test_a_peer_that_closes_before_announcing_is_not_ready():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch('positronic_wire.roboarena.connected_socket'), patch('positronic_wire.roboarena.connect') as connect:
         connect.return_value.recv.side_effect = ConnectionClosedError(None, None)
@@ -275,7 +283,7 @@ def test_a_peer_that_closes_before_announcing_is_not_ready():
 
 def test_readiness_raises_a_final_refusal():
     """A retry does not change a permanent refusal, so a readiness poll does not wait out its deadline."""
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = wire.Refusal.FINAL
@@ -285,7 +293,7 @@ def test_readiness_raises_a_final_refusal():
 
 
 def test_readiness_raises_a_forbidden_refusal_once_its_attempts_are_spent():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = wire.Refusal.FORBIDDEN
@@ -298,7 +306,7 @@ def test_readiness_raises_a_forbidden_refusal_once_its_attempts_are_spent():
 
 @pytest.mark.parametrize('refusal', [wire.Refusal.COLD, wire.Refusal.SILENT])
 def test_a_backend_not_up_yet_stays_not_ready_past_the_forbidden_attempts(refusal):
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     with patch.object(client, '_wire') as client_wire:
         client_wire.probe.return_value = refusal
@@ -324,7 +332,7 @@ def _probes_at(client: roboarena.RoboarenaClient, *answers: tuple[float, wire.Re
 
 
 def test_readiness_raises_an_unresolved_host_at_the_limit_the_client_was_given():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000, unresolved_host_deadline=60.0)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000, unresolved_host_deadline=60.0)
 
     *waiting, surfaced = _probes_at(client, *[(at, wire.Refusal.UNRESOLVED) for at in (0.0, 59.0, 60.0)])
 
@@ -334,7 +342,7 @@ def test_readiness_raises_an_unresolved_host_at_the_limit_the_client_was_given()
 
 def test_a_server_that_answers_ends_the_run_of_unresolved_probes():
     """The name resolves at 200 s and stops resolving at 250 s: the limit counts from 250 s, not from 0 s."""
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
 
     results = _probes_at(
         client,
@@ -350,9 +358,71 @@ def test_a_server_that_answers_ends_the_run_of_unresolved_probes():
 
 
 def test_a_server_that_answers_gives_the_next_forbidden_refusals_their_full_attempts():
-    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
     forbidden = [(0.0, wire.Refusal.FORBIDDEN)] * (ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1)
 
     results = _probes_at(client, *forbidden, (0.0, None), *forbidden)
 
     assert not any(isinstance(result, wire.ConnectRefused) for result in results)
+
+
+def _wire_sends(tmp_path) -> list:
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    return sorted((s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND), key=lambda s: s.start_ns)
+
+
+def _connection_marks(send) -> tuple:
+    return (
+        send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION],
+        send.attrs.get(telemetry_keys.ATTR_WIRE_ENDPOINT),
+        telemetry_keys.ATTR_WIRE_CONNECT_MS in send.attrs,
+    )
+
+
+def test_each_inference_records_its_send_and_its_wait_for_the_answer(tmp_path):
+    answer = serialize([0.0] * 8)
+    connection = MagicMock(**{'recv.side_effect': [answer]})
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
+    with _dialing(connection), telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-roboarena-wire'):
+        client.infer({'prompt': 'pick'})
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    [send] = [s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND]
+    [recv] = [s for s in spans if s.name == telemetry_keys.SPAN_WIRE_RECV]
+    assert send.attrs[telemetry_keys.ATTR_WIRE_BYTES] == len(connection.send.call_args.args[0])
+    assert send.end_ns == recv.start_ns
+
+
+def test_only_the_first_send_on_a_roboarena_connection_carries_the_dialed_endpoint_and_connect_time(tmp_path):
+    answer = serialize([0.0] * 8)
+    first = MagicMock(**{'recv.side_effect': [answer, answer]})
+    second = MagicMock(**{'recv.side_effect': [answer]})
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
+    with _dialing(first, second), telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-roboarena-connection'):
+        client.infer({})
+        client.infer({})
+        client.close()
+        client.infer({})
+
+    assert [_connection_marks(send) for send in _wire_sends(tmp_path)] == [
+        (True, client.url, True),
+        (False, None, False),
+        (True, client.url, True),
+    ]
+
+
+def test_an_inference_that_sends_goes_alone():
+    client = _client(MagicMock(**{'recv.return_value': serialize([0.0] * 8)}))
+    client.infer({})
+
+    assert client.sent_alone is True
+
+
+def test_an_inference_that_fails_before_its_send_carries_no_alone_mark():
+    client = roboarena.RoboarenaClient('policy-server.example', 8000)
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.side_effect = wire.ConnectRefused(wire.Refusal.COLD, 'refused')
+        with pytest.raises(wire.ConnectRefused):
+            client.infer({})
+
+    assert client.sent_alone is None

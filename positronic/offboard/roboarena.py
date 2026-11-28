@@ -3,13 +3,22 @@
 import logging
 import time
 from collections.abc import Mapping
+from threading import local
 from typing import Any
 
 from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.client import DEFAULT_UNRESOLVED_HOST_DEADLINE, ConnectOutcome, ConnectRetries, time_left
+from positronic import telemetry, telemetry_keys
+from positronic.offboard.client import (
+    DEFAULT_UNRESOLVED_HOST_DEADLINE,
+    ConnectOutcome,
+    ConnectRetries,
+    Dial,
+    connection_attrs,
+    time_left,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +66,19 @@ class RoboarenaClient:
         self._connect_deadline = connect_deadline
         self._wire = registry.client_wire(roboarena_wire.RoboarenaClientWire.NAME)
         self._connection: wire.ClientConnection | None = None
+        self._dial: Dial | None = None
+        self._sent_on_conn = False
+        self._calls = local()
         self._server_config: dict[str, Any] | None = None
         self._unresolved_host_deadline = unresolved_host_deadline
         self._probe_retries = ConnectRetries(unresolved_host_deadline)
 
     def connect(self) -> dict[str, Any]:
         """Open the connection and answer the config the server announces on it."""
-        deadline = time.monotonic() + self._connect_deadline
+        dial_started = time.monotonic()
+        deadline = dial_started + self._connect_deadline
         connection = self._wire.dial(self._address, self._headers, min(HANDSHAKE_TIMEOUT_S, time_left(deadline)))
+        dial = Dial(self.url, (time.monotonic() - dial_started) * 1000.0)
         try:
             announced: dict[str, Any] = deserialize(
                 connection.recv(timeout=min(HANDSHAKE_TIMEOUT_S, time_left(deadline)))
@@ -75,7 +89,7 @@ class RoboarenaClient:
             connection.close(timeout=time_left(deadline))
             raise
         self._server_config = announced
-        self._connection = connection
+        self._connection, self._dial, self._sent_on_conn = connection, dial, False
         logger.info(f'Connected to roboarena server, metadata: {announced}')
         return announced
 
@@ -105,20 +119,57 @@ class RoboarenaClient:
             raise wire.ConnectRefused(refusal, f'{self.url} refused the connection')
         return refusal
 
+    @property
+    def sent_alone(self) -> bool | None:
+        """Whether this thread's latest inference went with no other inference in flight; ``None`` before it sends.
+
+        A caller runs one exchange at a time, so each inference that sends goes alone.
+        """
+        return getattr(self._calls, 'alone', None)
+
     def infer(self, observation: Mapping[str, Any]) -> Any:
-        """The action chunk the server answers ``observation`` with."""
+        """The action chunk the server answers ``observation`` with.
+
+        The server answers each request in turn on one connection, so a caller does not overlap two inferences.
+        The send and the wait for the answer are the ``wire.send`` and ``wire.recv`` spans, as in
+        ``InferenceSession``.
+        """
+        self._calls.alone = None
         if self._connection is None:
             self.connect()
         assert self._connection is not None
         deadline = time.monotonic() + INFER_TIMEOUT_S
         try:
-            self._connection.send(serialize({**observation, ENDPOINT: INFER}), timeout=time_left(deadline))
-            answer = self._connection.recv(timeout=time_left(deadline))
+            serialised = serialize({**observation, ENDPOINT: INFER})
+            new_connection, self._sent_on_conn = not self._sent_on_conn, True
+            send_attrs = {
+                telemetry_keys.ATTR_WIRE_BYTES: len(serialised),
+                **connection_attrs(self._dial, new_connection),
+            }
+            self._calls.alone = True
+            answer = self._exchange(serialised, send_attrs, deadline)
         except BaseException:
             # A reply that arrives after this read gave up stays queued, and the next inference reads it as its own.
             self.close()
             raise
         return deserialize(answer)
+
+    def _exchange(self, serialised: bytes, send_attrs: Mapping[str, Any], deadline: float) -> bytes:
+        """Send one request and read its answer by the ``time.monotonic()`` instant ``deadline``.
+
+        The send and the read are each timed as their span. A failed send or read is timed too.
+        """
+        assert self._connection is not None
+        send_started = time.time_ns()
+        try:
+            self._connection.send(serialised, timeout=time_left(deadline))
+        finally:
+            sent = time.time_ns()
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
+        try:
+            return self._connection.recv(timeout=time_left(deadline))
+        finally:
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, time.time_ns())
 
     def reset(self, session_id: str | None = None) -> None:
         """End the server's history for ``session_id``, and read the acknowledgement off the connection.

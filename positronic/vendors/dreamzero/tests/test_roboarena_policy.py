@@ -12,6 +12,7 @@ from positronic_wire.roboarena import RoboarenaAddress
 from positronic_wire.wire import ConnectRefused
 
 from positronic import keys as rig
+from positronic import telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codecs import ACTION
@@ -385,6 +386,46 @@ class TestTheWire:
                     Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
 
         assert [config[wire.RESOLUTION] for config in built] == [[180, 320], [144, 256]]
+
+
+class TestTheTelemetry:
+    def test_a_call_records_the_spans_of_a_remote_call_under_its_worker_span(self, tmp_path):
+        """The same names as the websocket path, so a call splits into client, wire and server time."""
+        reply = serialize({roboarena_policy.ACTIONS_FIELDS[0]: np.zeros((32, 8), dtype=np.float32)})
+        websocket = websocket_answering(serialize(ANNOUNCED), reply)
+        with (
+            patch('positronic_wire.roboarena.connect', return_value=websocket),
+            telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-roboarena-spans'),
+        ):
+            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            run = runtime.start(roboarena_policy.RoboarenaPolicy(ADDRESS))
+            try:
+                run.send(rig_observation())
+                wait_for_answer(runtime)
+            finally:
+                runtime.close()
+                run.close()
+
+        spans = {
+            s.span_id: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+        }
+        named = {s.name: s for s in spans.values()}
+
+        def ancestors(name: str) -> list[str]:
+            chain, span = [], named[name]
+            while span.parent_id is not None:
+                span = spans[span.parent_id]
+                chain.append(span.name)
+            return chain
+
+        # The codec runs inside the worker call and wraps the inference: it encodes, then calls the endpoint.
+        call = [telemetry_keys.SPAN_POLICY_SUBMIT]
+        assert ancestors(telemetry_keys.SPAN_POLICY_ENCODE)[1:2] == call
+        assert ancestors(telemetry_keys.SPAN_POLICY_PREPARE)[1:2] == call
+        assert ancestors(telemetry_keys.SPAN_POLICY_INFER)[1:2] == call
+        assert ancestors(telemetry_keys.SPAN_WIRE_SEND)[:1] == [telemetry_keys.SPAN_POLICY_INFER]
+        assert ancestors(telemetry_keys.SPAN_WIRE_RECV)[:1] == [telemetry_keys.SPAN_POLICY_INFER]
+        assert named[telemetry_keys.SPAN_POLICY_INFER].attrs[telemetry_keys.ATTR_WIRE_SENT_ALONE] is True
 
 
 class StopRun(Exception):

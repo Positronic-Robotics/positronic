@@ -17,6 +17,7 @@ import numpy as np
 from positronic_model_server.serialization import check_int_range
 from positronic_wire import roboarena as roboarena_wire
 
+from positronic import telemetry, telemetry_keys
 from positronic.offboard.roboarena import DEFAULT_CONNECT_DEADLINE_S, RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy.codecs import ACTION
@@ -131,12 +132,19 @@ class RoboarenaEndpoint:
         return sent
 
     def _answer(self, obs: Mapping[str, Any]) -> np.ndarray:
-        try:
-            reply = self._client.infer(self._message(obs))
-        except roboarena_wire.TextAnswer as e:
-            raise RuntimeError(
-                f'the roboarena server at {self._client.url} answered an error instead of an action chunk: {e.text}'
-            ) from e
+        """The server's chunk for ``obs``, with the ``policy.prepare`` and ``policy.infer`` spans of a remote call."""
+        with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
+            message = self._message(obs)
+        with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
+            try:
+                reply = self._client.infer(message)
+            except roboarena_wire.TextAnswer as e:
+                raise RuntimeError(
+                    f'the roboarena server at {self._client.url} answered an error instead of an action chunk: {e.text}'
+                ) from e
+            finally:
+                if (alone := self._client.sent_alone) is not None:
+                    telemetry.set_attrs(span, **{telemetry_keys.ATTR_WIRE_SENT_ALONE: alone})
         field = next((field for field in ACTIONS_FIELDS if field in reply), None)
         if field is None:
             raise ValueError(

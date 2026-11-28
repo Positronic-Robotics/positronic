@@ -118,7 +118,9 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `policy.encode` | the codec's processor span | `codec` (the codec class) | one encode of an observation by a client codec |
+| `policy.prepare` | `policy.submit`, or the span of a codec that wraps the call | — | the client work that makes the request from the encoded observation, before `policy.infer` (the image compression of a remote call, the key selection of a roboarena call) |
+| `policy.infer` | `policy.submit`, or the span of a codec that wraps the call | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
 | `driver.command` | root (an arm driver's file) | `command.sync`; `command.age_ms` on a streamed setpoint | one command that an arm driver takes, from its read to its apply |
@@ -238,6 +240,11 @@ Each one-way value subtracts a client time from a server time, so it holds the o
 clock that runs 20 ms ahead on the server adds 20 ms to the uplink and removes 20 ms from the downlink. Neither the
 sum nor `served.sent_ns - served.received_ns`, the server's time from its read to its send, holds an offset. A
 server that sends no instants gives no `wire.*` values, and its `served.*` values stay as they are.
+
+A call to a roboarena server (`RoboarenaPolicy`) records the same `policy.prepare`, `policy.infer`, `wire.send` and
+`wire.recv` spans, with the same `wire.*` attributes. The roboarena client reads no `timing` block from the answer,
+so its `policy.infer` has no `served.*` values and no one-way values. For such a call, `wire.send + wire.recv` holds
+the network time and the server time together.
 
 A server reads a request only after it answers the request before it. So a call that the client sends while another
 call is in flight waits on the server before `received_ns`, and its one-way values would count that wait as network
