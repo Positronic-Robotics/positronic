@@ -14,7 +14,9 @@ A YAM run takes ``--robot yam``, and ``--cameras`` names the camera set of the r
 
 import argparse
 import math
+import os
 import sys
+import traceback
 from typing import Any
 
 import keys
@@ -882,4 +884,11 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    # The Isaac app turns an uncaught exception into status 0, and its shutdown can hang, so a failed check ends here.
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
