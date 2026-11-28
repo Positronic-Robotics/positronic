@@ -11,12 +11,13 @@ from typing import Any, overload
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, sequence
 
 from positronic import keys as obs_keys
+from positronic import telemetry
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
 from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
 from positronic.policy import training
-from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
+from positronic.policy.base import FieldUse, Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
 from positronic.policy.codecs import (
     TASK_FIELD,
     Codec,
@@ -52,10 +53,11 @@ class PauseOnUnavailable(Policy):
     @staticmethod
     def _arms_available(obs: Obs) -> bool:
         return all(
-            RobotStatus(value) is RobotStatus.AVAILABLE
-            for name, value in obs.items()
-            if name.startswith(f'{obs_keys.ROBOT_STATE}.') and name.endswith(obs_keys.STATUS_SUFFIX)
+            RobotStatus(value) is RobotStatus.AVAILABLE for name, value in obs.items() if obs_keys.is_robot_status(name)
         )
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.OTHER if obs_keys.is_robot_status(field) else FieldUse.FORWARDED
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
@@ -264,6 +266,11 @@ class RTCScheduleV1(Policy):
     def meta(self) -> dict[str, Any]:
         return self._schedule.meta()
 
+    def field_use(self, field: str) -> FieldUse:
+        if field in (policy_keys.CALL_TIMINGS, self.MEASURED_LATENCY_SEC, self.ESTIMATED_LATENCY_SEC):
+            return FieldUse.OTHER
+        return self._schedule.field_use(field)
+
     def to_spec(self) -> dict[str, Any]:
         return component(
             self.WIRE_NAME,
@@ -295,23 +302,27 @@ class ChunkFromV1Answer(Codec):
     """
 
     @overload
-    def wrap(self, function: Callable[[dict], Any]) -> Callable[[Obs], Any]: ...
+    def wrap(
+        self, function: Callable[[dict], Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> Callable[[Obs], Any]: ...
 
     @overload
-    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+    def wrap(
+        self, function: ProcessorRun[Obs, Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> ProcessorRun[Obs, Any]: ...
 
     def wrap(
-        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any]
+        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any], *, level: telemetry.Level = telemetry.Level.CALL
     ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         if isinstance(function, Generator):
-            return super().wrap(function)
+            return super().wrap(function, level=level)
         infer = function
 
         def answer_or_empty_chunk(obs: dict) -> Any:
             answer = infer(obs)
             return [] if answer is None else answer
 
-        return super().wrap(answer_or_empty_chunk)
+        return super().wrap(answer_or_empty_chunk, level=level)
 
     def encode(self, data: dict) -> dict:
         return data

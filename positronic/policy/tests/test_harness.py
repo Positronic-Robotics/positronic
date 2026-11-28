@@ -1439,6 +1439,202 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_the_episode_span_counts_its_late_steps_and_its_slow_encodes_in_the_policy_workers(
+    episode_harness, tmp_path, level
+):
+    h = episode_harness
+    encoded = threading.Event()
+
+    def encode_twice() -> None:
+        start_ns = time.time_ns()
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_ENCODE, start_ns, start_ns + 16_000_000)
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_ENCODE, start_ns, start_ns + 15_000_000)
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_SUBMIT, start_ns, start_ns + 16_000_000)
+        encoded.set()
+
+    class EncodesInAWorker(Policy):
+        def run(self, runtime):
+            yield
+            runtime.submit(encode_twice)
+            assert encoded.wait(5.0)
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    # The counts need no step spans, so they record at the call level too.
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-counts', level=level):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EncodesInAWorker(), None))
+        next(h.loop)
+        # The steps are due at 10, 23 and 38 ms; each starts 3, 5 and 27 ms late.
+        for now_ns in (13_000_000, 28_000_000, 65_000_000):
+            h.world.clock.advance_to_ns(now_ns)
+            next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    counts = {k: v for k, v in episode.attrs.items() if k.startswith(('episode.steps_late_', 'episode.encodes'))}
+    assert counts == {
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_1MS: 3,
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_2MS: 3,
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_5MS: 2,
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_10MS: 1,
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_20MS: 1,
+        telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_50MS: 0,
+        telemetry_keys.ATTR_EPISODE_ENCODES: 2,
+        telemetry_keys.ATTR_EPISODE_ENCODES_GT_5MS: 2,
+        telemetry_keys.ATTR_EPISODE_ENCODES_GT_10MS: 2,
+        telemetry_keys.ATTR_EPISODE_ENCODES_GT_15MS: 1,
+        telemetry_keys.ATTR_EPISODE_ENCODES_GT_30MS: 0,
+        telemetry_keys.ATTR_EPISODE_ENCODES_GT_60MS: 0,
+    }
+
+
+def test_the_episode_span_counts_an_encode_that_the_policy_submits_before_its_first_step(episode_harness, tmp_path):
+    h = episode_harness
+    encoded = threading.Event()
+
+    def encode() -> None:
+        start_ns = time.time_ns()
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_ENCODE, start_ns, start_ns + 1_000_000)
+        encoded.set()
+
+    class EncodesAtStart(Policy):
+        def run(self, runtime):
+            runtime.submit(encode)
+            assert encoded.wait(5.0)
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-encode-at-start'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EncodesAtStart(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(10_000_000)
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_ENCODES] == 1
+
+
+def test_an_encode_that_outlives_its_episode_does_not_count_for_the_next_episode(episode_harness, tmp_path):
+    h = episode_harness
+    release, encoded = threading.Event(), threading.Event()
+
+    def encode_when_released() -> None:
+        assert release.wait(5.0)
+        start_ns = time.time_ns()
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_ENCODE, start_ns, start_ns + 1_000_000)
+        encoded.set()
+
+    class FailsItsCleanupWithAWorkerInFlight(Policy):
+        running = False
+
+        def meta(self):
+            # The episode cleanup reads the metadata before it closes the runtime, so the worker is not drained.
+            if self.running:
+                raise RuntimeError('the metadata fails at the cleanup')
+            return {}
+
+        def run(self, runtime):
+            yield
+            self.running = True
+            runtime.submit(encode_when_released)
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-encode-outlives-episode'):
+        for start_ns, policy in ((0, FailsItsCleanupWithAWorkerInFlight()), (1_000_000_000, EveryTenMs())):
+            h.observation.emit(1)
+            h.caller(Rollout(Task('move', None), policy, None))
+            h.world.clock.advance_to_ns(start_ns)
+            next(h.loop)
+            h.world.clock.advance_to_ns(start_ns + 10_000_000)
+            next(h.loop)
+            if isinstance(policy, EveryTenMs):
+                # The worker of the first episode ends while the second episode runs.
+                release.set()
+                assert encoded.wait(5.0)
+            h.done.emit({eval_keys.SUCCESS: True})
+            next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = sorted((s for s in spans if s.name == telemetry_keys.SPAN_EPISODE), key=lambda s: s.start_ns)
+    assert [e.attrs[telemetry_keys.ATTR_EPISODE_ENCODES] for e in episodes] == [0, 0]
+
+
+def test_each_episode_span_counts_only_its_own_late_steps(episode_harness, tmp_path):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-counts-reset'):
+        for start_ns, late_ns in ((0, 25_000_000), (1_000_000_000, 0)):
+            h.observation.emit(1)
+            h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+            h.world.clock.advance_to_ns(start_ns)
+            next(h.loop)
+            h.world.clock.advance_to_ns(start_ns + 10_000_000 + late_ns)
+            next(h.loop)
+            h.done.emit({eval_keys.SUCCESS: True})
+            next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = sorted((s for s in spans if s.name == telemetry_keys.SPAN_EPISODE), key=lambda s: s.start_ns)
+    assert [e.attrs[telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_20MS] for e in episodes] == [1, 0]
+    assert [e.attrs[telemetry_keys.ATTR_EPISODE_ENCODES] for e in episodes] == [0, 0]
+
+
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_the_harness_records_its_step_spans_only_at_the_step_level(episode_harness, tmp_path, level):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-levels', level=level):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), h.dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(13_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    names = [s.name for s in spans]
+    assert telemetry_keys.SPAN_RESET in names
+    assert (telemetry_keys.SPAN_HARNESS_STEP in names) is (level is telemetry.Level.STEP)
+    record_io = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    if level is telemetry.Level.CALL:
+        # The writer opens and closes once per episode; the samples between steps record no span.
+        assert len(record_io) == 2
+        assert all(s.parent_id == episode.span_id for s in record_io)
+    else:
+        assert len(record_io) > 2
+
+
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
     h = episode_harness
 
