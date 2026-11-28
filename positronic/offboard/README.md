@@ -439,6 +439,66 @@ A complete prefix can support stateless inference, but models may retain session
 history. [GR00T](../vendors/gr00t/README.md#real-time-chunking) uses cached pose
 predictions alongside client-supplied joint and grip targets.
 
+## Replay an episode
+
+`positronic.offboard.replay_episode` plays the observations of a recorded episode to a policy server. The client stack
+that the server declares runs as on a rig. The clock of the episode stops during each call. Each command prints beside
+the command that the episode recorded at the same time.
+
+A public episode is at `s3://positronic-public/datasets/droid-3cam-pi05/v1/`. In it, the π0.5 DROID policy of the
+`positro/pi05-droid` image takes a marker out of a mug on a Franka DROID rig, in 90 s. The episode records
+`image.exterior`, `image.exterior_2` and `image.wrist` at 1280 × 720, the arm state, the grip and the policy commands.
+
+Make one call on the observation 10 s into the episode:
+
+```bash
+uv run python -m positronic.offboard.replay_episode \
+  --dataset.path=s3://PUBLIC@positronic-public/datasets/droid-3cam-pi05/v1/ \
+  --policy.address.host=localhost --policy.address.port=8000 \
+  --start_sec=10 --calls=1
+```
+
+`PUBLIC@` reads the bucket with no credentials. The tool prints each command of the answer at the time that the client
+plays it. In this output, the server answers the joint positions that it gets:
+
+```
+Episode of 89.9 s on harness.world: 'Take the marker out of the mug and put it on the table'
+Observations sent: ['grip', 'image.exterior', 'image.exterior_2', 'image.wrist', 'robot_state.dq', 'robot_state.ee_wrench', 'robot_state.q', 'robot_state.status']
+  10.000 s  call 1 answered in 79 ms
+  10.000 s  robot_command = JointPosition(positions=array([-0.011,  0.497, -0.035, -1.583,  0.104,  1.535,  0.156], dtype=float32), mode=None)
+  10.000 s  target_grip = 0.7372549019607844
+  10.000 s  recorded robot_command.joints = [-0.011  0.504 -0.034 -1.575  0.106  1.526  0.175]
+  10.000 s  recorded target_grip = 1.0
+  10.067 s  robot_command = JointPosition(positions=array([-0.011,  0.497, -0.035, -1.583,  0.104,  1.535,  0.156], dtype=float32), mode=None)
+  ...
+1 calls answered
+```
+
+- Remove `--start_sec` and `--calls` to play the whole episode. `--end_sec` stops the play at that time.
+- `--dataset.path` also takes a local directory, such as the `--output_dir` of an eval. `--episode` selects an
+  episode of a dataset that holds more than one.
+- The server gets `robot_state.ee_pose` only when it states the frame of that pose, at the site the recording
+  reports it at, as on a rig
+  ([State the end-effector frame](../../docs/connect-your-model.md#state-the-end-effector-frame)).
+- Each observation comes from the recording, whatever the server commands.
+- The recorded commands are the commands of π0.5. Compare the type, the size and the range of your commands with them.
+- A step that names a channel the episode records no command on, or a pose command whose frame the server does not
+  state, stops the play with a `PolicyCommandError`. A rig refuses the same step.
+
+### Replay to a remote server
+
+Name the public host and port of the server:
+
+```bash
+uv run python -m positronic.offboard.replay_episode \
+  --dataset.path=s3://PUBLIC@positronic-public/datasets/droid-3cam-pi05/v1/ \
+  --policy.address.host=policy.example.com --policy.address.port=8000 \
+  --start_sec=10 --calls=1
+```
+
+For a server with a token and TLS, put the token in `AUTH_TOKEN` and add
+`--policy=@positronic.cfg.policy.authed_remote --policy.wire=websocket_tls --policy.address.port=443`.
+
 ## Classes
 
 ### `server.PolicyServer`

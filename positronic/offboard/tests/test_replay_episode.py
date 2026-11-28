@@ -1,0 +1,340 @@
+import threading
+import time
+from typing import Any
+
+import numpy as np
+import pytest
+from positronic_wire.websocket import WebsocketClientWire
+
+from pimm.time import RECEIVED_WORLD
+from positronic import geom, keys
+from positronic.dataset.episode import EpisodeContainer
+from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.vector import RECORDED_TIME
+from positronic.drivers.recording import HARNESS_WORLD
+from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
+from positronic.eval import keys as eval_keys
+from positronic.offboard.replay_episode import play
+from positronic.offboard.spec import Model, PolicyDeployment
+from positronic.policy import Policy, PolicyCommandError, RemotePolicy
+from positronic.policy.base import Answer, Obs, PolicyEnd, PolicyRun, QueueFull, Runtime, Step
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
+
+TIMES_NS = [round(i * 0.1e9) for i in range(31)]
+CHUNK = 3
+FPS = 10
+
+
+def _episode(timeline: str = HARNESS_WORLD, signals: dict[str, DummySignal] | None = None) -> EpisodeContainer:
+    """A 3 s episode at 10 Hz: each joint holds ``t``, the pose is at ``t`` in x, and the recorded target is ``-t``.
+
+    Each of ``signals`` adds a signal or takes the place of one.
+    """
+    seconds = np.array(TIMES_NS) / 1e9
+
+    def signal(values: list[Any]) -> DummySignal:
+        return DummySignal(TIMES_NS, values, timelines=(timeline,))
+
+    return EpisodeContainer({
+        keys.JOINTS: signal([np.full(7, t) for t in seconds]),
+        keys.EE_POSE: signal([np.array([t, 0, 0, 1, 0, 0, 0]) for t in seconds]),
+        keys.GRIP: signal([0.5] * len(TIMES_NS)),
+        keys.TARGET_JOINTS: signal([np.full(7, -t) for t in seconds]),
+        keys.TARGET_GRIP: signal([1.0] * len(TIMES_NS)),
+        **(signals or {}),
+        keys.TASK: 'Put the cup in the bowl',
+        eval_keys.EMBODIMENT: 'test.franka',
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE), keys.TARGET_EE_POSE: EEFrame(site=GRIPPER_SITE)}),
+    })
+
+
+class _Hold(Model):
+    """Answers a chunk of joint targets equal to the joints it sees, and keeps each observation."""
+
+    def __init__(self, extra: dict[str, Any] | None = None):
+        self.seen: list[Obs] = []
+        self._extra = extra or {}
+
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
+        self.seen.append(obs)
+        target = {keys.ROBOT_COMMAND: command.JointPosition(obs[keys.JOINTS]), keys.TARGET_GRIP: 1.0, **self._extra}
+        return [target] * CHUNK
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+
+def _served(start_server, model: Model) -> RemotePolicy:
+    served = start_server(model, PolicyDeployment(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=FPS))))
+    return RemotePolicy(WebsocketClientWire.NAME, served.ws()[1])
+
+
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME])
+def test_one_call_gets_the_recorded_observation_at_its_start_and_plays_its_chunk(start_server, timeline):
+    model = _Hold()
+    lines: list[str] = []
+
+    assert play(_episode(timeline), _served(start_server, model), start_sec=1.0, calls=1, out=lines.append) == 1
+
+    seen = model.seen[0]
+    np.testing.assert_allclose(seen[keys.JOINTS], np.full(7, 1.0))
+    assert seen[keys.TASK] == 'Put the cup in the bowl'
+    assert seen[keys.DESCRIPTOR] == 'test.franka'
+    assert keys.EE_POSE not in seen
+    assert sum(' robot_command = JointPosition' in line for line in lines) == CHUNK
+    assert any(line.startswith('   1.000 s  recorded robot_command.joints = ') for line in lines)
+
+
+def test_an_answer_with_a_field_a_rig_does_not_take_raises(start_server):
+    with pytest.raises(PolicyCommandError, match='unknown'):
+        play(_episode(), _served(start_server, _Hold(extra={'unknown': 1})), calls=1, out=lambda _: None)
+
+
+def test_an_answer_on_a_channel_the_episode_does_not_record_raises(start_server):
+    grip_of_left_arm = keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)
+
+    with pytest.raises(PolicyCommandError, match=grip_of_left_arm):
+        play(_episode(), _served(start_server, _Hold(extra={grip_of_left_arm: 1.0})), calls=1, out=lambda _: None)
+
+
+class _Local(Policy):
+    """A local policy that states ``frames``, answers ``commands`` and keeps the first three observations it gets.
+
+    Each step submits ``calls`` calls that each read, 0.1 s after they start, whether the run is still open. A call
+    that the runtime refuses, it skips.
+    """
+
+    def __init__(
+        self, frames: dict[str, EEFrame] | None = None, commands: dict[str, Any] | None = None, calls: int = 0
+    ):
+        self.seen: list[Obs] = []
+        self.open_in_calls: list[bool] = []
+        self._frames = frames or {}
+        self._commands = commands or {}
+        self._calls = calls
+        self._call_started = threading.Event()
+        self._open = False
+
+    def meta(self) -> dict[str, Any]:
+        return ee_frames_entry(self._frames) if self._frames else {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        self._open = True
+        try:
+            obs = yield
+            while len(self.seen) < 3:
+                self.seen.append(obs)
+                for _ in range(self._calls):
+                    try:
+                        runtime.submit(self._read_open)
+                    except QueueFull:
+                        break
+                    assert self._call_started.wait(5)
+                obs = yield Step(self._commands, runtime.time_ns + round(1e9 / FPS))
+            return PolicyEnd.COMPLETE
+        finally:
+            self._open = False
+
+    def _read_open(self) -> None:
+        self._call_started.set()
+        time.sleep(0.1)
+        self.open_in_calls.append(self._open)
+
+
+def test_a_policy_that_states_the_frame_of_the_pose_gets_the_pose():
+    policy = _Local(frames={keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+
+    play(_episode(), policy, out=lambda _: None)
+
+    np.testing.assert_allclose(policy.seen[2][keys.EE_POSE], [0.2, 0, 0, 1, 0, 0, 0])
+
+
+def test_a_policy_that_states_another_site_than_the_recording_raises():
+    with pytest.raises(ValueError, match='site the rig does not report'):
+        play(_episode(), _Local(frames={keys.EE_POSE: EEFrame(site='other_site')}), out=lambda _: None)
+
+
+def test_a_pose_command_whose_frame_the_policy_does_not_state_raises():
+    policy = _Local(commands={keys.ROBOT_COMMAND: command.CartesianPosition(geom.Transform3D())})
+
+    with pytest.raises(PolicyCommandError, match='states no'):
+        play(_episode(), policy, out=lambda _: None)
+
+
+def test_a_call_open_when_the_play_stops_ends_before_the_run_closes():
+    policy = _Local(calls=2)
+
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 0
+
+    assert policy.open_in_calls == [True]
+
+
+class _Prefetches(Policy):
+    """A policy that submits its next call in the step that reads an answer, as a schedule with a full lead does.
+
+    It counts the calls that the runtime takes. With ``skips_refused``, it skips a call that the runtime refuses, as a
+    schedule does.
+    """
+
+    def __init__(self, skips_refused: bool = True):
+        self.submitted = 0
+        self._skips_refused = skips_refused
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        answer: Answer[None] | None = None
+        yield
+        while True:
+            if answer is None or answer.done():
+                if answer is not None:
+                    answer.result()
+                try:
+                    answer = runtime.submit(lambda: None)
+                    self.submitted += 1
+                except QueueFull:
+                    if not self._skips_refused:
+                        raise
+                    answer = None
+            yield Step({}, runtime.time_ns + round(1e9 / FPS))
+
+
+def test_a_policy_that_prefetches_past_the_call_limit_submits_no_extra_call():
+    policy = _Prefetches()
+
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 1
+
+    assert policy.submitted == 1
+
+
+def test_a_policy_that_raises_on_a_refused_call_stops_the_play():
+    policy = _Prefetches(skips_refused=False)
+
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 1
+
+    assert policy.submitted == 1
+
+
+class _FailsToStart(Policy):
+    """A policy that submits a call as it starts, and then raises before its first observation."""
+
+    def __init__(self):
+        self.call_ended = threading.Event()
+        self._call_started = threading.Event()
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        runtime.submit(self._call)
+        assert self._call_started.wait(5)
+        raise RuntimeError('the policy fails to start')
+        yield
+
+    def _call(self) -> None:
+        self._call_started.set()
+        time.sleep(0.1)
+        self.call_ended.set()
+
+
+def test_a_call_of_a_policy_that_fails_to_start_ends_before_the_play_raises():
+    policy = _FailsToStart()
+
+    with pytest.raises(RuntimeError, match='fails to start'):
+        play(_episode(), policy, out=lambda _: None)
+
+    assert policy.call_ended.is_set()
+
+
+class _AsksToResumeLate(Policy):
+    """A policy that asks to resume 2 s after each observation, and keeps the joints it sees."""
+
+    def __init__(self):
+        self.seen_joints: list[float] = []
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        obs = yield
+        while True:
+            self.seen_joints.append(float(obs[keys.JOINTS][0]))
+            obs = yield Step({}, runtime.time_ns + round(2e9))
+
+
+def test_a_late_resume_reads_the_episode_at_most_one_second_apart():
+    policy = _AsksToResumeLate()
+
+    play(_episode(), policy, out=lambda _: None)
+
+    np.testing.assert_allclose(policy.seen_joints, [0.0, 1.0, 2.0, 3.0])
+
+
+class _ReturnsNone(Policy):
+    """A policy whose run returns ``None`` in place of a ``PolicyEnd`` after its first observation."""
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        yield Step({}, runtime.time_ns + round(1e9 / FPS))
+        not_an_end: Any = None
+        return not_an_end
+
+
+def test_a_run_that_returns_no_policy_end_raises():
+    with pytest.raises(ValueError, match='not a PolicyEnd'):
+        play(_episode(), _ReturnsNone(), out=lambda _: None)
+
+
+class _KeepsEachStep(Policy):
+    """A policy that asks to resume 1 s after each observation, and keeps the joints, the grip and the capture time."""
+
+    def __init__(self):
+        self.seen: list[tuple[float, float]] = []
+        self.observed_ns: list[int | None] = []
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        obs = yield
+        while True:
+            self.seen.append((float(obs[keys.JOINTS][0]), float(obs[keys.GRIP])))
+            self.observed_ns.append(runtime.observed_ns)
+            obs = yield Step({}, runtime.time_ns + round(1e9))
+
+
+def test_a_stream_that_stops_early_keeps_its_last_value_until_the_episode_ends():
+    grip_to_1_sec = DummySignal(TIMES_NS[:11], [t / 1e9 for t in TIMES_NS[:11]], timelines=(HARNESS_WORLD,))
+    policy = _KeepsEachStep()
+
+    play(_episode(signals={keys.GRIP: grip_to_1_sec}), policy, out=lambda _: None)
+
+    assert policy.seen == [(0.0, 0.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]
+
+
+def _frames(times_ns: list[int]) -> DummySignal:
+    return DummySignal(times_ns, [np.zeros((2, 2, 3), dtype=np.uint8)] * len(times_ns), timelines=(HARNESS_WORLD,))
+
+
+def test_a_tick_is_observed_at_the_capture_of_its_oldest_frame():
+    wrist = _frames([0, round(0.5e9), round(1.5e9), round(2.5e9)])
+    exterior = _frames([0, round(0.9e9), round(2.9e9)])
+    policy = _KeepsEachStep()
+
+    play(_episode(signals={keys.WRIST_IMAGE: wrist, keys.EXTERIOR_IMAGE: exterior}), policy, out=lambda _: None)
+
+    assert policy.observed_ns == [0, round(0.5e9), round(0.9e9), round(2.5e9)]
+
+
+def test_a_tick_without_a_frame_has_no_capture_time():
+    policy = _KeepsEachStep()
+
+    play(_episode(), policy, out=lambda _: None)
+
+    assert policy.observed_ns == [None, None, None, None]

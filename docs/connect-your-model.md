@@ -229,6 +229,7 @@ episode with a `PolicyCommandError` that names the channel.
 ## Debugging with recordings
 
 Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-dataset-viewer`.
+To play a recorded episode to a server again, see [Replay an episode](../positronic/offboard/README.md#replay-an-episode).
 
 ## Implement your own server
 
@@ -312,12 +313,7 @@ Implement `end_session(session_id)` to release that episode's state. It runs aft
 outstanding inference finishes, both on explicit session end and on disconnect.
 The model remains loaded for subsequent episodes.
 
-Test the deployment with the normal client:
-
-```bash
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=localhost --policy.address.port=8000
-```
+Test the deployment as [Test your server](#test-your-server) tells.
 
 ### Serialization
 
@@ -380,6 +376,76 @@ The [Codecs Guide](../positronic/policy/codecs/README.md) lists the other action
 `bimanual_joints_action` for two arms.
 
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
+
+## Test your server
+
+Test a server in a simulator first, then on a recorded robot episode. Both tests run the client that runs on a rig.
+
+### In a simulator
+
+Run an eval against the server:
+
+```bash
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/stack_cubes
+```
+
+The MuJoCo scene sends `image.exterior`, `image.wrist` and `image.agent_view`. A server that reads
+`image.exterior_2`, such as a `droid_3cam` pipeline, answers each of its observations with an error. MolmoSpaces sends
+both exterior views. For such a server, run `molmo.franka_pick_mini_smoke` as
+[Score a policy on MolmoSpaces on your machine](local-molmospaces-eval.md) tells. Browse the recorded episodes with
+`uv run positronic-dataset-viewer --dataset.path=~/evals/stack_cubes`.
+
+### On a recorded episode
+
+Then play a recorded episode to the server with `positronic.offboard.replay_episode`. Each command prints beside the
+command that the episode recorded. [Replay an episode](../positronic/offboard/README.md#replay-an-episode) tells how
+to run it on a public DROID episode with three cameras.
+
+## Expose your server
+
+Positronic can run an eval against a server on your machine ([Four ways to start](evaluation.md#four-ways-to-start)).
+The platform then dials the server over the internet. It needs only this:
+
+- A public host name or a public IP address.
+- A port that the platform can reach from the internet.
+
+An open server on the plain `websocket` or `grpc` wire is enough. Tailscale and other private networks are not
+offered: the platform dials only a public address.
+
+The endpoint entry of the eval plan names the wire and the address
+([Eval plans](../client/README.md#eval-plans)).
+
+Two options limit who can use the server:
+
+- **A bearer token.** Start the server with the token in `AUTH_TOKEN`
+  ([Authentication](../positronic/offboard/README.md#authentication)). The endpoint entry then names the file that
+  holds the token, in `auth_token_file`. The server refuses a request without the token.
+- **A TLS wire.** Put a TLS edge in front of the server, such as a reverse proxy with a certificate for the host name,
+  and name `websocket_tls` or `grpc_tls` ([Wires](../positronic/offboard/README.md#wires)).
+
+On a wire without TLS, the token travels in clear. Use the two options together.
+
+A server on Modal works in two forms:
+
+- **A Modal web endpoint** (`@modal.asgi_app` or `@modal.web_server`) at its `*.modal.run` URL takes `websocket_tls`
+  on port 443. It can run open. With Modal proxy auth on, the token file holds the proxy token as
+  `<token-id>.<token-secret>`, which Modal takes as a bearer token
+  ([Proxy auth](https://modal.com/docs/guide/webhook-proxy-auth)).
+- **A Modal Server with sticky sessions** (`modal_websocket_tls`, a `*.modal.direct` URL) works from a plan only when
+  it lets a session start with no authentication (`@app.server(unauthenticated=True)`,
+  [Servers](https://modal.com/docs/guide/servers)). A plan refuses a token on that wire
+  ([Eval plans](../client/README.md#eval-plans)).
+
+Check the endpoint from a machine outside your network:
+
+```bash
+curl -X POST http://policy.example.com:8000/api/v1/keepalive
+```
+
+An answer shows that the server is reachable. A server with a token answers `401` here. Then play the public episode
+to the endpoint, as [Replay to a remote server](../positronic/offboard/README.md#replay-to-a-remote-server) tells.
 
 ## See Also
 

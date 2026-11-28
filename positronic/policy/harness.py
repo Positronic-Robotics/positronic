@@ -306,6 +306,72 @@ class _PolicyEnded:
     time_ns: int
 
 
+def next_wake_ns(started_at_ns: int, resume_at_ns: int) -> int:
+    """When a step that started at ``started_at_ns`` and asks to resume at ``resume_at_ns`` reads sensors again.
+
+    The period between the two is clamped to ``MIN_POLL_PERIOD_SEC`` and ``MAX_POLL_PERIOD_SEC``.
+    """
+    period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, (resume_at_ns - started_at_ns) / 1e9))
+    return started_at_ns + round(period_sec * 1e9)
+
+
+def policy_end(end: StopIteration) -> PolicyEnd:
+    """The ``PolicyEnd`` that a policy run returned as it raised ``end``. Raise ``ValueError`` for another value."""
+    if not isinstance(end.value, PolicyEnd):
+        raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
+    return end.value
+
+
+def policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
+    """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
+
+    The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
+    starts, as a remote run does once its session opens. Raise when both state the frame of one pose signal.
+    """
+    stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
+    if both := stated.keys() & recorded.keys():
+        raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
+    return stated | recorded
+
+
+def stated_pose_signals(declared: dict[str, EEFrame], rig: dict[str, EEFrame]) -> frozenset[str]:
+    """The pose signals of ``rig`` whose frame ``declared`` states. A policy observes and commands only these poses.
+
+    Raise when the policy states another site than the rig, or states frames on a rig that states none, such as an
+    arm with no model.
+    """
+    if declared and not rig:
+        raise ValueError(
+            f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
+            f'frames for {sorted(declared)}'
+        )
+    mismatched = {
+        name: (frame.site, rig[name].site)
+        for name, frame in declared.items()
+        if name in rig and frame.site != rig[name].site
+    }
+    if mismatched:
+        raise ValueError(
+            'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
+            f'{mismatched}'
+        )
+    return frozenset(declared.keys() & rig.keys())
+
+
+def refuse_unstated_pose_commands(commands: Commands, stated_poses: frozenset[str]) -> None:
+    """Raise when ``commands`` holds a pose command on a channel whose pose signal is not in ``stated_poses``."""
+    unstated = sorted(
+        name
+        for name, command in commands.items()
+        if isinstance(command, CartesianPosition | CartesianDelta) and f'{name}{keys.POSE_SUFFIX}' not in stated_poses
+    )
+    if unstated:
+        raise PolicyCommandError(
+            f'The policy sends a pose command on {unstated}, and states no {EE_FRAMES} entry for the pose of that '
+            'channel. State the frame of each pose that the policy reads or commands.'
+        )
+
+
 class Harness(pimm.ControlSystem):
     """Run episode lifecycles and emit each policy step's commands immediately.
 
@@ -586,21 +652,6 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
 
-    @staticmethod
-    def _refuse_unstated_pose_commands(commands: Commands, stated_poses: frozenset[str]) -> None:
-        """Raise when ``commands`` holds a pose command on a channel whose pose signal is not in ``stated_poses``."""
-        unstated = sorted(
-            name
-            for name, command in commands.items()
-            if isinstance(command, CartesianPosition | CartesianDelta)
-            and f'{name}{keys.POSE_SUFFIX}' not in stated_poses
-        )
-        if unstated:
-            raise PolicyCommandError(
-                f'The policy sends a pose command on {unstated}, and states no {EE_FRAMES} entry for the pose of that '
-                'channel. State the frame of each pose that the policy reads or commands.'
-            )
-
     def _step(
         self,
         task: Task,
@@ -636,9 +687,7 @@ class Harness(pimm.ControlSystem):
                 try:
                     step = policy_run.send(obs)
                 except StopIteration as end:
-                    if not isinstance(end.value, PolicyEnd):
-                        raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
-                    return _PolicyEnded(end.value, runtime.time_ns)
+                    return _PolicyEnded(policy_end(end), runtime.time_ns)
                 finally:
                     step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'
@@ -646,7 +695,7 @@ class Harness(pimm.ControlSystem):
                     raise PolicyCommandError(
                         f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
                     )
-                self._refuse_unstated_pose_commands(step.commands, stated_poses)
+                refuse_unstated_pose_commands(step.commands, stated_poses)
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
@@ -657,9 +706,7 @@ class Harness(pimm.ControlSystem):
             finally:
                 if span.is_recording():
                     telemetry.set_attrs(span, **step_ms)
-        period_sec = (step.resume_at_ns - started_at_ns) / 1e9
-        period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
-        return started_at_ns + round(period_sec * 1e9)
+        return next_wake_ns(started_at_ns, step.resume_at_ns)
 
     @staticmethod
     def _trial_terminal(
@@ -778,42 +825,6 @@ class Harness(pimm.ControlSystem):
             self._sample()
         return payload
 
-    @staticmethod
-    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
-        """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
-
-        The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
-        starts, as a remote run does once its session opens. Raise when both state the frame of one pose signal.
-        """
-        stated, recorded = ee_frames(policy.meta()), ee_frames(runtime.metadata_snapshot())
-        if both := stated.keys() & recorded.keys():
-            raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
-        return stated | recorded
-
-    def _stated_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
-        """The rig's pose signals whose frame ``declared`` states. A policy observes and commands only these poses.
-
-        Raise when the policy states another site than the rig, or states frames on a rig that states none, such as an
-        arm with no model.
-        """
-        rig = ee_frames(self._statics())
-        if declared and not rig:
-            raise ValueError(
-                f'The rig states no {EE_FRAMES}, so it runs only a policy that speaks joints, and the policy states '
-                f'frames for {sorted(declared)}'
-            )
-        mismatched = {
-            name: (frame.site, rig[name].site)
-            for name, frame in declared.items()
-            if name in rig and frame.site != rig[name].site
-        }
-        if mismatched:
-            raise ValueError(
-                'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
-                f'{mismatched}'
-            )
-        return frozenset(declared.keys() & rig.keys())
-
     def _pose_signals(self) -> frozenset[str]:
         """Every pose signal of the rig."""
         # The embodiment lists every pose its serializers write; an arm with no model states none of them.
@@ -840,7 +851,7 @@ class Harness(pimm.ControlSystem):
             policy_run = None
             try:
                 policy_run = runtime.start(rollout.policy)
-                stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
+                stated_poses = stated_pose_signals(policy_frames(rollout.policy, runtime), ee_frames(self._statics()))
                 withheld_poses = self._pose_signals() - stated_poses
                 deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
                 self.deadline_ns.emit(deadline_ns)

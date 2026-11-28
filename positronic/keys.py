@@ -34,6 +34,8 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}{JOINT_TARGETS_SUFFIX}'
 TARGET_JOINT_DELTAS = f'{ROBOT_COMMAND}{JOINT_DELTAS_SUFFIX}'
 TARGET_EE_POSE_DELTA = f'{ROBOT_COMMAND}{POSE_DELTA_SUFFIX}'
 TARGET_EE_POSE_DELTA_FRAME = f'{ROBOT_COMMAND}{POSE_DELTA_FRAME_SUFFIX}'
+# The suffixes that a command on the arm's channel unfolds into, besides its control mode.
+COMMAND_SUFFIXES = (JOINT_TARGETS_SUFFIX, JOINT_DELTAS_SUFFIX, POSE_SUFFIX, POSE_DELTA_SUFFIX, POSE_DELTA_FRAME_SUFFIX)
 
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
@@ -57,6 +59,28 @@ def is_control_mode(name: str) -> bool:
 def is_robot_status(name: str) -> bool:
     """Whether ``name`` holds an arm's status: ``robot_state.status``, or an arm's ``robot_state.{arm}.status``."""
     return name.startswith(f'{ROBOT_STATE}.') and name.endswith(STATUS_SUFFIX)
+
+
+def command_channel(signal: str) -> str | None:
+    """The channel whose command a recorded ``signal`` unfolds from, or ``None`` for a signal that records no command.
+
+    ``robot_command.left.joints`` unfolds from ``robot_command.left``, and ``target_grip`` from ``target_grip``.
+    """
+    if signal.partition('.')[0] == TARGET_GRIP:
+        return signal
+    if not is_robot_command(signal):
+        return None
+    if is_control_mode(signal):
+        return signal[: signal.index(CONTROL_MODE_SUFFIX)]
+    for suffix in COMMAND_SUFFIXES:
+        if signal.endswith(suffix):
+            return signal.removesuffix(suffix)
+    return None
+
+
+def is_observation(name: str) -> bool:
+    """Whether ``name`` is a sensor signal an embodiment sends a policy: an arm state, a grip or a camera."""
+    return name.startswith((f'{ROBOT_STATE}.', IMAGE_PREFIX)) or name.partition('.')[0] == GRIP
 
 
 def arm_channel(channel: str, arm: str | None) -> str:
