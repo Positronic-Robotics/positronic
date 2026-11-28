@@ -110,7 +110,7 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.steps_late_ge_<N>ms`, `episode.encodes`, `episode.encodes_gt_<N>ms`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.steps_late_ge_<N>ms`, `episode.encodes`, `episode.encodes_gt_<N>ms`, `episode.encodes_sum_ms`, `episode.frame_reads`, `episode.frame_reads_wait_ge_<N>ms`, `episode.frame_reads_wait_sum_ms`, `episode.frames_driver_timed`, `episode.frames_driver_ge_<N>ms`, `episode.frames_driver_sum_ms`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
@@ -216,8 +216,20 @@ latency target. `episode.steps_late_ge_<N>ms` counts the harness steps that star
 (the `step.late_ms` of a `harness.step` span), for N in 1, 2, 5, 10, 20 and 50. A step that reads no complete
 observation counts too, and `episode.steps` does not count it. `episode.encodes` counts the `policy.encode` spans of
 the policy calls that the rollout submits, and `episode.encodes_gt_<N>ms` counts the spans of them that take more than
-N ms, for N in 5, 10, 15, 30 and 60. Each episode span carries each count, 0 included. The counts record at the `call`
-level, so a run gets them without the step spans. They count only the encode spans that the active level records.
+N ms, for N in 5, 10, 15, 30 and 60. `episode.encodes_sum_ms` is the sum of their durations, so
+`encodes_sum_ms / encodes` is the mean encode time. Each episode span carries each count, 0 included. The counts record
+at the `call` level, so a run gets them without the step spans. They count only the encode spans that the active level
+records.
+
+The `episode` span also counts the two parts of the age of the camera frames (see "Reading harness steps"), from all
+cameras. `episode.frame_reads` counts the camera frame reads of the steps that have a frame wait,
+`episode.frame_reads_wait_ge_<N>ms` counts the reads whose wait is N ms or more, for N in 5, 10, 20, 50 and 100, and
+`episode.frame_reads_wait_sum_ms` is the sum of the waits. A step that reads the same frame again counts it again,
+because the wait grows until a new frame arrives. `episode.frames_driver_timed` counts the frames that the episode
+reads and whose driver stamps a capture time, `episode.frames_driver_ge_<N>ms` counts those whose driver time is N ms
+or more, for N in 10, 20, 50, 100 and 200, and `episode.frames_driver_sum_ms` is the sum of the driver times. Each
+frame counts once per episode, by its `camera.capture` stamp. A frame that the recording or the idle device check
+reads first also counts. The harness computes these values at each level, and no count reads a `harness.step` span.
 
 ### Reading the network time of a call
 

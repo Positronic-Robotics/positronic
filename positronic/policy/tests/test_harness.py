@@ -1491,6 +1491,7 @@ def test_the_episode_span_counts_its_late_steps_and_its_slow_encodes_in_the_poli
         telemetry_keys.ATTR_EPISODE_ENCODES_GT_15MS: 1,
         telemetry_keys.ATTR_EPISODE_ENCODES_GT_30MS: 0,
         telemetry_keys.ATTR_EPISODE_ENCODES_GT_60MS: 0,
+        telemetry_keys.ATTR_EPISODE_ENCODES_SUM_MS: pytest.approx(31.0),
     }
 
 
@@ -1577,6 +1578,7 @@ def test_an_encode_that_outlives_its_episode_does_not_count_for_the_next_episode
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = sorted((s for s in spans if s.name == telemetry_keys.SPAN_EPISODE), key=lambda s: s.start_ns)
     assert [e.attrs[telemetry_keys.ATTR_EPISODE_ENCODES] for e in episodes] == [0, 0]
+    assert [e.attrs[telemetry_keys.ATTR_EPISODE_ENCODES_SUM_MS] for e in episodes] == [0.0, 0.0]
 
 
 def test_each_episode_span_counts_only_its_own_late_steps(episode_harness, tmp_path):
@@ -1934,6 +1936,120 @@ def test_a_step_span_carries_the_age_of_each_camera_frame_in_two_parts(tmp_path)
     assert first.attrs[driver + keys.EXTERIOR_IMAGE] == second.attrs[driver + keys.EXTERIOR_IMAGE] == 21.0
     # A driver that stamps no capture time gives no driver part.
     assert driver + keys.WRIST_IMAGE not in first.attrs
+
+
+def _frame_counts(episode) -> dict[str, Any]:
+    return {k: v for k, v in episode.attrs.items() if k.startswith(('episode.frame_reads', 'episode.frames_driver'))}
+
+
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_the_episode_span_counts_each_frame_read_and_the_driver_time_of_each_new_frame(tmp_path, level):
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 10_000_000)
+
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)) as h,
+        # The counts need no step spans, so they record at the call level too.
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-frame-counts', level=level),
+    ):
+        exterior, wrist = h.device_observations[keys.EXTERIOR_IMAGE], h.device_observations[keys.WRIST_IMAGE]
+        exterior.emit(np.zeros(1), time=pimm.Time(**{CAPTURE_TIME: 5_000, HANDOFF_TIME: 21_005_000}))
+        h.world.clock.advance_to_ns(10_000_000)
+        wrist.emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(35_000_000)
+        exterior.emit(np.zeros(1), time=pimm.Time(**{CAPTURE_TIME: 0, HANDOFF_TIME: 50_000_000}))
+        for now_ns in (40_000_000, 50_000_000):
+            h.world.clock.advance_to_ns(now_ns)
+            next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    # The steps at 30, 40 and 50 ms read the exterior frame 30, 5 and 15 ms after its hand-off, and the wrist frame
+    # 20, 30 and 40 ms after. The exterior driver hands off one frame in 21 ms and the next one in 50 ms; the wrist
+    # driver stamps no capture time.
+    assert _frame_counts(episode) == {
+        telemetry_keys.ATTR_EPISODE_FRAME_READS: 6,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_5MS: 6,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_10MS: 5,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_20MS: 4,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_50MS: 0,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_100MS: 0,
+        telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_SUM_MS: pytest.approx(140.0),
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_TIMED: 2,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_10MS: 2,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_20MS: 2,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_50MS: 1,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_100MS: 0,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_200MS: 0,
+        telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_SUM_MS: pytest.approx(71.0),
+    }
+
+
+def test_a_frame_that_the_recording_reads_first_counts_its_driver_time_once(tmp_path):
+    class EveryHundredMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE,)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-frame-recorded-first'),
+    ):
+        exterior = h.device_observations[keys.EXTERIOR_IMAGE]
+        exterior.emit(np.zeros(1), time=pimm.Time(**{CAPTURE_TIME: 0, HANDOFF_TIME: 30_000_000}))
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryHundredMs(), h.dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(10_000_000)
+        exterior.emit(np.zeros(1), time=pimm.Time(**{CAPTURE_TIME: 5_000_000, HANDOFF_TIME: 65_000_000}))
+        # The recording reads the new frame between the steps, and the next step reads it again.
+        for now_ns in (20_000_000, 100_000_000):
+            h.world.clock.advance_to_ns(now_ns)
+            next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    counts = _frame_counts(episode)
+    assert counts[telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_TIMED] == 2
+    assert counts[telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_SUM_MS] == pytest.approx(90.0)
+    assert counts[telemetry_keys.ATTR_EPISODE_FRAME_READS] == 2
+
+
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_a_frame_that_the_idle_health_check_reads_first_counts_its_driver_time(tmp_path, level):
+    cameras = (keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)
+    with (
+        _episode_ports(devices=cameras, observed=cameras) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-frame-idle-read', level=level),
+    ):
+        # Two cameras can stamp the same capture time; each frame counts.
+        for name, handoff_ns in zip(cameras, (40_000_000, 30_000_000), strict=True):
+            h.device_observations[name].emit(np.zeros(1), time=pimm.Time(**{CAPTURE_TIME: 0, HANDOFF_TIME: handoff_ns}))
+        # The idle loop reads the camera of a device with a ready handler before the episode starts.
+        next(h.loop)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EndAfter(1), None))
+        next(h.loop)
+        for handler in h.ready.values():
+            next(handler.incoming()).set_result(None)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    counts = _frame_counts(episode)
+    assert counts[telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_TIMED] == 2
+    assert counts[telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_SUM_MS] == pytest.approx(70.0)
 
 
 def test_the_frame_wait_ends_at_the_read_and_leaves_out_the_conversion(tmp_path):
