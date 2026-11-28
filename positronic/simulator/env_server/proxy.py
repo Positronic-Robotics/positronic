@@ -141,9 +141,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                         call.set_result(None)
                 elif self._active:
                     # The materialize span nests inside the step span, so a reduce can split the two costs.
-                    with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+                    with telemetry.span(telemetry_keys.SPAN_ENV_STEP, telemetry.Level.STEP):
                         self._frame = self._step_env()
-                        with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
+                        with telemetry.span(telemetry_keys.SPAN_MATERIALIZE, telemetry.Level.STEP):
                             self._emit_payload(self._frame)
         finally:
             self._cleanup.close()

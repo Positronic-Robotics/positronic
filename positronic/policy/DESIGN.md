@@ -311,6 +311,9 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
+The client may reorder a declared stack only where the policy gets the same
+input (`positronic/policy/arrival.py`).
+
 Each remote run opens a server session and runs the declared client stack
 around an ordinary inference function. The session identifies that run's calls
 and owns any server-side episode state. It ends when the run closes or the

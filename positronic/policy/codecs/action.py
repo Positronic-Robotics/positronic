@@ -13,6 +13,7 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
+from positronic.policy.base import FieldUse
 
 from .base import Codec, CommandsPathCodec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
@@ -33,6 +34,9 @@ class SplitActionChunk(Codec):
 
     def encode(self, data: dict) -> dict:
         return data
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.FORWARDED
 
     def decode(self, data: Any) -> list[dict[str, Any]]:
         if not isinstance(data, Mapping) or not data:
@@ -462,6 +466,9 @@ class SetControlMode(Codec):
 
     def encode(self, data):
         return data
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.FORWARDED
 
     def _decode_single(self, data: dict) -> dict:
         # The command family also holds the pose/joint vectors a recording unfolds into, so what carries a
