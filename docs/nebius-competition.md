@@ -309,6 +309,10 @@ plays the competition eval against the server in the image over the network.
   The server must answer all of them. A model that keeps state from one call to the next, such as a queue
   of actions, keeps one state for each session. The
   [rules](https://competition.phail.ai/rules#evaluation) state this in "Many episodes at once".
+- Each session must open within 15 s, from the first connect to the server's `ready` message. The limit
+  applies while other sessions are open, and while the server loads or switches a model. A session that
+  misses it fails its episode. The platform plays the episode again, and a run whose episodes keep missing
+  the limit fails with `latency_budget_exceeded`.
 - Ask the client for JPEG frames. Raw frames from three 640x360 cameras are about 2 MB for each call.
   They add time to each call in simulation, and much more on the real robot in the finale, where the robot
   reaches your container over the internet. A server built on `PolicyDeployment` asks for JPEG at quality
@@ -632,7 +636,7 @@ your submissions:
 | `policy_setup_crash` | `policy_log`: the server did not start, or it refused the token of the run |
 | `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer. `KeyError('robot_state.ee_pose')` in `reason` means that the server states no end-effector frame |
 | `policy_oom` | `diagnostics.container_oom_killed`, and the size of the model against the memory limits |
-| `latency_budget_exceeded` | the inference time for each step |
+| `latency_budget_exceeded` | the inference time for each step, and the 15 s that each session has to open |
 | `wall_clock_exceeded` | the run went past its time limit |
 
 The reasons `provision_wedged`, `runner_unresponsive`, `internal_error` and `quota_exceeded` are faults of
