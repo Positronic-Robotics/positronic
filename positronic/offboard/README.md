@@ -142,7 +142,7 @@ The client names each part: `--policy=.remote --policy.wire=websocket --policy.a
 separate `headers` argument.
 
 A warm-up session carries the header `positronic-session-purpose: warm-up` in `headers`, not a session
-parameter. `ModelServer` gives it to the model as `Model.preparing_warm_up`. `PolicyServer` does not read it,
+parameter. `ModelServer` gives its value to the model as `Model.session_purpose`. `PolicyServer` does not read it,
 and opens a normal session.
 
 ### Session Flow

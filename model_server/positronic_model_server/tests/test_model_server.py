@@ -624,25 +624,25 @@ def test_authentication_gates_sessions(start):
 WARM_UP = {wire.SESSION_PURPOSE_HEADER: wire.WARM_UP_PURPOSE}
 
 
-def test_the_warm_up_purpose_marks_only_the_preparation_of_its_own_session(start):
+def test_the_session_purpose_reaches_only_the_preparation_of_its_own_session(start):
     class PurposeProbe(Probe):
         def __init__(self):
             super().__init__()
-            self.warm_ups: list[bool] = []
+            self.purposes: list[str | None] = []
 
         def prepare_session(self, params):
-            self.warm_ups.append(self.preparing_warm_up)
+            self.purposes.append(self.session_purpose)
             return super().prepare_session(params)
 
     probe = PurposeProbe()
     running = start(probe)
     for headers in (WARM_UP, None, {wire.SESSION_PURPOSE_HEADER: 'other'}):
         running.session(headers=headers).close()
-    assert probe.warm_ups == [True, False, False]
-    assert not probe.preparing_warm_up
+    assert probe.purposes == [wire.WARM_UP_PURPOSE, None, 'other']
+    assert probe.session_purpose is None
 
 
-def test_a_model_that_ignores_the_purpose_opens_a_normal_session_for_a_warm_up(start):
+def test_a_model_that_ignores_the_session_purpose_opens_a_normal_session_for_a_warm_up(start):
     peer = start().session(headers=WARM_UP)
     assert peer.metadata[keys.SESSION_PARAMS] == {}
     assert peer.infer({})[protocol.RESULT]['count'] == 1

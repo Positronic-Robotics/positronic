@@ -56,8 +56,8 @@ class ServerConnection(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def is_warm_up(self) -> bool:
-        """Whether the client marked this session with ``positronic_wire.wire.WARM_UP_PURPOSE``."""
+    def session_purpose(self) -> str | None:
+        """The ``positronic_wire.wire.SESSION_PURPOSE_HEADER`` value of this session, or ``None`` when it has none."""
 
     @abc.abstractmethod
     async def send(self, message: bytes) -> None:

@@ -66,8 +66,8 @@ class WebsocketServerConnection(server_wire.ServerConnection):
         return parse_qsl(self._scope.get('query_string', b'').decode('latin-1'), keep_blank_values=True)
 
     @property
-    def is_warm_up(self) -> bool:
-        return self._headers.get(wire.SESSION_PURPOSE_HEADER) == wire.WARM_UP_PURPOSE
+    def session_purpose(self) -> str | None:
+        return self._headers.get(wire.SESSION_PURPOSE_HEADER)
 
     async def _send(self, event: ASGISendEvent) -> None:
         if self._closed:

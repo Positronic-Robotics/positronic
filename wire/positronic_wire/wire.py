@@ -19,9 +19,9 @@ SESSION_PATH = f'{API_PATH}/session'
 # The keepalive route beside the session, and the key its JSON answer carries the seconds under.
 KEEPALIVE_PATH = f'{API_PATH}/keepalive'
 ALIVE_SECONDS = 'alive_seconds'
-# The session header that marks why a client opens a session. A server that does not read it opens a normal session.
+# The session header that names why a client opens a session.
 SESSION_PURPOSE_HEADER = 'positronic-session-purpose'
-# The purpose of a session that a run opens before its episodes, to start what the episodes use.
+# The session purpose of a warm-up session.
 WARM_UP_PURPOSE = 'warm-up'
 
 

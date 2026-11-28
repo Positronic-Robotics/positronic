@@ -57,8 +57,8 @@ class GrpcServerConnection(server_wire.ServerConnection):
         return parse_qsl(self._headers.get(SESSION_QUERY_HEADER, ''), keep_blank_values=True)
 
     @property
-    def is_warm_up(self) -> bool:
-        return self._headers.get(wire.SESSION_PURPOSE_HEADER) == wire.WARM_UP_PURPOSE
+    def session_purpose(self) -> str | None:
+        return self._headers.get(wire.SESSION_PURPOSE_HEADER)
 
     async def send(self, message: bytes) -> None:
         try:
