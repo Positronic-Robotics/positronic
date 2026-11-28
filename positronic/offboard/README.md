@@ -556,6 +556,7 @@ Vendors provide their own launch configurations and share the inference protocol
 - **DreamZero**: `positronic.vendors.dreamzero.serving.server` - Serves the public DROID checkpoint directly through the standalone model server
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
 - **LLM**: `positronic.vendors.llm.server` - Serves an API-backed LLM policy, one conversation per session
+- **ASPIRE**: `positronic.vendors.aspire.server` - Serves an ASPIRE CapApi program, one run of the program per session
 
 ## See Also
 
