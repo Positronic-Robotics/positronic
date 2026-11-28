@@ -1,12 +1,15 @@
 import gc
 import logging
 import math
+import threading
 import time
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -60,7 +63,39 @@ _SCHEDULE_ATTRS = {
 
 
 class _EpisodeTelemetry:
-    """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
+    """Parent reset, inference, and recorder spans to one episode; count its steps, late steps, encodes, and virtual
+    duration."""
+
+    # The episode span counts the steps that start this many milliseconds or more after their due time, by attribute.
+    # Sorted by bound, as `bisect` needs.
+    _LATE_STEP_BUCKETS = tuple(
+        sorted(
+            (
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_1MS, 1.0),
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_2MS, 2.0),
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_5MS, 5.0),
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_10MS, 10.0),
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_20MS, 20.0),
+                (telemetry_keys.ATTR_EPISODE_STEPS_LATE_GE_50MS, 50.0),
+            ),
+            key=lambda bucket: bucket[1],
+        )
+    )
+    _LATE_STEP_MS = tuple(bound for _, bound in _LATE_STEP_BUCKETS)
+    # The episode span counts the encodes that take more than this many nanoseconds, by attribute. Sorted by bound.
+    _SLOW_ENCODE_BUCKETS = tuple(
+        sorted(
+            (
+                (telemetry_keys.ATTR_EPISODE_ENCODES_GT_5MS, 5_000_000),
+                (telemetry_keys.ATTR_EPISODE_ENCODES_GT_10MS, 10_000_000),
+                (telemetry_keys.ATTR_EPISODE_ENCODES_GT_15MS, 15_000_000),
+                (telemetry_keys.ATTR_EPISODE_ENCODES_GT_30MS, 30_000_000),
+                (telemetry_keys.ATTR_EPISODE_ENCODES_GT_60MS, 60_000_000),
+            ),
+            key=lambda bucket: bucket[1],
+        )
+    )
+    _SLOW_ENCODE_NS = tuple(bound for _, bound in _SLOW_ENCODE_BUCKETS)
 
     @staticmethod
     def _scalars(fields: dict[str, Any]) -> dict[str, Any]:
@@ -70,12 +105,20 @@ class _EpisodeTelemetry:
         self._span: Span | None = None
         self._index = -1
         self._steps = 0
+        # One bin per gap between the thresholds: a step or an encode adds 1 to one bin, and `end` sums the bins.
+        self._late_steps = [0] * (len(self._LATE_STEP_MS) + 1)
+        # The policy workers count encodes too.
+        self._encodes_lock = threading.Lock()
+        self._encodes = [0] * (len(self._SLOW_ENCODE_NS) + 1)
         self._virtual_start: float | None = None
 
     def begin(self, params: dict[str, Any]) -> None:
         """Open the episode span before preparation. Inert when telemetry is unbound."""
         self._index += 1
         self._steps = 0
+        self._late_steps = [0] * (len(self._LATE_STEP_MS) + 1)
+        # A new list: each sink adds to the list of its own episode.
+        self._encodes = [0] * (len(self._SLOW_ENCODE_NS) + 1)
         self._virtual_start = None
         attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
         attrs.update(self._scalars(params))
@@ -98,6 +141,25 @@ class _EpisodeTelemetry:
     def step(self) -> None:
         self._steps += 1
 
+    def late_step(self, late_ms: float) -> None:
+        self._late_steps[bisect_right(self._LATE_STEP_MS, late_ms)] += 1
+
+    @contextmanager
+    def counting_encodes(self) -> Iterator[None]:
+        """Count the encodes of the policy calls that the block submits, also the calls that end after the block."""
+        if not telemetry.enabled():
+            yield
+            return
+        # A worker keeps the sink after the episode ends, so the sink holds this episode's histogram.
+        with telemetry.timings_to(partial(self._count_encode, self._encodes)):
+            yield
+
+    def _count_encode(self, encodes: list[int], name: str, start_ns: int, end_ns: int) -> None:
+        if name != telemetry_keys.SPAN_POLICY_ENCODE:
+            return
+        with self._encodes_lock:  # one integer add; the workers and the harness thread count at once
+            encodes[bisect_left(self._SLOW_ENCODE_NS, end_ns - start_ns)] += 1
+
     def describe_schedule(self, policy_meta: dict[str, Any]) -> None:
         """Copy the schedule's holds from the policy's recorded metadata onto the open episode span."""
         if self._span is None:
@@ -105,12 +167,33 @@ class _EpisodeTelemetry:
         held = {attr: policy_meta[name] for attr, name in _SCHEDULE_ATTRS.items() if name in policy_meta}
         telemetry.set_attrs(self._span, **held)
 
+    @staticmethod
+    def _at_or_above(histogram: list[int]) -> list[int]:
+        """The count of each threshold from a histogram whose bin `i + 1` starts at threshold `i`."""
+        counts = []
+        total = 0
+        for n in reversed(histogram[1:]):
+            total += n
+            counts.append(total)
+        return counts[::-1]
+
     def end(self, virtual_now: float, *, partial: bool = False) -> None:
         """Export the episode, including incomplete episodes interrupted by an error or shutdown."""
         if self._span is None:
             return
         virtual_s = virtual_now - self._virtual_start if self._virtual_start is not None else 0.0
-        attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
+        with self._encodes_lock:  # one list copy; the span gets each count of the same encodes
+            encodes = list(self._encodes)
+        attrs = {
+            telemetry_keys.ATTR_EPISODE_STEPS: self._steps,
+            telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s,
+            **{
+                attr: n
+                for (attr, _), n in zip(self._LATE_STEP_BUCKETS, self._at_or_above(self._late_steps), strict=True)
+            },
+            telemetry_keys.ATTR_EPISODE_ENCODES: sum(encodes),
+            **{attr: n for (attr, _), n in zip(self._SLOW_ENCODE_BUCKETS, self._at_or_above(encodes), strict=True)},
+        }
         if partial:
             attrs[telemetry_keys.ATTR_EPISODE_PARTIAL] = True
         telemetry.set_attrs(self._span, **attrs)
@@ -540,7 +623,8 @@ class Harness(pimm.ControlSystem):
             self._record_wait.stamp(step_ms)
             try:
                 if due_ns is not None and runtime.time_ns >= due_ns:
-                    step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
+                    step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = late_ms = (runtime.time_ns - due_ns) / 1e6
+                    self._telemetry.late_step(late_ms)
                 observe_started_ns = time.perf_counter_ns()
                 obs = self.read_obs(task, withheld_poses, step_ms)
                 policy_started_ns = time.perf_counter_ns()
@@ -751,43 +835,45 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
-        policy_run = None
-        try:
-            policy_run = runtime.start(rollout.policy)
-            stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
-            withheld_poses = self._pose_signals() - stated_poses
-            deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
-            self.deadline_ns.emit(deadline_ns)
-            self._telemetry.start_rollout(clock.now())
-            gc_steps = _GcSteps(self._gc)
+        # Start the policy in the scope, so that the calls it submits before its first step count too.
+        with self._telemetry.counting_encodes():
+            policy_run = None
             try:
-                with self._recording(rollout.writer):
-                    payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
-                    )
-                    if self._writer is not None:
-                        static = only_keep_written_signals(
-                            self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                policy_run = runtime.start(rollout.policy)
+                stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
+                withheld_poses = self._pose_signals() - stated_poses
+                deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
+                self.deadline_ns.emit(deadline_ns)
+                self._telemetry.start_rollout(clock.now())
+                gc_steps = _GcSteps(self._gc)
+                try:
+                    with self._recording(rollout.writer):
+                        payload = yield from self._rollout(
+                            should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
                         )
-                        for name, value in static.items():
-                            self._writer.set_static(name, value)
+                        if self._writer is not None:
+                            static = only_keep_written_signals(
+                                self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                            )
+                            for name, value in static.items():
+                                self._writer.set_static(name, value)
+                finally:
+                    self.deadline_ns.emit(None)
             finally:
-                self.deadline_ns.emit(None)
-        finally:
-            # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
-            self._telemetry.describe_policy(
-                lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
-            )
-            self._telemetry.describe_schedule(runtime.metadata_snapshot())
-            # Cleanup stops at the first error. Later resources may remain open; do not add nested
-            # finally blocks to guarantee their closure.
-            logging.info('Closing the policy runtime')
-            runtime.close()
-            logging.info('Policy runtime closed')
-            if policy_run is not None:
-                logging.info('Closing the policy')
-                policy_run.close()
-                logging.info('Policy closed')
+                # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
+                self._telemetry.describe_policy(
+                    lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
+                )
+                self._telemetry.describe_schedule(runtime.metadata_snapshot())
+                # Cleanup stops at the first error. Later resources may remain open; do not add nested
+                # finally blocks to guarantee their closure.
+                logging.info('Closing the policy runtime')
+                runtime.close()
+                logging.info('Policy runtime closed')
+                if policy_run is not None:
+                    logging.info('Closing the policy')
+                    policy_run.close()
+                    logging.info('Policy closed')
 
         self._telemetry.end(clock.now())
         if payload is not None:
