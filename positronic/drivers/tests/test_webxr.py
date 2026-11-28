@@ -6,7 +6,7 @@ import logging
 import socket
 import time
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import cast
 
 import av
@@ -15,6 +15,7 @@ import numpy as np
 import psutil
 import pytest
 from fastapi import FastAPI
+from uvicorn.protocols.utils import ClientDisconnected
 from websockets.sync import client as ws_client
 
 import pimm
@@ -76,9 +77,15 @@ def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = N
         list(run)
 
 
-def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send():
+def _run_video_route(served: WebXR, receive: Callable, send: Callable) -> None:
+    """One ASGI session of ``served``'s ``/video`` route, with ``receive`` and ``send`` as the server side."""
     app = FastAPI()
-    WebXR(port=free_port())._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
+    served._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
+    scope = {'type': 'websocket', 'path': '/video', 'headers': [], 'query_string': b'', 'root_path': ''}
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
+
+
+def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send():
     incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
 
     async def receive():
@@ -87,8 +94,91 @@ def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_
     async def send(message):
         pass
 
-    scope = {'type': 'websocket', 'path': '/video', 'headers': [], 'query_string': b'', 'root_path': ''}
-    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
+    _run_video_route(WebXR(port=free_port()), receive, send)
+
+
+@pytest.fixture
+def video_with_a_frame(world, caplog) -> WebXR:
+    """A ``WebXR`` with one frame to send, and its log at INFO."""
+    caplog.set_level(logging.INFO, logger=webxr.__name__)
+    served = WebXR(port=free_port())
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    emitter.emit(np.zeros((16, 16, 3), dtype=np.uint8))
+    return served
+
+
+def _assert_the_page_closed_the_video_socket(caplog) -> None:
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    assert 'The page closed the video socket' in caplog.messages
+
+
+def test_a_page_that_closes_the_video_socket_while_a_frame_waits_ends_the_stream_with_no_error(
+    video_with_a_frame, caplog
+):
+    delivered = []
+    incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
+
+    async def receive():
+        delivered.append(next(incoming))
+        return delivered[-1]
+
+    async def send(message):
+        # The server answers the close frame of the page with its own close, and refuses a send after it.
+        if message['type'] == 'websocket.send' and delivered[-1]['type'] == 'websocket.disconnect':
+            raise RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'.")
+
+    _run_video_route(video_with_a_frame, receive, send)
+    _assert_the_page_closed_the_video_socket(caplog)
+
+
+def test_a_page_that_closes_the_video_socket_during_a_send_of_a_frame_ends_the_stream_with_no_error(
+    video_with_a_frame, caplog
+):
+    page_closed = asyncio.Event()
+    incoming = iter([{'type': 'websocket.connect'}])
+    sent = []
+
+    async def receive():
+        message = next(incoming, None)
+        if message is None:
+            await page_closed.wait()
+            return {'type': 'websocket.disconnect', 'code': 1000}
+        return message
+
+    async def send(message):
+        if message['type'] != 'websocket.send':
+            return
+        # The server answers the close frame of the page with its own close, and refuses a send after it.
+        if page_closed.is_set():
+            raise RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'.")
+        sent.append(message)
+        # The close frame arrives while this send waits, and the route reads it before its next send.
+        page_closed.set()
+        await asyncio.sleep(0)
+
+    _run_video_route(video_with_a_frame, receive, send)
+    assert len(sent) == 1
+    _assert_the_page_closed_the_video_socket(caplog)
+
+
+def test_a_page_that_drops_the_video_socket_with_no_close_frame_ends_the_stream_with_no_error(
+    video_with_a_frame, caplog
+):
+    incoming = iter([{'type': 'websocket.connect'}])
+
+    async def receive():
+        message = next(incoming, None)
+        if message is None:
+            await asyncio.Event().wait()
+        return message
+
+    async def send(message):
+        if message['type'] == 'websocket.send':
+            raise ClientDisconnected()
+
+    _run_video_route(video_with_a_frame, receive, send)
+    _assert_the_page_closed_the_video_socket(caplog)
 
 
 @pytest.mark.parametrize(
