@@ -144,23 +144,31 @@ class TransformImages(Codec):
             args['mode'] = ResizeMode(args['mode'])
         return cls(**args)
 
+    def selects(self, field: str) -> bool:
+        """Whether ``encode`` transforms the image at the top-level ``field`` of its input."""
+        return self._paths is None or (field,) in self._paths
+
+    def transform_frame(self, frame: np.ndarray) -> np.ndarray:
+        """``frame`` as ``encode`` transforms it. A frame that the transform already made comes back as it is."""
+        return image.transform_frame(
+            frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
+        )
+
+    def transform_frames(self, frames: Sequence[np.ndarray]) -> list[np.ndarray]:
+        """Each frame as ``encode`` transforms it, in order. Large frames are transformed on parallel threads."""
+        pixels = sum(frame.shape[0] * frame.shape[1] for frame in frames if self._needs_resize(frame))
+        cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+        workers = min(len(frames), self._MAX_WORKERS, cpus)
+        if workers <= 1 or pixels < self._MIN_PARALLEL_PIXELS:
+            return [self.transform_frame(frame) for frame in frames]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(self.transform_frame, frames))
+
     def _needs_resize(self, frame: np.ndarray) -> bool:
         height, width = frame.shape[:2]
         if self._mode is ResizeMode.BOUND:
             return height > self._height or width > self._width
         return (height, width) != (self._height, self._width)
-
-    def _scaled_frames(self, frames: Sequence[np.ndarray]) -> list[np.ndarray]:
-        scale = partial(
-            image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
-        )
-        pixels = sum(frame.shape[0] * frame.shape[1] for frame in frames if self._needs_resize(frame))
-        cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
-        workers = min(len(frames), self._MAX_WORKERS, cpus)
-        if workers <= 1 or pixels < self._MIN_PARALLEL_PIXELS:
-            return [scale(frame) for frame in frames]
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(scale, frames))
 
     def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
         def transform_value(value: Any) -> Any:
@@ -188,7 +196,7 @@ class TransformImages(Codec):
             return value
 
         self._map_images(data, collect)
-        scaled = iter(self._scaled_frames(frames))
+        scaled = iter(self.transform_frames(frames))
 
         def replace(value: np.ndarray) -> np.ndarray:
             return next(scaled) if value.ndim == 3 else np.stack([next(scaled) for _ in value])
@@ -214,6 +222,28 @@ class TransformImages(Codec):
                 'paths': None if self._paths is None else [list(path) for path in self._paths],
             },
         }
+
+
+def _is_rgb_frame(value: Any) -> bool:
+    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[-1] == 3 and min(value.shape[:2]) > 0
+
+
+class TransformOnArrival(Codec):
+    """Transform each camera frame in ``fields`` as ``transform`` does, once, when the frame arrives.
+
+    A field that is absent, or that holds no RGB frame, passes unchanged.
+    """
+
+    def __init__(self, transform: TransformImages, fields: Sequence[str]):
+        self._transform = transform
+        self._fields = tuple(fields)
+
+    def encode(self, data: dict) -> dict:
+        fields = [field for field in self._fields if _is_rgb_frame(data.get(field))]
+        return {**data, **dict(zip(fields, self._transform.transform_frames([data[f] for f in fields]), strict=True))}
+
+    def decode(self, data: Any) -> Any:
+        return data
 
 
 def image_observation(images: dict[str, tuple[str, tuple[int, int]]], resample: Resample = Resample.BILINEAR) -> Codec:
