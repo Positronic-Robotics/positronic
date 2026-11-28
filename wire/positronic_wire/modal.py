@@ -233,13 +233,17 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             thread.join()
 
     def _endpoint(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None) -> _Endpoint:
-        """The sessions on ``address``'s server under the credentials ``headers``."""
+        """The sessions on ``address``'s server under the credentials ``headers``, less the session purpose."""
         root = address.at_root()
-        key = (root, frozenset((headers or {}).items()))
+        # A warm-up takes the session that the episodes after it take.
+        credentials = {
+            name: value for name, value in (headers or {}).items() if name.lower() != wire.SESSION_PURPOSE_HEADER
+        }
+        key = (root, frozenset(credentials.items()))
         with self._changed:
             endpoint = self._endpoints.get(key)
             if endpoint is None:
-                endpoint = _Endpoint(root, dict(headers) if headers else None)
+                endpoint = _Endpoint(root, credentials or None)
                 self._endpoints[key] = endpoint
             return endpoint
 

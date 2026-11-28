@@ -621,6 +621,34 @@ def test_authentication_gates_sessions(start):
     peer.close()
 
 
+WARM_UP = {wire.SESSION_PURPOSE_HEADER: wire.WARM_UP_PURPOSE}
+
+
+def test_the_session_purpose_reaches_only_the_preparation_of_its_own_session(start):
+    class PurposeProbe(Probe):
+        def __init__(self):
+            super().__init__()
+            self.purposes: list[str | None] = []
+
+        def prepare_session(self, params):
+            self.purposes.append(self.session_purpose)
+            return super().prepare_session(params)
+
+    probe = PurposeProbe()
+    running = start(probe)
+    for headers in (WARM_UP, None, {wire.SESSION_PURPOSE_HEADER: 'other'}):
+        running.session(headers=headers).close()
+    assert probe.purposes == [wire.WARM_UP_PURPOSE, None, 'other']
+    assert probe.session_purpose is None
+
+
+def test_a_model_that_ignores_the_session_purpose_opens_a_normal_session_for_a_warm_up(start):
+    peer = start().session(headers=WARM_UP)
+    assert peer.metadata[keys.SESSION_PARAMS] == {}
+    assert peer.infer({})[protocol.RESULT]['count'] == 1
+    peer.close()
+
+
 @pytest.mark.parametrize(
     'path,method,token,status',
     [

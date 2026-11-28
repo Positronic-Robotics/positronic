@@ -28,6 +28,7 @@ import numpy as np
 from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session
 from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
+from positronic_wire import wire
 
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
@@ -1076,7 +1077,7 @@ class TeleopModel(Model):
             settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if settings.warm_up:
+            if self.session_purpose == wire.WARM_UP_PURPOSE:
                 self._service.start_heads_up()
             elif self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
                 self._service.wait_for_ready(settings, self.preparation_cancelled)

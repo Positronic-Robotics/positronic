@@ -1066,6 +1066,18 @@ def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_
     assert status == b'401'
 
 
+@pytest.mark.parametrize('wire_of', [Served.ws, Served.grpc], ids=['websocket', 'grpc'])
+def test_a_warm_up_session_opens_as_a_normal_session(start_server, make_mock_model, wire_of):
+    policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    served = start_server(
+        policy, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))), grpc=True
+    )
+    client = InferenceClient(*wire_of(served), headers={wire.SESSION_PURPOSE_HEADER: wire.WARM_UP_PURPOSE})
+    session = client.new_session()
+    assert policy_keys.POSITRONIC_VERSION in session.metadata
+    session.close()
+
+
 def test_shutdown_closes_the_loaded_model(start_server, make_mock_model):
     model = make_mock_model([], {})
     closed = threading.Event()

@@ -56,6 +56,10 @@ class GrpcServerConnection(server_wire.ServerConnection):
     def query_params(self) -> list[tuple[str, str]]:
         return parse_qsl(self._headers.get(SESSION_QUERY_HEADER, ''), keep_blank_values=True)
 
+    @property
+    def session_purpose(self) -> str | None:
+        return self._headers.get(wire.SESSION_PURPOSE_HEADER)
+
     async def send(self, message: bytes) -> None:
         try:
             await self._context.write(message)

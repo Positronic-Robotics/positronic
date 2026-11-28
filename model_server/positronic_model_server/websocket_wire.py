@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import stat
+from collections.abc import Mapping
 from contextlib import suppress
 from http import HTTPStatus
 from pathlib import Path
@@ -38,12 +39,14 @@ class WebsocketServerConnection(server_wire.ServerConnection):
     def __init__(
         self,
         scope: WebSocketScope,
+        headers: Mapping[str, str],
         receive: ASGIReceiveCallable,
         send: ASGISendCallable,
         served_address: server_wire.ServedAddress,
         close_timeout: float,
     ):
         self._scope = scope
+        self._headers = headers
         self._asgi_receive = receive
         self._asgi_send = send
         self._served_address = served_address
@@ -61,6 +64,10 @@ class WebsocketServerConnection(server_wire.ServerConnection):
     @property
     def query_params(self) -> list[tuple[str, str]]:
         return parse_qsl(self._scope.get('query_string', b'').decode('latin-1'), keep_blank_values=True)
+
+    @property
+    def session_purpose(self) -> str | None:
+        return self._headers.get(wire.SESSION_PURPOSE_HEADER)
 
     async def _send(self, event: ASGISendEvent) -> None:
         if self._closed:
@@ -249,6 +256,7 @@ class WebsocketWire(server_wire.Wire):
     async def _serve_session(
         self,
         scope: WebSocketScope,
+        headers: Mapping[str, str],
         receive: ASGIReceiveCallable,
         send: ASGISendCallable,
         session: server_wire.SessionHandler,
@@ -261,7 +269,7 @@ class WebsocketWire(server_wire.Wire):
             await send({'type': 'websocket.close', 'code': 1008})
             return
         await send({'type': 'websocket.accept'})
-        conn = WebsocketServerConnection(scope, receive, send, self.served_address, self.CLOSE_TIMEOUT_SEC)
+        conn = WebsocketServerConnection(scope, headers, receive, send, self.served_address, self.CLOSE_TIMEOUT_SEC)
         await session(conn)
         await conn.finish()
 
@@ -314,7 +322,7 @@ class WebsocketWire(server_wire.Wire):
                 for name, value in reversed(list(scope['headers']))
             }
             if scope['type'] == 'websocket':
-                await self._serve_session(scope, receive, send, session, authorized(headers))
+                await self._serve_session(scope, headers, receive, send, session, authorized(headers))
             else:
                 await self._answer_keepalive(scope, send, keepalive, authorized(headers))
 

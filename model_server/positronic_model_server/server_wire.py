@@ -54,6 +54,11 @@ class ServerConnection(abc.ABC):
     def query_params(self) -> list[tuple[str, str]]:
         """The session params the client asked for."""
 
+    @property
+    @abc.abstractmethod
+    def session_purpose(self) -> str | None:
+        """The ``positronic_wire.wire.SESSION_PURPOSE_HEADER`` value of this session, or ``None`` when it has none."""
+
     @abc.abstractmethod
     async def send(self, message: bytes) -> None:
         """Raises ``positronic_wire.wire.PeerDisconnected`` once the client ends the session."""
