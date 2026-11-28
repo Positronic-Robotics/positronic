@@ -376,7 +376,7 @@ class TrajectoryPlayer(Policy):
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
                 if hold_ns > 0 and self._hold_start_wall_ns is not None:
                     attrs = {telemetry_keys.ATTR_HOLD_MS: hold_ns / 1e6}
-                    telemetry.record_span(
+                    telemetry.record_anchored_span(
                         telemetry_keys.SPAN_WAYPOINTS_HOLD, self._hold_start_wall_ns, time.time_ns(), **attrs
                     )
             self._played_end_ns = max(self._starting_chunk_end_ns, now_ns)

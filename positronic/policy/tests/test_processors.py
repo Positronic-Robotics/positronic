@@ -1042,10 +1042,10 @@ def test_hold_spans_on_a_simulated_clock_lie_inside_the_episode_and_sum_to_the_h
             ]
         )
     )
-    with (
-        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level),
-        telemetry.span(telemetry_keys.SPAN_EPISODE),
-    ):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level):
+        # The harness anchors each episode span this way.
+        episode_span = telemetry.start_span(telemetry_keys.SPAN_EPISODE)
+        telemetry.push_anchor(episode_span)
         run = runtime.start(TrajectoryPlayer(), inner)
         try:
             # The world clock runs one second while the wall clock runs a few milliseconds.
@@ -1054,9 +1054,12 @@ def test_hold_spans_on_a_simulated_clock_lie_inside_the_episode_and_sum_to_the_h
                 run.send({})
         finally:
             run.close()
+            episode_span.end()
+            telemetry.pop_anchor(episode_span)
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     [episode] = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     holds = [s for s in spans if s.name == telemetry_keys.SPAN_WAYPOINTS_HOLD]
+    assert all(s.parent_id == episode.span_id for s in holds)
     assert all(episode.start_ns <= s.start_ns <= s.end_ns <= episode.end_ns for s in holds)
     # The third chunk starts where the second ends, so it ends no hold.
     assert [s.attrs[telemetry_keys.ATTR_HOLD_MS] for s in holds] == [150.0, 100.0]

@@ -141,6 +141,18 @@ def test_a_span_recorded_with_explicit_bounds_reaches_the_timing_sink():
     assert timings == [('wire.send', 3, 7)]
 
 
+@pytest.mark.parametrize('anchored', [False, True])
+def test_an_anchored_recorded_span_skips_the_active_span_for_the_anchor(tmp_path, anchored):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'anchored-record'):
+        with _anchored('episode'):
+            with telemetry.span('round'):
+                record = telemetry.record_anchored_span if anchored else telemetry.record_span
+                record('hold', time.time_ns(), time.time_ns())
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    parent = spans['episode'] if anchored else spans['round']
+    assert spans['hold'].parent_id == parent.span_id
+
+
 def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
     """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial param
     holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""

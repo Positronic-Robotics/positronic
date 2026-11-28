@@ -118,7 +118,7 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold; at the `call` level, the `episode` | `hold.ms` | one hold of the arm between two chunks |
+| `waypoints.hold` | the `episode`, at each level: the span starts before the round that ends the hold | `hold.ms` | one hold of the arm between two chunks |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
