@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Data
+- The `PUBLIC` profile (`s3://PUBLIC@positronic-public/...`) reads the public bucket from `https://s3.phail.ai`, which serves the read-only S3 API with no key. The object keys and the local cache paths do not change. `utilities/release_phail.py` writes to the store's own endpoint, `PUBLIC_WRITE_ENDPOINT`.
+
 ### Telemetry
 - Each span has a level, `call` or `step`, and `POSITRONIC_TELEMETRY_LEVEL` sets the level that a process records. The sidecar that a recording run writes without being asked records at `call`: the pass, each episode, reset and policy call. It no longer records the spans of each control step. Set `POSITRONIC_TELEMETRY_LEVEL=step` to record them. `--timing` records at `step`. `telemetry.span`, `traced`, `record_span` and `start_span` take `level`, and a span above the active level builds no attributes and queues nothing for export
 

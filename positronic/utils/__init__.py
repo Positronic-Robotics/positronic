@@ -25,9 +25,10 @@ from positronic.utils.git import get_git_diff, get_git_state, get_package_checko
 # anonymous (unsigned) access everywhere — including inference servers that take a bare
 # checkpoints-dir string and never import cfg. The Profile object is kept for the few callers
 # that need it as a value rather than a URL (e.g. deriving a write-credentialed variant).
-PUBLIC = pos3.Profile(
-    local_name='positronic-public', endpoint='https://storage.eu-north1.nebius.cloud', public=True, region='eu-north1'
-)
+# The endpoint serves the read-only S3 API of the bucket with no key; a write needs PUBLIC_WRITE_ENDPOINT.
+PUBLIC = pos3.Profile(local_name='positronic-public', endpoint='https://s3.phail.ai', public=True, region='auto')
+# The S3 endpoint of the store that holds the public bucket, for a writer that holds its key.
+PUBLIC_WRITE_ENDPOINT = 'https://f2f0bad251b39938e076e006f54dd93f.r2.cloudflarestorage.com'
 pos3.register_profile(
     'PUBLIC', PUBLIC.endpoint, public=PUBLIC.public, region=PUBLIC.region, local_name=PUBLIC.local_name
 )
