@@ -322,7 +322,9 @@ Some signals (camera frames, robot state vectors) require a large bandwidth and/
 small latency, and hence benefit from communication channels that avoid serialisation.
 `world.mp_pipe(transport=pimm.world.TransportMode.SHARED_MEMORY)` returns an emitter/receiver pair backed by shared memory. Payloads implement the `SMCompliant` protocol—
 `pimm.shared_memory.NumpySMAdapter` handles numpy arrays—so emitters know how big
-the buffer should be. The emitter and the receiver each copy the payload once, with no serialisation. If your data
+the buffer should be. `NumpySMAdapter` copies the array into the buffer on the emitter side
+and out of the buffer on the receiver side, with no pickling. A custom `SMCompliant` type
+defines its own buffer write and read, so its cost depends on that code. If your data
 implements `SMCompliant` protocol, the shared memory communication will be used
 automatcially without your explicit request.
 
