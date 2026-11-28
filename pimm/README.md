@@ -324,7 +324,7 @@ small latency, and hence benefit from communication channels that avoid serialis
 `pimm.shared_memory.NumpySMAdapter` handles numpy arrays—so emitters know how big
 the buffer should be. `NumpySMAdapter` copies the array into the buffer on the emitter side
 and out of the buffer on the receiver side, with no pickling. A custom `SMCompliant` type
-defines its own buffer write and read, so its cost depends on that code. If your data
+defines its own buffer write and read. If your data
 implements `SMCompliant` protocol, the shared memory communication will be used
 automatcially without your explicit request.
 
