@@ -330,7 +330,6 @@ class TrajectoryPlayer(Policy):
             # The end of the chunk that plays now, and of the chunk whose first round comes next.
             self._played_end_ns: int | None = None
             self._starting_chunk_end_ns: int | None = None
-            # The wall time of the first round at or after the end of the plan.
             self._hold_start_wall_ns: int | None = None
             self._hold_sum_ns = 0
             self._hold_max_ns = 0
