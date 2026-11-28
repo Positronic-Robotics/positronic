@@ -69,7 +69,6 @@ OTHER_REPOSITORY_MERGE_MSG = (
     ' Run `gh pr merge {number} -R {repo}` alone in its own Bash call, with nothing beside it but `cd`.'
     ' The form can add one merge method, `--delete-branch`, `--subject`, `--body`, `--body-file` and a'
     ' `GH_TOKEN=$(cat <file>)` prefix. This merge needs no authorization from chat.'
-    ' If `{repo}` is an old name of this repository, write `-R {guarded}` in its place.'
 )
 # The denials of a merge the guard blocks without reading a receipt: each names the change after which one applies.
 RECEIPT_FORM = (
@@ -1054,6 +1053,7 @@ def _unreceipted_merge_msg(
     git: GitInfo,
     cmd: str,
     gh_repo_env: str,
+    canonical,
 ) -> str:
     """The deny message for a merge that `_gh_repo` does not place in `guarded_slug`."""
     if not guarded_slug:
@@ -1063,16 +1063,18 @@ def _unreceipted_merge_msg(
         return GH_REPO_ENV_MERGE_MSG.format(**names)
     if _sets_gh_repo(cmd):
         return GH_REPO_ASSIGNMENT_MERGE_MSG.format(**names)
-    if not target:
+    if target:
+        m = GH_REPO_SELECTOR_RE.fullmatch(target.casefold())
+        slug = m.group(1).casefold() if m else ''
+        if slug in ('', guarded_slug):
+            return REPOSITORY_SPELLING_MERGE_MSG.format(repo=target, **names)
+    else:
         slug = repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
-        return OTHER_REPOSITORY_MERGE_MSG.format(repo=slug, **names) if slug else DIRECTORY_MERGE_MSG.format(**names)
-    m = GH_REPO_SELECTOR_RE.fullmatch(target.casefold())
-    slug = m.group(1).casefold() if m else ''
-    if slug in ('', guarded_slug):
-        return REPOSITORY_SPELLING_MERGE_MSG.format(repo=target, **names)
-    # The exact form run alone reaches here only when GitHub names its repository `guarded_slug`.
-    if _repository_of_exact_form_run_alone(words, cmd):
-        return OLD_NAME_MERGE_MSG.format(repo=target, **names)
+        if not slug:
+            return DIRECTORY_MERGE_MSG.format(**names)
+    # The exact form run alone was already looked up, and reaches here only when GitHub names it `guarded_slug`.
+    if _repository_of_exact_form_run_alone(words, cmd) or _names_guarded(slug, guarded_slug, canonical):
+        return OLD_NAME_MERGE_MSG.format(repo=target or slug, **names)
     return OTHER_REPOSITORY_MERGE_MSG.format(repo=slug, **names)
 
 
@@ -1205,7 +1207,9 @@ def analyze(  # noqa: C901
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
             if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
-                return _unreceipted_merge_msg(number, target, inv.words, inv.dir, guarded_slug, git, cmd, gh_repo_env)
+                return _unreceipted_merge_msg(
+                    number, target, inv.words, inv.dir, guarded_slug, git, cmd, gh_repo_env, canonical
+                )
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
             pending_merge = number

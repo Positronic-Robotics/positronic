@@ -19,10 +19,11 @@ CLONE = '/w/positronic'  # positronic clone, on main
 WORKTREE = '/w/positronic-wt'  # positronic worktree, feature branch
 INFRA = '/w/agent_infra'  # different repo, on main
 INFRA_CASED = '/w/agent_infra-cased'  # the guarded repo, origin differs only in casing, on main
+OLD_NAME_CLONE = '/w/old-name'  # the guarded repo, origin under a name GitHub redirects
 POSITRONIC_URL_LC = 'git@github.com:positronic-robotics/positronic.git'
 
 
-EXISTING_DIRS = {CLONE, WORKTREE, INFRA, INFRA_CASED, '/w', '/tmp', '/somewhere'}
+EXISTING_DIRS = {CLONE, WORKTREE, INFRA, INFRA_CASED, OLD_NAME_CLONE, '/w', '/tmp', '/somewhere'}
 
 
 def fake_path_exists(p):
@@ -72,6 +73,7 @@ def git():
         WORKTREE: {'branch': 'feature-x', 'remotes': {'origin': POSITRONIC_URL}},
         INFRA: {'branch': 'main', 'remotes': {'origin': INFRA_URL}},
         INFRA_CASED: {'branch': 'main', 'remotes': {'origin': POSITRONIC_URL_LC}},
+        OLD_NAME_CLONE: {'branch': 'feature-x', 'remotes': {'origin': 'git@github.com:old-owner/old-name.git'}},
     })
 
 
@@ -364,7 +366,7 @@ def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
     assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
 
 
-def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alone(git):
+def test_a_command_makes_only_the_lookups_of_one_merge(git):
     looked_up = []
 
     def canonical(slug):
@@ -373,7 +375,8 @@ def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alo
 
     cmd = 'gh pr merge 1 -R a/one && gh pr merge 2 -R b/two && gh pr merge 566'
     assert verdict(git, cmd, allow_merge=lambda *_: True, canonical=canonical) is not None
-    assert looked_up == []
+    assert looked_up == ['a/one', GUARDED.casefold()]
+    looked_up.clear()
     assert verdict(git, 'cd /tmp && gh pr merge 1 -R a/one --squash', canonical=canonical) is None
     assert looked_up == ['a/one', GUARDED.casefold()]
 
@@ -608,6 +611,20 @@ UNRECEIPTED_MERGES = [
         f'Write `-R {GUARDED_SLUG}`',
         f'gh pr merge 566 -R {GUARDED}',
         id='old-name',
+    ),
+    pytest.param(
+        'gh pr merge 566 -R old-owner/old-name --admin',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='old-name-chained',
+    ),
+    pytest.param(
+        f'cd {OLD_NAME_CLONE} && gh pr merge 566 && echo done',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'cd {OLD_NAME_CLONE} && gh pr merge 566 -R {GUARDED}',
+        id='old-name-checkout',
     ),
     pytest.param(
         'gh pr merge 566 -R https://github.com/old-owner/old-name',
