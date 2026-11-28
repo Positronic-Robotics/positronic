@@ -12,6 +12,7 @@ import pytest
 from positronic_model_server import serialization, server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_model_server.server import ModelServer
+from positronic_model_server.spec import ARGS, NAME, SEQ
 from positronic_wire import websocket, wire
 
 from positronic import keys as obs_keys
@@ -21,6 +22,7 @@ from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.processors import InferenceSchedule, RTCSchedule
 from positronic.vendors.flux3_action.serving import keys, recipe, server
 
 
@@ -225,12 +227,47 @@ def test_ordinary_model_cannot_enable_unwarmed_rtc(rtc):
         ('compress_images', 1),
         ('image_mappings', {}),
         (keys.RTC.FIELD, {}),
+        (keys.INFERENCE_LEAD, -0.1),
+        (keys.INFERENCE_LEAD, True),
+        (keys.INFERENCE_LEAD, '0.4'),
+        (keys.INFERENCE_LEAD, float('inf')),
     ],
 )
 def test_invalid_session_settings_fail(name, value, rtc):
     served = model(rtc=rtc)
     with pytest.raises(ValueError):
         served.prepare_session({**served.parameters, name: value})
+
+
+def _schedule_args(client_stack: dict) -> dict:
+    (schedule,) = (node for node in client_stack[SEQ] if node.get(NAME) == InferenceSchedule.WIRE_NAME)
+    return schedule[ARGS]
+
+
+def test_session_inference_lead_requests_before_the_chunk_ends():
+    served = model()
+    default = served.prepare_session(served.parameters)
+    leading = served.prepare_session({**served.parameters, keys.INFERENCE_LEAD: 0.4})
+
+    assert _schedule_args(default.client_stack)[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.0
+    args = _schedule_args(leading.client_stack)
+    assert args['request_timing'] == {'reference': 'before_end'}
+    assert args[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.4
+    spec.from_spec(leading.client_stack)
+
+
+def test_launch_inference_lead_is_the_session_default():
+    served = server.Flux3Model(
+        NativePolicy(), metadata={}, rtc=None, image_mappings=recipe.droid_cameras(), inference_lead=0.4
+    )
+
+    assert served.parameters[keys.INFERENCE_LEAD] == 0.4
+
+
+def test_rtc_refuses_an_inference_lead(rtc):
+    served = model(rtc=rtc)
+    with pytest.raises(ValueError, match='call_after_sec'):
+        served.prepare_session({**served.parameters, keys.INFERENCE_LEAD: 0.4})
 
 
 def test_rtc_refuses_playback_horizon_and_prediction_after_chunk_end(rtc):
