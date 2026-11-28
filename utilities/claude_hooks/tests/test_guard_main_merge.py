@@ -200,6 +200,8 @@ ALLOWED = [
     'gh pr merge 5 -R github.com/o/r.git -m -b body',
     'gh pr merge 5 -R o/r --subject -R',
     'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
+    'gh pr merge 5 -R o/r --match-head-commit abc123',
+    'gh pr merge 5 -R o/r --match-head-commit=abc123 --squash',
     f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',
@@ -508,6 +510,14 @@ def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
             'gh pr merge 566 -R someone/other',
         ),
         ('gh pr merge 566 -R someone/other --admin', 'gh pr merge 566 -R someone/other'),
+        (
+            'gh pr merge 566 -R someone/other --match-head-commit abc123 && echo done',
+            'gh pr merge 566 -R someone/other --match-head-commit abc123',
+        ),
+        (
+            'gh pr merge 566 --match-head-commit=abc123 -R someone/other --admin',
+            'gh pr merge 566 -R someone/other --match-head-commit abc123',
+        ),
         ('gh pr -R someone/other merge 566', 'gh pr merge 566 -R someone/other'),
         (f'cd {INFRA} && gh pr merge 566', 'gh pr merge 566 -R someone/agent_infra'),
     ],
@@ -592,6 +602,13 @@ UNRECEIPTED_MERGES = [
         id='url',
     ),
     pytest.param(
+        f'gh pr merge 566 -R https://github.com/{GUARDED} --match-head-commit abc123',
+        {},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED} --match-head-commit abc123',
+        id='url-head-commit',
+    ),
+    pytest.param(
         f'gh pr merge 566 -R github.com/{GUARDED}.git && echo done',
         {},
         f'Write `-R {GUARDED_SLUG}`',
@@ -649,7 +666,7 @@ def test_a_merge_no_receipt_can_authorize_is_told_the_change_that_lets_one_apply
     assert read == [] and denial is not None
     assert gmm.MERGE_ESCAPE not in denial
     assert change in denial
-    assert f'`gh pr merge 566` run in a checkout of `{GUARDED_SLUG}`' in denial
+    assert f'`gh pr merge 566`, with the flags it already has, run in a checkout of `{GUARDED_SLUG}`' in denial
     assert 'does not unblock this command as written' in denial
     applied = {**kwargs, 'gh_repo_env': ''}
     assert verdict(git, changed, allow_merge=lambda *_: True, **applied) is None
