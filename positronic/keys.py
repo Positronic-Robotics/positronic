@@ -54,6 +54,11 @@ def is_control_mode(name: str) -> bool:
     return channel == ROBOT_COMMAND and CONTROL_MODE_SUFFIX.removeprefix('.') in rest.split('.')[:2]
 
 
+def is_robot_status(name: str) -> bool:
+    """Whether ``name`` holds an arm's status: ``robot_state.status``, or an arm's ``robot_state.{arm}.status``."""
+    return name.startswith(f'{ROBOT_STATE}.') and name.endswith(STATUS_SUFFIX)
+
+
 def arm_channel(channel: str, arm: str | None) -> str:
     """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
     return channel if arm is None else f'{channel}.{arm}'

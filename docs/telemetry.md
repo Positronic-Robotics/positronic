@@ -110,7 +110,7 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.steps_late_ge_<N>ms`, `episode.encodes`, `episode.encodes_gt_<N>ms`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
@@ -208,6 +208,16 @@ simulated time and does not include the wall time of the simulator. The age uses
 `Runtime.observed_ns` when the call is submitted. The harness sets it for each step. A processor that sends an older
 sample sets the capture time of that sample: `Periodic` on an answer wake-up, and a `TemporalStack` of camera frames
 whose newest offset is in the past. An observation with no camera gives no value.
+
+### Reading late steps and slow encodes
+
+The `episode` span counts the late steps and the slow encodes, so a query of the episodes alone can test a
+latency target. `episode.steps_late_ge_<N>ms` counts the harness steps that start N ms or more after their due time
+(the `step.late_ms` of a `harness.step` span), for N in 1, 2, 5, 10, 20 and 50. A step that reads no complete
+observation counts too, and `episode.steps` does not count it. `episode.encodes` counts the `policy.encode` spans of
+the policy calls that the rollout submits, and `episode.encodes_gt_<N>ms` counts the spans of them that take more than
+N ms, for N in 5, 10, 15, 30 and 60. Each episode span carries each count, 0 included. The counts record at the `call`
+level, so a run gets them without the step spans. They count only the encode spans that the active level records.
 
 ### Reading the network time of a call
 
