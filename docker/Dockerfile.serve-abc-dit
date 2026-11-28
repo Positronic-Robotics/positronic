@@ -7,6 +7,7 @@
 #   make -C docker build-serve-abc-dit                                     # <registry>/abc-dit-yam:local
 #   make -C docker push-serve-abc-dit                                      # to the private Nebius registry
 #   docker run --rm --network none --gpus all <registry>/abc-dit-yam:local # the offline pre-flight
+#   make -C docker push-serve-abc-dit-real-prompts                         # abc-dit-yam-real-prompts
 #
 # The layers go from the least often changed to the most: base with ABC's environment, positronic's dependencies,
 # source, weights, start settings. The source and the weights come in through `COPY --link`, and only the start
@@ -110,9 +111,14 @@ ENV ABC_DIT_CHECKPOINT=/opt/abc-cache/${CHECKPOINT}.pt
 
 EXPOSE 8000
 
+# The command of `positronic.vendors.abc_dit.server` that the image starts. It comes after the weights, so an image of
+# another command shares every layer but this one.
+ARG SERVE_COMMAND=multitask_200k_yambox_wide_top_rtc
+ENV ABC_DIT_COMMAND=${SERVE_COMMAND}
+
 # `exec` makes the server pid 1, so it receives the stop signal. The server starts ABC's interpreter itself.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /positronic/.venv/bin/python -m positronic.vendors.abc_dit.server multitask_200k_yambox_wide_top_rtc \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.abc_dit.server \"$ABC_DIT_COMMAND\" \
    --model.abc_python=/opt/abc/.venv/bin/python --model.checkpoint=\"$ABC_DIT_CHECKPOINT\" \"$@\"", "--"]
 
 LABEL org.opencontainers.image.title="abc-dit" \

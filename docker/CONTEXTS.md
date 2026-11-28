@@ -36,7 +36,8 @@ Build and push all: `make push`
 See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 
 `Dockerfile.serve-abc-dit` builds the private `abc-dit-yam` image in the same form, and it starts the
-`multitask_200k_yambox_wide_top_rtc` command. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
+`multitask_200k_yambox_wide_top_rtc` command. `abc-dit-yam-real-prompts` is the same image, and it starts
+`multitask_200k_yambox_wide_top_rtc_real_prompts`. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
 
 ## References
 
