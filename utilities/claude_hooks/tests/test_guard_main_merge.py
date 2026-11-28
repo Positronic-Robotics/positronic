@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import guard_main_merge as gmm  # noqa: E402
 import hook_payload  # noqa: E402
+import pin_move  # noqa: E402
 
 POSITRONIC_URL = 'git@github.com:Positronic-Robotics/positronic.git'
 INFRA_URL = 'git@gh-infra:someone/agent_infra.git'
@@ -83,8 +85,20 @@ def same_name(slug):
     return slug.casefold()
 
 
+def no_pin_move(number, guarded_slug, head):
+    return False
+
+
 def verdict(
-    git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env='', authorized=None, stack_below=None, canonical=same_name
+    git,
+    cmd,
+    cwd=CLONE,
+    allow_merge=no_allow,
+    gh_repo_env='',
+    authorized=None,
+    stack_below=None,
+    canonical=same_name,
+    pins_only=no_pin_move,
 ):
     return gmm.analyze(
         cmd,
@@ -97,6 +111,7 @@ def verdict(
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
         canonical=canonical,
+        pins_only=pins_only,
     )
 
 
@@ -418,7 +433,7 @@ def test_canonical_repository_follows_github_s_name_and_raises_on_a_failed_looku
     assert gmm.canonical_repository('old/name', gh_json=lambda *_: {'full_name': 'New/Name'}) == 'new/name'
 
     def failing(*_):
-        raise gmm.StackLookupError('404')
+        raise gmm.GitHubReadError('404')
 
     with pytest.raises(gmm.RepositoryLookupError, match='404'):
         gmm.canonical_repository('old/name', gh_json=failing)
@@ -613,7 +628,7 @@ def test_a_merge_whose_stack_cannot_be_read_is_refused_and_spends_nothing(git):
     spent = []
 
     def unreadable(number, slug):
-        raise gmm.StackLookupError('`gh api` failed')
+        raise gmm.GitHubReadError('`gh api` failed')
 
     denial = verdict(
         git, 'gh pr merge 103', allow_merge=lambda n, slug: spent.append(n) or True, stack_below=unreadable
@@ -633,6 +648,144 @@ def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
     )
     assert denial is not None
     assert read == []
+
+
+HEAD = 'c' * 40
+PIN_MERGE = f'gh pr merge 103 --squash --match-head-commit {HEAD}'
+
+
+def pin_move_at(number, head):
+    """A pin-move verdict for one pull request at one head commit."""
+    return lambda n, slug, h: (n, h) == (number, head)
+
+
+def test_a_pin_move_merges_at_the_head_it_names_without_a_receipt_and_spends_none(git):
+    spent = []
+    denial = verdict(
+        git,
+        PIN_MERGE,
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: False,
+        pins_only=pin_move_at(103, HEAD),
+    )
+    assert denial is None
+    assert spent == []
+
+
+@pytest.mark.parametrize(
+    'cmd',
+    ['gh pr merge 103 --squash', f'gh pr merge 103 --auto --match-head-commit {HEAD}', f'gh pr merge 103 -t {HEAD}'],
+)
+def test_a_pin_move_merge_that_names_no_head_or_may_be_deferred_needs_a_receipt(git, cmd):
+    asked = []
+    denial = verdict(git, cmd, authorized=lambda n, slug: False, pins_only=lambda n, slug, h: asked.append(h) or True)
+    assert denial == gmm.GH_MERGE_MSG
+    assert asked == []
+
+
+def test_an_mcp_merge_of_a_pin_move_needs_a_receipt():
+    """The MCP merge names no head commit, so a push after the read could ride on the verdict."""
+    unauthorized = lambda n, slug: False  # noqa: E731
+    assert mcp_verdict(MERGE_TOOL, merge_args(103), authorized=unauthorized, pins_only=lambda *_: True) is not None
+
+
+def test_a_merge_that_moves_more_than_a_pin_still_needs_a_receipt(git):
+    assert verdict(git, PIN_MERGE, authorized=lambda n, slug: False) == gmm.GH_MERGE_MSG
+
+
+def test_a_pin_move_on_a_stack_still_needs_a_receipt_for_each_pull_request_below_it(git):
+    spent = []
+    denial = verdict(
+        git,
+        PIN_MERGE,
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: n == 102,
+        stack_below=lambda n, slug: [101, 102],
+        pins_only=pin_move_at(103, HEAD),
+    )
+    assert denial is not None and 'Not authorized: #101.' in denial
+    assert spent == []
+
+
+BASE = 'd' * 40
+REVISION_PATCH = "@@ -1 +1 @@\n-REVISION = '{}'\n+REVISION = '{}'".format('a' * 40, 'b' * 40)
+
+
+def pin_move_github(patch, compare_status='ahead', head=HEAD, allow_auto_merge=False, project_files=None):
+    """A `gh api` stand-in serving one repository, one pull request at `head`, its compare and file reads.
+
+    `project_files` maps a changed project file to its (patch, text at the head commit).
+    """
+    project_files = project_files or {}
+    files = [
+        {pin_move.FILE_NAME: name, pin_move.FILE_STATUS: pin_move.MODIFIED, pin_move.FILE_PATCH: file_patch}
+        for name, file_patch in [('evals/evals.py', patch), *((n, fp) for n, (fp, _) in project_files.items())]
+    ]
+    contents = {
+        f'repos/{GUARDED}/contents/{name}?ref={HEAD}': {'content': base64.b64encode(text.encode()).decode()}
+        for name, (_, text) in project_files.items()
+    }
+
+    def gh_json(path, deadline):
+        path = path.replace(GUARDED.casefold(), GUARDED)  # the guard reads the repository by its casefolded name
+        if path == f'repos/{GUARDED}':
+            return {'allow_auto_merge': allow_auto_merge}
+        if path == f'repos/{GUARDED}/pulls/103':
+            return {'head': {'sha': head}, 'base': {'sha': BASE}}
+        if path == f'repos/{GUARDED}/compare/{BASE}...{HEAD}':
+            return {'files': files}
+        if path in contents:
+            return contents[path]
+        if path.endswith(f'...{gmm.GUARDED_BRANCH}'):
+            if compare_status is None:
+                raise gmm.GitHubReadError('`gh api` failed: Not Found')
+            return {'status': compare_status}
+        raise AssertionError(path)
+
+    return gh_json
+
+
+def test_only_moves_pins_reads_the_diff_at_the_head_and_asks_whether_the_revision_is_on_main():
+    assert gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=pin_move_github(REVISION_PATCH))
+    off_main = pin_move_github(REVISION_PATCH, compare_status='diverged')
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=off_main)
+
+
+def test_only_moves_pins_reads_the_table_of_a_project_line_from_the_file_at_the_named_head():
+    bump = '@@ -3 +3 @@\n-version = "0.2.1"\n+version = "0.2.2"'
+    in_project = '[project]\nname = "evals"\nversion = "0.2.2"'
+    in_tool = '[tool.release]\nname = "evals"\nversion = "0.2.2"\n[project]\nname = "evals"'
+    project_bump = pin_move_github(REVISION_PATCH, project_files={'evals/pyproject.toml': (bump, in_project)})
+    assert gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=project_bump)
+    tool_bump = pin_move_github(REVISION_PATCH, project_files={'evals/pyproject.toml': (bump, in_tool)})
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=tool_bump)
+
+
+def test_only_moves_pins_is_false_when_the_pull_request_has_moved_past_the_named_head():
+    moved = pin_move_github(REVISION_PATCH, head='e' * 40)
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=moved)
+
+
+def test_only_moves_pins_is_false_where_the_repository_allows_auto_merge():
+    """An auto-merge enabled now can land a push made after the read."""
+    auto = pin_move_github(REVISION_PATCH, allow_auto_merge=True)
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=auto)
+
+
+def test_a_pin_lookup_github_does_not_answer_refuses_naming_the_reason(git):
+    def unknown_revision(number, slug, head):
+        return gmm.only_moves_pins(number, slug, head, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
+
+    denial = verdict(git, PIN_MERGE, authorized=lambda n, slug: False, pins_only=unknown_revision)
+    assert denial is not None and 'only moves a pin: `gh api` failed: Not Found' in denial
+
+
+def test_a_pin_lookup_answered_in_an_unexpected_shape_refuses():
+    def no_head(path, deadline):
+        return {'allow_auto_merge': False} if path == f'repos/{GUARDED}' else {}
+
+    with pytest.raises(gmm.GitHubReadError):
+        gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=no_head)
 
 
 def fake_github(stack_members, bases, stack_base='main'):
@@ -673,13 +826,13 @@ def test_a_merged_layer_is_not_taken_again():
 
 
 def test_a_stack_whose_open_layers_form_no_chain_is_unreadable():
-    with pytest.raises(gmm.StackLookupError):
+    with pytest.raises(gmm.GitHubReadError):
         gmm.merged_along_with(103, GUARDED, gh_json=fake_github(STACK_TOP_FIRST, {101: 'main', 102: 'x', 103: 'b'}))
 
 
 def test_a_stack_lookup_out_of_time_is_unreadable_without_running_gh(monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('gh ran past the deadline'))
-    with pytest.raises(gmm.StackLookupError):
+    with pytest.raises(gmm.GitHubReadError):
         gmm._gh_json('repos/o/r/pulls/1', deadline=0)
 
 
@@ -854,7 +1007,14 @@ OTHER_REPO_ARGS = {'owner': 'someone', 'repo': 'agent_infra'}
 
 
 def mcp_verdict(
-    tool, arguments, guarded=GUARDED, allow_merge=no_allow, authorized=None, stack_below=None, canonical=same_name
+    tool,
+    arguments,
+    guarded=GUARDED,
+    allow_merge=no_allow,
+    authorized=None,
+    stack_below=None,
+    canonical=same_name,
+    pins_only=no_pin_move,
 ):
     return gmm.analyze_mcp(
         tool,
@@ -864,6 +1024,7 @@ def mcp_verdict(
         authorized=authorized or (lambda *_: True),
         stack_below=stack_below or (lambda *_: []),
         canonical=canonical,
+        pins_only=pins_only,
     )
 
 
@@ -1009,7 +1170,13 @@ def test_a_call_that_cannot_land_a_commit_on_main_is_untouched(tool, arguments):
 
 def run_hook(payload, cwd, project_dir, script=None):
     script = script or Path(__file__).resolve().parents[1] / 'guard_main_merge.py'
-    env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir)}
+    # A `gh` that always fails, so a merge the hook reads asks no real GitHub about the pull request.
+    fake_bin = Path(project_dir).parent / 'fake-bin'
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / 'gh').write_text('#!/bin/sh\nexit 1\n')
+    (fake_bin / 'gh').chmod(0o755)
+    path = f'{fake_bin}{os.pathsep}{os.environ.get("PATH", "")}'
+    env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(project_dir), 'PATH': path}
     body = payload if isinstance(payload, str) else json.dumps({**payload, 'cwd': str(cwd)})
     return subprocess.run([sys.executable, str(script)], input=body, env=env, capture_output=True, text=True)
 
