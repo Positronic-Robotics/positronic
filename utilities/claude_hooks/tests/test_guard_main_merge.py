@@ -364,6 +364,13 @@ def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
     assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
 
 
+def test_an_old_name_of_the_guarded_repository_is_not_told_it_is_another_repository(git):
+    def canonical(slug):
+        return {'old-owner/old-name': GUARDED.casefold()}.get(slug, slug)
+
+    assert verdict(git, 'gh pr merge 566 -R old-owner/old-name', canonical=canonical) == gmm.GH_MERGE_MSG
+
+
 def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alone(git):
     looked_up = []
 
@@ -495,6 +502,32 @@ def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
         verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
     )
     assert asked == []
+
+
+@pytest.mark.parametrize(
+    ('cmd', 'exact_form'),
+    [
+        (
+            'GH_TOKEN=$(cat ~/t) gh pr merge 566 -R someone/other && gh pr view 566 -R someone/other',
+            'gh pr merge 566 -R someone/other',
+        ),
+        ('gh pr merge 566 -R someone/other --admin', 'gh pr merge 566 -R someone/other'),
+        ('gh pr -R someone/other merge 566', 'gh pr merge 566 -R someone/other'),
+        (f'cd {INFRA} && gh pr merge 566', 'gh pr merge 566 -R someone/agent_infra'),
+    ],
+)
+def test_a_merge_in_another_repository_out_of_the_exact_form_is_told_that_form_and_not_a_receipt(git, cmd, exact_form):
+    """No receipt is read for another repository, so the denial names the one form that passes."""
+    denial = verdict(git, cmd)
+    assert denial is not None and '!allow_merge' not in denial
+    assert f'`{exact_form}`' in denial and 'alone in its own Bash call' in denial
+    assert verdict(git, exact_form) is None
+
+
+@pytest.mark.parametrize('cmd', ['gh pr merge 566', f'gh pr merge 566 -R {GUARDED}'])
+def test_a_merge_into_this_repository_without_a_receipt_is_told_to_get_one(git, cmd):
+    assert verdict(git, cmd) == gmm.GH_MERGE_MSG
+    assert '`!allow_merge <pr>`' in gmm.GH_MERGE_MSG
 
 
 def test_a_merge_whose_repository_cannot_be_established_is_refused(git):

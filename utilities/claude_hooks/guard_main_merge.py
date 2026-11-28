@@ -64,6 +64,12 @@ MERGE_EXPANSION_MSG = (
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 GH_MERGE_MSG = 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+OTHER_REPOSITORY_MERGE_MSG = (
+    'BLOCKED: this merge is in another repository, `{repo}`. The guard lets it run in one exact form only.'
+    ' Run `gh pr merge {number} -R {repo}` alone in its own Bash call, with nothing beside it but `cd`.'
+    ' The form can add one merge method, `--delete-branch`, `--subject`, `--body`, `--body-file` and a'
+    ' `GH_TOKEN=$(cat <file>)` prefix. This merge needs no authorization from chat.'
+)
 MCP_MERGE_MSG = 'BLOCKED: {tool} is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 MCP_UNNUMBERED_MSG = (
     'BLOCKED: {tool} names no pull request — an authorization names one pull request, so a merge'
@@ -972,14 +978,34 @@ def _is_exact_merge_in_another_repository(
     Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
     The merge runs alone, as a guarded one must, so one command makes only the two lookups of one merge.
     """
-    if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
+    if gh_repo_env or _sets_gh_repo(cmd):
         return False
-    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
-        return False
-    repo = _repository_of_exact_merge_form(words)
+    repo = _exact_form_run_alone(words, cmd)
     if not (repo and guarded_slug) or repo == guarded_slug:
         return False
     return not _names_guarded(repo, guarded_slug, canonical)
+
+
+def _exact_form_run_alone(words: list[str], cmd: str) -> str:
+    """`owner/repo` when `gh <words>` is the exact form run alone in `cmd`; '' otherwise."""
+    if _carries_substitution(cmd) or _carries_expansion(cmd):
+        return ''
+    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
+        return ''
+    return _repository_of_exact_merge_form(words)
+
+
+def _another_repository(words: list[str], repo: str, guarded_slug: str, cmd: str) -> str:
+    """`owner/repo` when `repo` plainly names a repository other than `guarded_slug`, for a merge out of the exact form.
+
+    The exact form run alone fails `_is_exact_merge_in_another_repository` here only when GitHub names its repository
+    the guarded one, so it gives ''.
+    """
+    m = GH_REPO_SELECTOR_RE.fullmatch(repo)
+    slug = m.group(1).casefold() if m else ''
+    if not guarded_slug or slug in ('', guarded_slug) or _exact_form_run_alone(words, cmd):
+        return ''
+    return slug
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -1110,8 +1136,10 @@ def analyze(  # noqa: C901
                 return UNNUMBERED_MSG
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
-            if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
-                return GH_MERGE_MSG
+            repo = _gh_repo(target, inv.dir, git, cmd, gh_repo_env)
+            if repo != guarded_slug:
+                other = _another_repository(inv.words, repo, guarded_slug, cmd)
+                return OTHER_REPOSITORY_MERGE_MSG.format(number=number, repo=other) if other else GH_MERGE_MSG
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
             pending_merge = number
