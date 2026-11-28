@@ -25,7 +25,7 @@ from positronic.cli.eval.submit import submit
 from positronic.dataset.dataset import DatasetFactory, DatasetWriter
 from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, sync_recording_dir
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval, InferenceCharge, Task
 from positronic.policy import Policy, RemotePolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -321,9 +321,9 @@ def _print_score(scoring: Scoring, episodes: list[Path]) -> None:
     print(score_line(scores))
 
 
-def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
-    """Every task the source makes, stamped with the run's inference-time policy."""
-    return (replace(task, charge_inference_time=charge) for task in tasks())
+def _charged(tasks: Callable[[], Iterable[Task]], charge: InferenceCharge) -> Iterator[Task]:
+    """Every task the source makes, stamped with the run's inference charge."""
+    return (replace(task, inference_charge=charge) for task in tasks())
 
 
 def _sample(count: int | None, percent: int | None, seed: int | None) -> Sample | None:
@@ -341,7 +341,7 @@ def run(
     eval: Eval | str | None,
     policy,
     output_dir=None,
-    charge_inference_time: bool = True,
+    inference_charge: str = InferenceCharge.WALL.value,
     timing=False,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
     policy_image: str | None = None,
@@ -383,7 +383,9 @@ def run(
     value. Without ``--org``, a value above 25 is refused.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
-    simulated eval; reduce them with ``positronic eval timing-report``.
+    simulated eval; reduce them with ``positronic eval timing-report``. ``inference_charge`` is what each model call
+    costs a simulated trial on its clock: ``wall`` (the call's wall time), ``server`` (the compute time its server
+    reports) or ``none`` (the world holds still).
 
     A run sent to the platform returns the platform's answer, so a caller holding this function has
     the id without parsing what was printed. A local run's result is the dataset it wrote.
@@ -392,11 +394,13 @@ def run(
         raise CommandFailed(
             '--policy runs the eval here and --policy-image runs it on the platform; pass one', Fault.USAGE
         )
+    with refusing_bad_input():
+        charge = InferenceCharge(inference_charge)
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
     # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
         '--output-dir': output_dir,
-        '--charge-inference-time': None if charge_inference_time else False,
+        '--inference-charge': None if charge is InferenceCharge.WALL else inference_charge,
         '--timing': timing or None,
         '--dataset-factory': None if dataset_factory is LocalDatasetWriter else dataset_factory,
     }
@@ -435,7 +439,7 @@ def run(
             raise CommandFailed(
                 f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
             )
-        chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
+        chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge))
         recorded = main(
             policy=policy, evals=[chosen], output_dir=output_dir, timing=timing, dataset_factory=dataset_factory
         )

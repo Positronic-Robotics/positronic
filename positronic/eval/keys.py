@@ -28,9 +28,11 @@ JOINT_SIGNALS = 'joint_signals'
 POSE_SIGNALS = 'pose_signals'
 MOUNTS = 'mounts'
 
-# Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
-# task asked, since it cannot hold the world still while the model thinks.
-CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
+# What the trial charged each model call on the episode clock, an ``InferenceCharge`` value. ``wall`` on a real rig
+# whatever the task asked, since it cannot hold the world still while the model thinks.
+INFERENCE_CHARGE = 'eval.inference_charge'
+
+
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'

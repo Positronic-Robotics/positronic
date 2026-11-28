@@ -16,7 +16,7 @@ uv run --extra llm-openai positronic eval run \
   --output_dir=~/datasets/llm-policy/sim
 ```
 
-Use `--charge_inference_time=True` to count API latency against simulated trial time, or `--charge_inference_time=False` to pause simulated time while waiting for inference. Hardware always pays wall time. Use separate output directories when comparing the two modes.
+Use `--inference_charge=wall` (the default) to count API latency against simulated trial time, or `--inference_charge=none` to pause simulated time while waiting for inference. Hardware always pays wall time. Use separate output directories when comparing the two modes.
 
 ### Models and dependencies
 

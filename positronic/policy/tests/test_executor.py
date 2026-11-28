@@ -2,12 +2,14 @@
 
 import contextvars
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from typing import cast
 
 import pytest
 
 from positronic import telemetry, telemetry_keys
+from positronic.eval import InferenceCharge
 from positronic.policy import executor as module
 from positronic.policy.base import NotAnswered, Policy, PolicyEnd, QueueFull, Step
 from positronic.policy.executor import ExecutionRuntime, Executor, WaitResult, WaitStatus, _UnchargedAnswer
@@ -17,11 +19,9 @@ from positronic.policy.executor import ExecutionRuntime, Executor, WaitResult, W
 def executors():
     created = []
 
-    def make(*, simulated=True, charged=False, max_in_flight=16):
+    def make(*, simulated=True, charge=InferenceCharge.NONE, max_in_flight=16):
         now = [0]
-        runtime = Executor(
-            lambda: now[0], simulated=simulated, charge_inference_time=charged, max_in_flight=max_in_flight
-        )
+        runtime = Executor(lambda: now[0], simulated=simulated, charge=charge, max_in_flight=max_in_flight)
         created.append(runtime)
         return runtime, now
 
@@ -194,7 +194,7 @@ def test_fast_call_completes_while_another_worker_is_pending(executors):
 def test_charged_completion_is_hidden_until_its_episode_time(executors, monkeypatch):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, now = executors(charged=True)
+    runtime, now = executors(charge=InferenceCharge.WALL)
 
     def work():
         wall[0] = 20_000_000
@@ -220,11 +220,19 @@ def test_charged_completion_is_hidden_until_its_episode_time(executors, monkeypa
     assert not runtime.has_ready_answers()
 
 
-@pytest.mark.parametrize('simulated, charged', [(False, False), (False, True), (True, True), (True, False)])
-def test_durations_measure_the_call_and_ignore_late_reads(executors, monkeypatch, simulated, charged):
+@pytest.mark.parametrize(
+    'simulated, charge',
+    [
+        (False, InferenceCharge.NONE),
+        (False, InferenceCharge.WALL),
+        (True, InferenceCharge.WALL),
+        (True, InferenceCharge.NONE),
+    ],
+)
+def test_durations_measure_the_call_and_ignore_late_reads(executors, monkeypatch, simulated, charge):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, now = executors(simulated=simulated, charged=charged)
+    runtime, now = executors(simulated=simulated, charge=charge)
     started, release = threading.Event(), threading.Event()
 
     def work():
@@ -240,7 +248,7 @@ def test_durations_measure_the_call_and_ignore_late_reads(executors, monkeypatch
         release.set()
     assert answer.call.result(timeout=1) == 42
     now[0] = 50_000_000
-    expected = 0.0 if simulated and not charged else 0.05
+    expected = 0.0 if simulated and charge is InferenceCharge.NONE else 0.05
     assert answer.elapsed_sec == answer.execution_sec == expected
     runtime.take_completed()
     assert runtime.has_ready_answers()
@@ -254,7 +262,7 @@ def test_durations_measure_the_call_and_ignore_late_reads(executors, monkeypatch
 def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, now = executors(charged=True)
+    runtime, now = executors(charge=InferenceCharge.WALL)
     release = threading.Event()
     runtime.submit(lambda: release.wait(timeout=2))
     waits = []
@@ -275,9 +283,107 @@ def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
         release.set()
 
 
-@pytest.mark.parametrize('charged', [False, True])
-def test_real_execution_never_waits_for_simulated_time(executors, charged, monkeypatch):
-    runtime, now = executors(simulated=False, charged=charged)
+def _run_server_charged(executors, monkeypatch, *, wall_ns, reports, charge=InferenceCharge.SERVER):
+    """Submit a call that takes ``wall_ns`` of wall time and reports each of ``reports`` seconds of server time."""
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(charge=charge)
+
+    def work():
+        for seconds in reports:
+            module.report_server_time(seconds)
+        wall[0] = wall_ns
+        return 42
+
+    answer = cast(_UnchargedAnswer[int], runtime.submit(work))
+    assert answer.call.result(timeout=1) == 42
+    return runtime, now, answer
+
+
+def test_server_charge_shows_the_answer_after_the_reported_server_time(executors, monkeypatch):
+    runtime, now, answer = _run_server_charged(executors, monkeypatch, wall_ns=2_000_000_000, reports=[0.25, 0.05])
+    now[0] = 299_999_999
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+    assert not answer.done()
+    now[0] = 300_000_000
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.elapsed_sec == answer.execution_sec == pytest.approx(0.3)
+    assert answer.result() == 42
+
+
+def test_server_charge_takes_the_wall_time_of_a_call_that_reports_none(executors, monkeypatch):
+    runtime, now, answer = _run_server_charged(executors, monkeypatch, wall_ns=20_000_000, reports=[])
+    now[0] = 19_999_999
+    assert not answer.done()
+    now[0] = 20_000_000
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.elapsed_sec == answer.execution_sec == 0.02
+
+
+def test_server_charge_of_a_call_that_reports_none_includes_its_wait_for_a_worker(executors, monkeypatch):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(charge=InferenceCharge.SERVER)
+    release = threading.Event()
+
+    def occupy_the_worker():
+        assert release.wait(timeout=2)
+        wall[0] = 10_000_000
+
+    def work():
+        wall[0] = 30_000_000
+        return 42
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        runtime._submit_on(workers, 2, occupy_the_worker)
+        answer = cast(_UnchargedAnswer[int], runtime._submit_on(workers, 2, work))
+        release.set()
+        assert answer.call.result(timeout=1) == 42
+    now[0] = 30_000_000
+    assert runtime.wait(timeout_sec=0).status is WaitStatus.ANSWERS_READY
+    assert answer.elapsed_sec == answer.execution_sec == 0.03
+
+
+def test_wall_charge_ignores_a_reported_server_time(executors, monkeypatch):
+    runtime, now, answer = _run_server_charged(
+        executors, monkeypatch, wall_ns=20_000_000, reports=[0.005], charge=InferenceCharge.WALL
+    )
+    now[0] = 20_000_000
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.elapsed_sec == answer.execution_sec == 0.02
+
+
+def test_server_charge_holds_the_world_while_the_call_runs(executors):
+    runtime, now = executors(charge=InferenceCharge.SERVER)
+    release = threading.Event()
+
+    def work():
+        assert release.wait(timeout=2)
+        module.report_server_time(0.01)
+
+    answer = runtime.submit(work)
+    try:
+        assert runtime.wait(timeout_sec=0.05) == WaitResult(WaitStatus.TIMED_OUT)
+    finally:
+        release.set()
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.CAN_ADVANCE)
+    assert now == [0]
+    now[0] = 10_000_000
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+
+
+def test_worker_span_holds_the_time_that_the_server_charge_costs(executors, tmp_path):
+    runtime, _ = executors(charge=InferenceCharge.SERVER)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'charged'):
+        cast(_UnchargedAnswer[None], runtime.submit(module.report_server_time, 0.125)).call.result(timeout=5)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [worker] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
+    assert worker.attrs[telemetry_keys.ATTR_CHARGED_MS] == pytest.approx(125.0)
+
+
+@pytest.mark.parametrize('charge', list(InferenceCharge))
+def test_real_execution_never_waits_for_simulated_time(executors, charge, monkeypatch):
+    runtime, now = executors(simulated=False, charge=charge)
 
     def forbidden_wait(*args, **kwargs):
         pytest.fail('Real execution waited for simulated time')
@@ -453,7 +559,7 @@ def test_all_admitted_calls_can_start_and_unread_answers_hold_capacity(executors
 def test_invisible_or_unread_answer_keeps_capacity(executors, monkeypatch):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, now = executors(charged=True, max_in_flight=1)
+    runtime, now = executors(charge=InferenceCharge.WALL, max_in_flight=1)
 
     def work():
         wall[0] += 100_000_000
@@ -543,11 +649,13 @@ def test_execution_limits_are_independent_and_share_completions(executors):
                 second.submit(lambda: None)
 
 
-@pytest.mark.parametrize('simulated, charged', [(False, False), (True, False), (True, True)])
-def test_execution_inherits_episode_time_accounting(executors, monkeypatch, simulated, charged):
+@pytest.mark.parametrize(
+    'simulated, charge', [(False, InferenceCharge.NONE), (True, InferenceCharge.NONE), (True, InferenceCharge.WALL)]
+)
+def test_execution_inherits_episode_time_accounting(executors, monkeypatch, simulated, charge):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, now = executors(simulated=simulated, charged=charged, max_in_flight=1)
+    runtime, now = executors(simulated=simulated, charge=charge, max_in_flight=1)
 
     def work():
         wall[0] = 20_000_000
@@ -556,13 +664,13 @@ def test_execution_inherits_episode_time_accounting(executors, monkeypatch, simu
     with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
         answer = cast(_UnchargedAnswer[int], execution.submit(work))
         assert answer.call.result(timeout=1) == 42
-        if simulated and charged:
+        if simulated and charge is InferenceCharge.WALL:
             assert not answer.done()
             assert not runtime.has_ready_answers()
         now[0] = 20_000_000
         assert answer.done()
         assert runtime.has_ready_answers()
-        expected = 0.0 if simulated and not charged else 0.02
+        expected = 0.0 if simulated and charge is InferenceCharge.NONE else 0.02
         assert answer.elapsed_sec == answer.execution_sec == expected
         assert answer.result() == 42
         assert not runtime.has_ready_answers()

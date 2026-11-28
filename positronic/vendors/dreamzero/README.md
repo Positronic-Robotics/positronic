@@ -62,7 +62,7 @@ previous actions like GR00T RTC.
 
 Chunked playback is limited to the prediction period to keep the future plan bounded. At the outstanding
 call limit or runtime capacity, the client skips new samples and counts them in `skipped_samples` metadata.
-To compare behavior on slower hardware, `--charge_inference_time=False` pauses simulation during inference;
+To compare behavior on slower hardware, `--inference_charge=none` pauses simulation during inference;
 that comparison does not establish real-time performance.
 
 ## Training

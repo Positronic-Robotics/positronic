@@ -1,5 +1,6 @@
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 import pimm
@@ -94,6 +95,18 @@ class Embodiment:
     goal_source: pimm.ControlSystemEmitter[str] | None = None
 
 
+class InferenceCharge(StrEnum):
+    """What a model call costs a simulated episode on its clock."""
+
+    # The world holds still until the call answers, so the call costs no episode time.
+    NONE = 'none'
+    # The wall time the call took, with every wait on its way: the network and a queue at a shared server.
+    WALL = 'wall'
+    # The time the server reports it computed for the call, without its wait for a slot that other sessions hold.
+    # A call that reports no server time costs its wall time.
+    SERVER = 'server'
+
+
 @dataclass
 class Task:
     """One trial: the goal the policy conditions on, the time budget it runs under, and what sets it up."""
@@ -106,8 +119,8 @@ class Task:
     prepare_args: dict[str, Any] = field(default_factory=dict)
     # What the episode records as this trial's identity: its seed, its place in the sweep, its scene
     meta: dict[str, Any] = field(default_factory=dict)
-    # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
-    charge_inference_time: bool = True
+    # What each model call costs the trial on its clock. Only a sim reads it: a real rig pays the wall time.
+    inference_charge: InferenceCharge = InferenceCharge.WALL
 
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked
@@ -117,7 +130,7 @@ class Task:
 # [✓] ``privileged``, ``done`` and ``reset`` are per-run: they move to ``Eval``.
 # [✓] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
 # [✓] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
-# [✓] ``charge_inference_time`` is a ``Task`` field, not a context key.
+# [✓] ``inference_charge`` is a ``Task`` field, not a context key.
 # [✓] Split the reset token from the policy input: the instruction is all a trial gives the policy.
 # [✓] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
 # [✓] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper — and it opens once all answer.

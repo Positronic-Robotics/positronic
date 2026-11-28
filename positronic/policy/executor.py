@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from concurrent.futures import Executor as WorkerExecutor
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -14,6 +15,7 @@ from functools import partial
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
+from positronic.eval import InferenceCharge
 from positronic.policy.base import Answer, NotAnswered, QueueFull, Runtime
 from positronic.utils import check_positive_int
 
@@ -111,6 +113,64 @@ class _ChargedAnswer(_UnchargedAnswer[T]):
         return max(remaining_ns / 1e9, 0.0)
 
 
+# The charge of the call that runs in this context. Each call runs in its own copy of the submitter's context.
+_CALL_CHARGE: ContextVar['_CallCharge | None'] = ContextVar('call_charge', default=None)
+
+
+class _CallCharge:
+    """The episode time one call costs under ``InferenceCharge.SERVER``.
+
+    That is the server time that the call's function reports with ``report_server_time``, or the wall time from
+    submission to completion where it reports none.
+    """
+
+    def __init__(self) -> None:
+        self._submitted_wall_ns = time.monotonic_ns()
+        self.reported_ns: int | None = None
+        self.charged_ns = 0
+
+    def run(self, function: Callable[[], T]) -> T:
+        _CALL_CHARGE.set(self)
+        try:
+            return function()
+        finally:
+            wall_ns = time.monotonic_ns() - self._submitted_wall_ns
+            self.charged_ns = wall_ns if self.reported_ns is None else self.reported_ns
+
+
+def report_server_time(seconds: float) -> None:
+    """Add a server's own compute time to the charge of the call that runs here.
+
+    It changes nothing outside a call that the episode charges by ``InferenceCharge.SERVER``.
+    """
+    charge = _CALL_CHARGE.get()
+    if charge is not None:
+        charge.reported_ns = (charge.reported_ns or 0) + round(seconds * 1e9)
+
+
+class _ServerChargedAnswer(_ChargedAnswer[T]):
+    """A worker result visible after the episode clock pays the call's ``_CallCharge``.
+
+    The charge is known only when the call ends, and it can be shorter than any wall time, so the world holds still
+    while the call runs.
+    """
+
+    def __init__(
+        self, pool: WorkerExecutor, clock: Callable[[], int], function: Callable[[], T], charge: _CallCharge
+    ) -> None:
+        self._charge = charge
+        super().__init__(pool, clock, function)
+
+    def _run(self, function: Callable[[], T]) -> T:
+        try:
+            return function()
+        finally:
+            self._elapsed_ns = self._execution_ns = self._charge.charged_ns
+
+    def _delay_sec(self, until_ns: int) -> float:
+        return 0.0 if self.call.done() else float('inf')
+
+
 class WaitStatus(Enum):
     ANSWERS_READY = auto()
     CAN_ADVANCE = auto()
@@ -177,8 +237,9 @@ class Executor(Runtime):
     """Run submitted functions on worker threads and expose their answers on ``clock``.
 
     Real execution exposes completed futures immediately and never waits for simulated time. In
-    simulation, charged calls include queueing and execution time; uncharged calls hold the simulator
-    until the worker finishes. Submission and result reads belong to the control thread; submitted
+    simulation, ``charge`` says what a call costs on ``clock``: ``WALL`` calls include queueing and execution
+    time, ``SERVER`` calls the server time that they report with ``report_server_time``, and ``NONE`` calls hold
+    the simulator until the worker finishes. Submission and result reads belong to the control thread; submitted
     functions must not mutate episode state.
 
     ``max_in_flight`` bounds local calls until their results are read or cancelled calls finish.
@@ -187,11 +248,11 @@ class Executor(Runtime):
     """
 
     def __init__(
-        self, clock: Callable[[], int], *, simulated: bool, charge_inference_time: bool, max_in_flight: int = 16
+        self, clock: Callable[[], int], *, simulated: bool, charge: InferenceCharge, max_in_flight: int = 16
     ) -> None:
         self._clock = clock
         self._simulated = simulated
-        self._charge_inference_time = charge_inference_time
+        self._charge = charge
         self._tick = -1
         self._tick_time_ns: int | None = None
         self._closed = False
@@ -282,22 +343,34 @@ class Executor(Runtime):
         def invoke() -> T:
             return function(*args, **kwargs)
 
+        charge = _CallCharge() if self._simulated and self._charge is InferenceCharge.SERVER else None
+        if charge is not None:
+            invoke = partial(charge.run, invoke)
         if telemetry.enabled():
-            invoke = partial(self._traced_call, invoke, self._observed_ns)
+            invoke = partial(self._traced_call, invoke, self._observed_ns, charge)
         work = partial(context.run, invoke)
-        answer = (
-            _ChargedAnswer(workers, self._clock, work)
-            if self._simulated and self._charge_inference_time
-            else _UnchargedAnswer(workers, work, charge_time=not self._simulated)
-        )
+        answer: _UnchargedAnswer[T]
+        if charge is not None:
+            answer = _ServerChargedAnswer(workers, self._clock, work, charge)
+        elif self._simulated and self._charge is InferenceCharge.WALL:
+            answer = _ChargedAnswer(workers, self._clock, work)
+        else:
+            answer = _UnchargedAnswer(workers, work, charge_time=not self._simulated)
         self._answers.add(answer)
         return answer
 
-    def _traced_call(self, call: Callable[[], T], observed_ns: int | None) -> T:
-        """Run ``call`` in a ``policy.submit`` span that holds the age of the observation when the call starts."""
+    def _traced_call(self, call: Callable[[], T], observed_ns: int | None, charge: _CallCharge | None) -> T:
+        """Run ``call`` in a ``policy.submit`` span that holds the age of the observation when the call starts.
+
+        Under a ``charge``, the span also holds the episode time that the call costs.
+        """
         attrs = {} if observed_ns is None else {telemetry_keys.ATTR_OBS_AGE_MS: (self._clock() - observed_ns) / 1e6}
-        with telemetry.span(telemetry_keys.SPAN_POLICY_SUBMIT, **attrs):
-            return call()
+        with telemetry.span(telemetry_keys.SPAN_POLICY_SUBMIT, **attrs) as span:
+            try:
+                return call()
+            finally:
+                if charge is not None:
+                    telemetry.set_attrs(span, **{telemetry_keys.ATTR_CHARGED_MS: charge.charged_ns / 1e6})
 
     def wait(self, timeout_sec: float) -> WaitResult:
         """Check for new answers, waiting at most ``timeout_sec`` real seconds. Zero only checks.

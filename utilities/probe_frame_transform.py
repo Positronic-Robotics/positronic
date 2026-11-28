@@ -21,6 +21,7 @@ from positronic_model_server.spec import component, parallel, sequence
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.eval import InferenceCharge
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
 from positronic.policy.codecs import TASK_FIELD, SetControlMode, TransformImages
@@ -101,7 +102,7 @@ def _drive(stack: Processor, cameras: tuple[str, ...], width: int, height: int, 
     """Step ``stack`` at ``FPS`` with new frames each step, and return the wall time of each step in ms."""
     rng = np.random.default_rng(0)
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(stack, lambda obs: None)
     step_ms = []
     try:

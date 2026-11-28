@@ -248,6 +248,10 @@ real latency.
 
 Real execution exposes finished answers immediately. Charged simulation exposes
 them only when simulated time includes their queueing and execution duration.
+A simulation that charges server time instead charges the compute time that a
+remote call reports through `report_server_time`, and holds the world while the
+call runs, because that time is known only at the answer. A call that reports
+none costs its duration.
 Uncharged simulation waits for completion before advancing time. An unlimited chain of
 uncharged submissions can therefore keep the simulator at one instant.
 

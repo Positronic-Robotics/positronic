@@ -19,6 +19,7 @@ from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.video import VideoSignal
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
@@ -60,7 +61,7 @@ def run_episode(wire: str, host: str, port: int, output: Path, seed: int, wall_t
         f'--eval.seed={seed}',
         '--eval.trial_count=1',
         f'--eval.timeout={EPISODE_SECONDS}',
-        '--charge_inference_time=False',
+        '--inference_charge=none',
         f'--output_dir={output}',
     ]
     log = output.with_suffix('.log')
@@ -79,7 +80,7 @@ def read_episode(output: Path, seed: int) -> Episode:
     expected = {
         eval_keys.SEED: seed,
         eval_keys.TIMEOUT: EPISODE_SECONDS,
-        eval_keys.CHARGE_INFERENCE_TIME: False,
+        eval_keys.INFERENCE_CHARGE: InferenceCharge.NONE.value,
         eval_keys.TERMINATED: False,
         f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}': CHECKPOINT_PATH,
     }

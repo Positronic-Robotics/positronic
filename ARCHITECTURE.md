@@ -133,9 +133,10 @@ sees the misbehaviour, and only the caller knows when a repair is safe: a repair
 device.
 
 **Inference cost is a fact of the trial, owned by the harness.** The policy submits
-ordinary functions through its runtime. A simulated task can request
-`charge_inference_time=False`; otherwise answer availability includes queueing and
-execution time. The runtime exposes one clock to the policy, without revealing whether
+ordinary functions through its runtime. A simulated task states its
+`inference_charge`: `wall` (the default) makes answer availability include queueing and
+execution time, `server` only the compute time that the server reports, and `none` holds the world until the
+answer arrives. The runtime exposes one clock to the policy, without revealing whether
 that clock is simulated. Scheduling processors read it when they anchor a chunk.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
