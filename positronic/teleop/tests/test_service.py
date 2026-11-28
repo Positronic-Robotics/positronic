@@ -2358,7 +2358,7 @@ NOTICE_TEXTS = {
 }
 
 
-def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
+def _phase_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
     """A phase notice that has read ``phases``, its stop flag and its loop."""
     notice, polled = _RecordingNotice(), iter(phases)
     phase_notice = command._PhaseNotice(notice, NOTICE_TEXTS, lambda: TrialState(next(polled), '', False, (), False, 0))
@@ -2371,12 +2371,12 @@ def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableS
 
 def test_the_notice_shows_while_a_trial_waits_for_ready():
     phases = [Phase.IDLE, Phase.READY_WAIT, Phase.READY_WAIT, Phase.RUNNING, Phase.ENDED, Phase.IDLE, Phase.READY_WAIT]
-    notice, _, _ = _ready_notice_after([*phases, Phase.IDLE])
+    notice, _, _ = _phase_notice_after([*phases, Phase.IDLE])
     assert notice.calls == ['show Press Ready', 'hide', 'show Press Ready', 'hide']
 
 
 def test_the_notice_shows_the_heads_up_of_a_run_until_its_trial_waits_for_ready():
-    notice, _, _ = _ready_notice_after([Phase.IDLE, Phase.HEADS_UP, Phase.HEADS_UP, Phase.READY_WAIT, Phase.RUNNING])
+    notice, _, _ = _phase_notice_after([Phase.IDLE, Phase.HEADS_UP, Phase.HEADS_UP, Phase.READY_WAIT, Phase.RUNNING])
     assert notice.calls == ['show A teleop episode comes', 'hide', 'show Press Ready', 'hide']
 
 
@@ -2406,19 +2406,19 @@ def test_a_heads_up_that_stays_shows_the_notice_once(service):
 
 
 def test_the_notice_hides_the_heads_up_when_it_expires():
-    notice, _, _ = _ready_notice_after([Phase.HEADS_UP, Phase.IDLE])
+    notice, _, _ = _phase_notice_after([Phase.HEADS_UP, Phase.IDLE])
     assert notice.calls == ['show A teleop episode comes', 'hide']
 
 
 def test_a_service_that_stops_in_the_ready_wait_hides_the_notice():
-    notice, stop, loop = _ready_notice_after([Phase.READY_WAIT])
+    notice, stop, loop = _phase_notice_after([Phase.READY_WAIT])
     stop.set(True)
     next(loop, None)
     assert notice.calls == ['show Press Ready', 'hide']
 
 
 def test_a_world_that_closes_the_loop_in_the_ready_wait_hides_the_notice():
-    notice, _, loop = _ready_notice_after([Phase.READY_WAIT])
+    notice, _, loop = _phase_notice_after([Phase.READY_WAIT])
     loop.close()
     assert notice.calls == ['show Press Ready', 'hide']
 

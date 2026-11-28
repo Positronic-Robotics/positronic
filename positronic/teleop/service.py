@@ -223,7 +223,7 @@ class TrialNotStarted(Exception):
 
 @dataclass(frozen=True)
 class TrialState:
-    """What the window on the station screen and the phase notice show."""
+    """The trial that the service holds, and the count of the heads-ups that started."""
 
     phase: Phase
     task: str
