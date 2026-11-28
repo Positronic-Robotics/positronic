@@ -458,8 +458,8 @@ uv run python -m positronic.offboard.replay_episode \
   --start_sec=10 --calls=1
 ```
 
-`PUBLIC@` reads the bucket with no credentials. The command prints each command of the answer as the client plays it.
-This output comes from a server that holds the arm where it is:
+`PUBLIC@` reads the bucket with no credentials. The tool prints each command of the answer at the time that the client
+plays it. In this output, the server answers the joint positions that it gets:
 
 ```
 Episode of 89.9 s on harness.world: 'Take the marker out of the mug and put it on the table'

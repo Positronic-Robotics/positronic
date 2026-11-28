@@ -18,7 +18,7 @@ from positronic.eval import keys as eval_keys
 from positronic.offboard.replay_episode import play
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Policy, PolicyCommandError, RemotePolicy
-from positronic.policy.base import Obs, PolicyEnd, PolicyRun, Runtime, Step
+from positronic.policy.base import Answer, Obs, PolicyEnd, PolicyRun, QueueFull, Runtime, Step
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 
@@ -102,17 +102,18 @@ def test_an_answer_on_a_channel_the_episode_does_not_record_raises(start_server)
 class _Local(Policy):
     """A local policy that states ``frames``, answers ``commands`` and keeps the first three observations it gets.
 
-    With ``call``, each step submits a call that reads, 0.1 s after it starts, whether the run is still open.
+    Each step submits ``calls`` calls that each read, 0.1 s after they start, whether the run is still open. A call
+    that the runtime refuses, it skips.
     """
 
     def __init__(
-        self, frames: dict[str, EEFrame] | None = None, commands: dict[str, Any] | None = None, call: bool = False
+        self, frames: dict[str, EEFrame] | None = None, commands: dict[str, Any] | None = None, calls: int = 0
     ):
         self.seen: list[Obs] = []
         self.open_in_calls: list[bool] = []
         self._frames = frames or {}
         self._commands = commands or {}
-        self._call = call
+        self._calls = calls
         self._call_started = threading.Event()
         self._open = False
 
@@ -125,8 +126,11 @@ class _Local(Policy):
             obs = yield
             while len(self.seen) < 3:
                 self.seen.append(obs)
-                if self._call:
-                    runtime.submit(self._read_open)
+                for _ in range(self._calls):
+                    try:
+                        runtime.submit(self._read_open)
+                    except QueueFull:
+                        break
                     assert self._call_started.wait(5)
                 obs = yield Step(self._commands, runtime.time_ns + round(1e9 / FPS))
             return PolicyEnd.COMPLETE
@@ -160,11 +164,58 @@ def test_a_pose_command_whose_frame_the_policy_does_not_state_raises():
 
 
 def test_a_call_open_when_the_play_stops_ends_before_the_run_closes():
-    policy = _Local(call=True)
+    policy = _Local(calls=2)
 
-    play(_episode(), policy, calls=0, out=lambda _: None)
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 0
 
     assert policy.open_in_calls == [True]
+
+
+class _Prefetches(Policy):
+    """A policy that submits its next call in the step that reads an answer, as a schedule with a full lead does.
+
+    It counts the calls that the runtime takes. With ``skips_refused``, it skips a call that the runtime refuses, as a
+    schedule does.
+    """
+
+    def __init__(self, skips_refused: bool = True):
+        self.submitted = 0
+        self._skips_refused = skips_refused
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        answer: Answer[None] | None = None
+        yield
+        while True:
+            if answer is None or answer.done():
+                if answer is not None:
+                    answer.result()
+                try:
+                    answer = runtime.submit(lambda: None)
+                    self.submitted += 1
+                except QueueFull:
+                    if not self._skips_refused:
+                        raise
+                    answer = None
+            yield Step({}, runtime.time_ns + round(1e9 / FPS))
+
+
+def test_a_policy_that_prefetches_past_the_call_limit_submits_no_extra_call():
+    policy = _Prefetches()
+
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 1
+
+    assert policy.submitted == 1
+
+
+def test_a_policy_that_raises_on_a_refused_call_stops_the_play():
+    policy = _Prefetches(skips_refused=False)
+
+    assert play(_episode(), policy, calls=1, out=lambda _: None) == 1
+
+    assert policy.submitted == 1
 
 
 class _FailsToStart(Policy):

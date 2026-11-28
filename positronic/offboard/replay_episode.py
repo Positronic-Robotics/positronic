@@ -15,9 +15,10 @@ Usage
 
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import Executor as WorkerExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any, ParamSpec, Self, TypeVar
 
 import configuronic as cfn
 import numpy as np
@@ -36,7 +37,7 @@ from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyCommandError
-from positronic.policy.base import PolicyRun, Step
+from positronic.policy.base import Answer, PolicyRun, QueueFull, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.harness import (
     next_wake_ns,
@@ -49,6 +50,9 @@ from positronic.policy.harness import (
 TIMELINES = (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME)
 """The timelines to play an episode on, in order of preference. An older recording carries only the later ones."""
 WAIT_SEC = 0.1
+
+P = ParamSpec('P')
+T = TypeVar('T')
 
 
 @dataclass
@@ -68,7 +72,7 @@ class _Rig:
     def of(cls, ep: Episode, timeline: str, observed: list[str], declared: dict[str, EEFrame]) -> Self:
         rig_frames = ee_frames(ep.static)
         stated = stated_pose_signals(declared, rig_frames)
-        # An older recording states no frames, and its poses carry only the suffix.
+        # A recording can state no frame for a pose, so the suffix also marks a pose.
         poses = rig_frames.keys() | {name for name in observed if name.endswith(keys.EE_POSE_SUFFIX)}
         return cls(
             sent=sorted(name for name in observed if name not in poses - stated),
@@ -156,6 +160,26 @@ class _Recording:
         return step
 
 
+class _LimitedExecutor(Executor):
+    """An ``Executor`` that refuses each call past the first ``calls`` with ``QueueFull``, as a full runtime does."""
+
+    def __init__(self, clock: Callable[[], int], calls: int | None) -> None:
+        super().__init__(clock, simulated=True, charge_inference_time=False)
+        self._calls_left = calls
+        self.refused = False
+
+    def _submit_on(
+        self, workers: WorkerExecutor, limit: int, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Answer[T]:
+        if self._calls_left == 0:
+            self.refused = True
+            raise QueueFull('The replay made all the calls that it may make')
+        answer = super()._submit_on(workers, limit, function, *args, **kwargs)
+        if self._calls_left is not None:
+            self._calls_left -= 1
+        return answer
+
+
 @contextmanager
 def _started(runtime: Executor, policy: Policy) -> Iterator[PolicyRun]:
     """Start ``policy`` on ``runtime``. On exit, drain the runtime and then close the run, as the harness does.
@@ -189,10 +213,10 @@ def play(
 ) -> int:
     """Play ``ep`` from ``start_sec`` to ``end_sec`` to ``policy``, write each line to ``out``, and return the calls.
 
-    Each observation keeps its last value until the last observation of the episode, as on a rig. ``calls`` stops the
-    play when the client asks for one more call than it. Raise as the harness does: ``ValueError`` for a policy that
-    states a pose frame the rig does not report or a run that returns another value than a ``PolicyEnd``, and
-    ``PolicyCommandError`` for a step it refuses.
+    Each observation keeps its last value until the last observation of the episode, as on a rig. The client submits
+    not more than ``calls`` calls, and the play stops when the client asks for one more. Raise as the harness does:
+    ``ValueError`` for a policy that states a pose frame the rig does not report or a run that returns another value
+    than a ``PolicyEnd``, and ``PolicyCommandError`` for a step it refuses.
     """
     observed = [name for name in ep.signals if keys.is_observation(name)]
     timeline = next((t for t in TIMELINES if all(t in ep.signals[name].timelines for name in observed)), None)
@@ -205,15 +229,20 @@ def play(
     recording = _Recording(ep, timeline, first_ns, out)
     out(f'Episode of {(last_ns - first_ns) / 1e9:.1f} s on {timeline}: {recording.instruction(now[0])!r}')
 
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = _LimitedExecutor(lambda: now[0], calls)
     answered = 0
     with _started(runtime, policy) as run:
         rig = _Rig.of(ep, timeline, observed, policy_frames(policy, runtime))
         out(f'Observations sent: {rig.sent}')
         while now[0] <= stop_ns:
             called_ns = time.monotonic_ns()
-            step = recording.step(runtime, run, rig, now[0])
-            if step is None or (calls is not None and answered >= calls and runtime.has_pending):
+            try:
+                step = recording.step(runtime, run, rig, now[0])
+            except QueueFull:
+                if not runtime.refused:
+                    raise
+                break
+            if step is None or runtime.refused:
                 break
             if completed := _wait_for_answers(runtime):
                 answered += completed
