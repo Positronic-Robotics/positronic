@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import traceback
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -21,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 
 import pimm
 from positronic import geom, utils
-from positronic.gui.video_stream import AnnexBEncoder
+from positronic.drivers.webrtc import VideoPeer
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,8 @@ STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 # milliseconds on the monotonic clock of the page at which the page sent the message.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
 _PRESSES, _TIMESTAMP = 'presses', 'timestamp'
+# The field of a message on ``/ws`` that carries a WebRTC setup message of the video, from the page or to it.
+SIGNAL_FIELD = 'webrtc'
 # The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
 _CONTROLLER_BUTTONS = 6
 
@@ -220,7 +221,7 @@ class WebXR(pimm.ControlSystem):
     """WebXR server for a headset or a phone AR controller.
 
     Serves a single frontend at a time and streams controller/pose data back
-    to the application over WebSocket, with an optional H.264 video stream.
+    to the application over WebSocket. The headset page gets the frames of ``frame`` as a WebRTC video track.
 
     Important for iPhone
     - Use a WebXR-capable browser (XR Browser recommended).
@@ -234,11 +235,10 @@ class WebXR(pimm.ControlSystem):
     - `/state`           -> the last `page_state` value as JSON
     - `/input`           -> POST a JSON object from the page, such as a choice of the teleoperator; ``page_input``
                             emits it
-    - `/ws`              -> JSON controller stream from client to server
-    - `/video`           -> optional H.264 video (server to client): a JSON ``DecoderConfig`` text message before
-                            each key frame, and each frame as a binary Annex B access unit
+    - `/ws`              -> JSON controller stream from client to server. A message with a ``webrtc`` field carries a
+                            WebRTC setup message of the video (``positronic.drivers.webrtc``), in both directions
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
-    - Headset-only: `/video-player.js`, `/quest-trigger.js`, `/press-count.js`
+    - Headset-only: `/video-player.js`, `/webrtc-video.js`, `/quest-trigger.js`, `/press-count.js`
 
     Parameters
     - port: TCP port to bind.
@@ -248,9 +248,7 @@ class WebXR(pimm.ControlSystem):
     - use_https: enable HTTPS; set False for iPhone dev.
     - stale_limit: how many seconds later than the delay base of its connection a message on ``/ws`` may come and
       still count its presses. A later message, as in a backlog after a stall of the network, presses nothing.
-    - video_bitrate: the target bit rate of the video stream, in bits per second.
-    - video_fps: the frame rate of the frames that ``frame`` receives. The video stream sends a key frame once each
-      second.
+    - video_fps: the frame rate of the frames that ``frame`` receives.
     """
 
     def __init__(
@@ -263,10 +261,8 @@ class WebXR(pimm.ControlSystem):
         use_https: bool = True,
         sensitivity: float = 1.0,
         stale_limit: float = 0.5,
-        video_bitrate: int = 4_000_000,
         video_fps: int = 30,
     ):
-        utils.check_positive_int(video_bitrate, 'video_bitrate')
         utils.check_positive_int(video_fps, 'video_fps')
         utils.check_finite_positive(stale_limit, 'stale_limit')
         if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
@@ -288,11 +284,10 @@ class WebXR(pimm.ControlSystem):
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
         self.stale_limit = stale_limit
-        self.video_bitrate = video_bitrate
         self.video_fps = video_fps
 
     def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
-        """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
+        """The frame the video track sends next. ``None`` while no new frame arrived or the camera is lost."""
         msg = self.frame.read()
         if msg is None or isinstance(msg.data, pimm.SignalError) or msg.time == last_sent_time:
             return None
@@ -342,7 +337,7 @@ class WebXR(pimm.ControlSystem):
 
         scripts = ['three.min.js', 'webxr-button.js', 'core.js']
         if self.frontend is Frontend.HEADSET:
-            scripts += ['video-player.js', 'quest-trigger.js', 'press-count.js']
+            scripts += ['video-player.js', 'webrtc-video.js', 'quest-trigger.js', 'press-count.js']
         for script in scripts:
             app.get(f'/{script}')(self._file_route(utils.package_assets_path(f'assets/webxr/{script}')))
 
@@ -352,41 +347,9 @@ class WebXR(pimm.ControlSystem):
                 f'export const SESSION_MODE = {json.dumps(self.session_mode.value)};\n', media_type='text/javascript'
             )
 
-    def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
-        """``/video``: each new frame as H.264. Each socket has its own encoder, so its stream starts at a key frame."""
-
-        @app.websocket('/video')
-        async def video_stream(websocket: WebSocket):
-            await websocket.accept()
-            logger.info('Video WebSocket connection accepted')
-            # The page sends nothing on `/video`, so the first message it receives is the disconnect. Without a
-            # receive, a closed socket stays unseen until the next frame goes out.
-            closed = asyncio.ensure_future(websocket.receive())
-            try:
-                encoder = AnnexBEncoder(self.video_fps, self.video_fps, self.video_bitrate)
-                fps = pimm.utils.RateCounter('Video Stream')
-                last_sent_time = None
-                while not should_stop.value and not closed.done():
-                    await asyncio.sleep(1 / 60)
-
-                    msg = self._next_frame(last_sent_time)
-                    if msg is None:
-                        continue
-                    last_sent_time = msg.time
-                    for unit in encoder.encode(msg.data):
-                        if unit.config is not None:
-                            await websocket.send_text(unit.config.model_dump_json())
-                        await websocket.send_bytes(unit.data)
-                    fps.tick()
-            except Exception as e:
-                logger.error(f'Video WebSocket error: {e}')
-                logger.error(traceback.format_exc())
-            finally:
-                closed.cancel()
-                logger.info('Video WebSocket connection closed')
-
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
-        """``/ws``: the controller stream from the page."""
+        """``/ws``: the controller stream from the page, and the setup messages of its video. The video peer of a socket
+        closes with the socket."""
 
         # TODO: Require a pairing key before `/ws` accepts a client. Any client that can reach the port sends input.
         @app.websocket(CONTROLLER_PATH)
@@ -394,12 +357,21 @@ class WebXR(pimm.ControlSystem):
             await websocket.accept()
             logger.info('WebSocket connection accepted')
             presses = _ConnectionPresses(self.stale_limit)
+            peer: VideoPeer | None = None
+
+            async def send_signal(message: dict[str, Any]) -> None:
+                await websocket.send_json({SIGNAL_FIELD: message})
+
             try:
                 fps = pimm.utils.RateCounter('Websocket')
                 while not should_stop.value:
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
+                        if SIGNAL_FIELD in data:
+                            peer = peer or VideoPeer(self._next_frame, send_signal)
+                            peer.signal(data[SIGNAL_FIELD])
+                            continue
                         received_ms = time.monotonic() * 1000
                         controller_positions, buttons = parse_controller_message(data)
                         buttons = presses.counted(buttons, float(data[_TIMESTAMP]), received_ms)
@@ -421,6 +393,9 @@ class WebXR(pimm.ControlSystem):
                         break
             except Exception as e:
                 logger.error(f'WebSocket error: {e}')
+            finally:
+                if peer is not None:
+                    await peer.close()
 
     def _server(self, app: FastAPI) -> uvicorn.Server:
         keyfile = certfile = None
@@ -442,7 +417,6 @@ class WebXR(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         app = FastAPI()
         self._add_page_routes(app)
-        self._add_video_route(app, should_stop)
         self._add_controller_route(app, should_stop)
         server = self._server(app)
         self.server_thread = threading.Thread(target=server.run, daemon=True)

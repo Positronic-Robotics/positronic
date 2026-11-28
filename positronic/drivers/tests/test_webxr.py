@@ -1,12 +1,13 @@
 import asyncio
 import collections
 import contextlib
+import itertools
 import json
 import logging
 import socket
 import time
 import types
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import cast
 
 import av
@@ -14,16 +15,17 @@ import httpx
 import numpy as np
 import psutil
 import pytest
-from fastapi import FastAPI
+from aiortc import MediaStreamTrack, RTCConfiguration, RTCDataChannel, RTCPeerConnection, RTCSessionDescription
+from pydantic import TypeAdapter
+from websockets.asyncio.client import connect as ws_connect
 from websockets.sync import client as ws_client
 
 import pimm
 from positronic import keys, utils
 from positronic.cfg import webxr as cfg_webxr
-from positronic.drivers import webxr
+from positronic.drivers import webrtc, webxr
 from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
-from positronic.gui.video_stream import DecoderConfig
 from positronic.tests.testing_coutils import RecordingEmitter
 from positronic.tests.testing_inference import free_port
 
@@ -76,24 +78,18 @@ def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = N
         list(run)
 
 
-def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send():
-    app = FastAPI()
-    WebXR(port=free_port())._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
-    incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
-
-    async def receive():
-        return next(incoming)
-
-    async def send(message):
-        pass
-
-    scope = {'type': 'websocket', 'path': '/video', 'headers': [], 'query_string': b'', 'root_path': ''}
-    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
-
-
 @pytest.mark.parametrize(
     'route',
-    ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js', '/quest-trigger.js', '/press-count.js'],
+    [
+        '/',
+        '/core.js',
+        '/three.min.js',
+        '/webxr-button.js',
+        '/video-player.js',
+        '/webrtc-video.js',
+        '/quest-trigger.js',
+        '/press-count.js',
+    ],
 )
 def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
     monkeypatch.chdir(tmp_path)
@@ -144,12 +140,6 @@ def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
     }
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: interfaces)
     assert utils.interface_ipv4_addresses() == [('en0', '10.0.0.5'), ('utun3', '100.64.0.2')]
-
-
-@pytest.mark.parametrize('bitrate', [0, -1, 4e6])
-def test_a_video_bitrate_that_is_not_a_positive_integer_is_refused(bitrate):
-    with pytest.raises(ValueError, match='video_bitrate must be a positive integer'):
-        WebXR(port=free_port(), video_bitrate=bitrate)
 
 
 @pytest.mark.parametrize('fps', [0, -1, 30.0])
@@ -323,19 +313,163 @@ def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than
         )
 
 
-def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary_at_the_video_rate(world):
-    served = WebXR(port=free_port(), use_https=False, video_fps=15)
+@contextlib.asynccontextmanager
+async def _page_peer(base: str, offer_id: int = 1) -> AsyncIterator[tuple[MediaStreamTrack, RTCDataChannel]]:
+    """A page on ``/ws`` of ``base`` whose peer connection receives the headset video: its video track and its timing
+    channel, once the service answers its offer ``offer_id``."""
+    async with ws_connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as page:
+        connection = RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        connection.addTransceiver('video', direction='recvonly')
+        timing = connection.createDataChannel(webrtc.TIMING_CHANNEL)
+        tracks: asyncio.Queue[MediaStreamTrack] = asyncio.Queue()
+        connection.on('track', tracks.put_nowait)
+        try:
+            await connection.setLocalDescription(await connection.createOffer())
+            offer = webrtc.Offer(id=offer_id, sdp=connection.localDescription.sdp)
+            await page.send(json.dumps({webxr.SIGNAL_FIELD: offer.model_dump()}))
+            reply = json.loads(await asyncio.wait_for(page.recv(), 10))
+            answer = webrtc.Answer.model_validate(reply[webxr.SIGNAL_FIELD])
+            assert answer.id == offer_id
+            await connection.setRemoteDescription(RTCSessionDescription(answer.sdp, 'answer'))
+            yield await asyncio.wait_for(tracks.get(), 10), timing
+        finally:
+            await connection.close()
+
+
+async def _emit_frames(emitter: pimm.SignalEmitter, colors: Iterator[int]) -> None:
+    """Emit a frame of each of ``colors``, one each 20 ms."""
+    for color in colors:
+        emitter.emit(np.full((120, 160, 3), color, np.uint8))
+        await asyncio.sleep(0.02)
+
+
+@contextlib.asynccontextmanager
+async def _frames_flowing(emitter: pimm.SignalEmitter) -> AsyncIterator[None]:
+    """New frames on ``emitter`` until the block ends, as the view of the service gives them."""
+    frames = asyncio.ensure_future(_emit_frames(emitter, itertools.cycle([40, 200])))
+    try:
+        yield
+    finally:
+        frames.cancel()
+
+
+async def _received_frame(track: MediaStreamTrack) -> tuple[av.VideoFrame, int]:
+    """The next frame of ``track`` and its RTP time from the first frame."""
+    frame = await asyncio.wait_for(track.recv(), 10)
+    assert isinstance(frame, av.VideoFrame) and frame.pts is not None
+    return frame, frame.pts
+
+
+async def _open(channel: RTCDataChannel) -> None:
+    deadline = time.monotonic() + 10
+    while channel.readyState != 'open':
+        assert time.monotonic() < deadline, 'the data channel never opened'
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_webrtc_peer_of_the_page_receives_the_frames_of_the_headset_video_as_a_video_track(world):
+    served = WebXR(port=free_port(), use_https=False)
     emitter, receiver = world.local_pipe()
     served.frame._bind(receiver)
-    with _served_webxr(webxr=served) as base, ws_client.connect(base.replace('http', 'ws') + '/video') as video:
-        emitter.emit(np.zeros((48, 64, 3), np.uint8))
-        config = DecoderConfig.model_validate_json(video.recv(timeout=5))
-        key = video.recv(timeout=5)
-        emitter.emit(np.full((48, 64, 3), 9, np.uint8))
-        delta = video.recv(timeout=5)
-    assert (config.width, config.height) == (64, 48) and config.codec.startswith('avc1.')
-    assert isinstance(key, bytes) and isinstance(delta, bytes), 'each frame is a binary access unit'
-    decoder = av.CodecContext.create('h264', 'r')
-    for unit in (key, delta):
-        decoder.decode(av.Packet(unit))
-    assert decoder.framerate == 15
+    with _served_webxr(webxr=served) as base:
+        async with _page_peer(base) as (track, _timing), _frames_flowing(emitter):
+            received = [(await _received_frame(track))[0] for _ in range(5)]
+    images = [frame.to_ndarray(format='rgb24') for frame in received]
+    assert {image.shape for image in images} == {(120, 160, 3)}
+    assert {round(float(image.mean()) / 80) for image in images} <= {0, 2}, 'each frame is one of the emitted frames'
+
+
+@pytest.mark.asyncio
+async def test_the_timing_channel_gives_the_rtp_time_of_each_frame_less_one_offset_and_answers_a_ping(world):
+    served = WebXR(port=free_port(), use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    with _served_webxr(webxr=served) as base:
+        async with _page_peer(base) as (track, timing):
+            messages: asyncio.Queue[str] = asyncio.Queue()
+            timing.on('message', messages.put_nowait)
+            await _open(timing)
+            timing.send(webrtc.Ping(ping=12.5).model_dump_json())
+            async with _frames_flowing(emitter):
+                rtp_times = [(await _received_frame(track))[1] for _ in range(5)]
+                await asyncio.sleep(0.1)
+    service_message = TypeAdapter(webrtc.Pong | webrtc.FrameSent)
+    parsed = [service_message.validate_json(messages.get_nowait()) for _ in range(messages.qsize())]
+    pongs = [message for message in parsed if isinstance(message, webrtc.Pong)]
+    assert [pong.pong for pong in pongs] == [12.5] and pongs[0].service_ms > 0
+    sent = [message.frame for message in parsed if isinstance(message, webrtc.FrameSent)]
+    # The page finds the offset of the RTP timestamps: the one difference that each shown frame has with a sent time
+    # One offset joins each received frame to a sent time. The decoder of aiortc rounds the RTP time by up to 1 tick.
+    first, *others = rtp_times
+    offsets = [
+        first - pts
+        for pts in sent
+        if all(any(abs(rtp - other - (first - pts)) <= 1 for other in sent) for rtp in others)
+    ]
+    assert len(offsets) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_service_logs_each_report_of_the_page_on_its_timing_channel(world, caplog):
+    caplog.set_level(logging.INFO, logger=webrtc.__name__)
+    served = WebXR(port=free_port(), use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    emitter.emit(np.zeros((120, 160, 3), np.uint8))
+    report = webrtc.VideoReport(
+        seconds=5.0,
+        frames=150,
+        ages_ms=[30.0, 40.0, 50.0],
+        stalls_ms=[300.0],
+        packets_lost=2,
+        nacks=2,
+        plis=0,
+        rtt_ms=4.0,
+        codec='video/H264',
+    )
+    with _served_webxr(webxr=served) as base:
+        async with _page_peer(base) as (_track, timing):
+            await _open(timing)
+            timing.send(webrtc.PageReport(report=report).model_dump_json())
+            deadline = time.monotonic() + 10
+            while not any('Video over WebRTC' in line for line in caplog.messages):
+                assert time.monotonic() < deadline, 'the service never logged the report'
+                await asyncio.sleep(0.01)
+    assert (
+        'Video over WebRTC: 150 frames in 5.0 s, age 40/49/50 ms (median/95th/max), 1 stalls (300 ms); since '
+        'the connect 2 packets lost, 2 NACK, 0 PLI; RTT 4 ms; video/H264'
+    ) in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_a_bad_setup_message_logs_an_error_and_the_next_offer_still_gets_the_video(world, caplog):
+    served = WebXR(port=free_port(), use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    with _served_webxr(webxr=served) as base:
+        async with ws_connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as page:
+            await page.send(json.dumps({webxr.SIGNAL_FIELD: webrtc.Offer(id=1, sdp='not an offer').model_dump()}))
+            deadline = time.monotonic() + 10
+            while not any(record.levelno == logging.ERROR for record in caplog.records):
+                assert time.monotonic() < deadline, 'the service never logged the bad offer'
+                await asyncio.sleep(0.01)
+        async with _page_peer(base, offer_id=2) as (track, _timing), _frames_flowing(emitter):
+            frame, _ = await _received_frame(track)
+    assert frame.width == 160
+    assert 'The video peer cannot use a setup message of the page' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_video_connection_closes_with_the_socket_of_the_page(world, caplog):
+    caplog.set_level(logging.INFO, logger=webrtc.__name__)
+    served = WebXR(port=free_port(), use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    with _served_webxr(webxr=served) as base:
+        async with _page_peer(base) as (track, _timing), _frames_flowing(emitter):
+            await _received_frame(track)
+        deadline = time.monotonic() + 10
+        while 'The video connection 1 of the page is closed' not in caplog.messages:
+            assert time.monotonic() < deadline, 'the service never closed the video connection'
+            await asyncio.sleep(0.01)

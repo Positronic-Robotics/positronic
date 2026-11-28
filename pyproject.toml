@@ -15,6 +15,8 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
+    # The WebRTC peer of the headset video (`positronic.drivers.webrtc`).
+    "aiortc",
     "av",
     "coloredlogs>=15.0.1",
     "configuronic>=0.7.0",

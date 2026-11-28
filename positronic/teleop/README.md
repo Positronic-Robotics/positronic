@@ -48,7 +48,8 @@ address.
 
 The banner of `positronic teleop` prints the URL of the page, and the IPv4 address of each network interface with its
 name. Use the address of the network that the phone or the headset is on. Open port 5005 in the firewall of the
-laptop. With https, the browser warns about the self-signed certificate. [Data Collection](../../docs/data-collection.md) shows
+laptop. The headset video comes over WebRTC on UDP ports that the laptop chooses, so the firewall must also let UDP
+from the headset in. With https, the browser warns about the self-signed certificate. [Data Collection](../../docs/data-collection.md) shows
 how to accept the warning on the Quest.
 
 The robot moves `sensitivity` times the distance of the controller or the phone, and turns as it turns. The phone
@@ -162,9 +163,11 @@ Conversion for training picks its own keys from the recording.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
   changes between frames, so each frame request is smaller. Set `video_fps` to the frame rate of the cameras. Such a
   session asks for frames at most `video_fps` times a second, so the target of the robot updates at most that often.
-- `positronic teleop` sends the headset video as H.264 at 30 frames per second and 4 Mbit/s.
-  `--webxr.video_fps=<frames per second>` and `--webxr.video_bitrate=<bits per second>` change them. Lower the bit rate
-  if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
+- `positronic teleop` sends the headset video at up to 30 frames per second, as one WebRTC video track.
+  `--webxr.video_fps=<frames per second>` changes the frame rate. The bit rate follows the estimate of the headset
+  browser, so a slow Wi-Fi lowers the quality.
+- Each 5 s the service logs the video that the headset page shows: the frames, the age of a frame from the encoder
+  to the page, and the stalls (`Video over WebRTC: ...`).
 
 ## Collect demonstrations in MuJoCo
 
