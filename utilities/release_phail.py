@@ -36,13 +36,14 @@ from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
 from positronic.eval import keys as eval_keys
-from positronic.utils import PUBLIC
+from positronic.utils import PUBLIC, PUBLIC_WRITE_ENDPOINT
 from positronic.utils.checkpoints import get_latest_checkpoint
 
 DEST_ROOT = 's3://positronic-public/phail'
 
-# Same cache path as PUBLIC (local_name='positronic-public') but with credentials for writing.
-PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
+# Same cache path as PUBLIC (local_name='positronic-public'), on the store's own endpoint, with credentials
+# for writing: the AWS key pair of the bucket in the environment.
+PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False, endpoint=PUBLIC_WRITE_ENDPOINT)
 
 REQUIRED_FIELDS = ['model', 'eval.object', SUCCESSFUL_ITEMS, 'eval.total_items']
 
