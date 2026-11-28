@@ -28,7 +28,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
@@ -41,11 +41,15 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
+from positronic.policy.dagger import DaggerDataset
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps, _Source
+from positronic.policy.license import LicenseRule
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.record import Event, EventKind, encode_uses
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
+from positronic.policy.teleoperator import Teleoperator
 
 MOTOR = 'motor'
 POSITION = 'position'
@@ -53,6 +57,7 @@ RESET = 'reset'
 CAMERA = 'camera'
 ARM = 'arm'
 GROUND_TRUTH = 'ground_truth'
+OBJECT_POSE = 'object_pose'
 
 
 class StubPolicy(Policy):
@@ -178,16 +183,8 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(
-            harness._step,
-            Task('test', None),
-            frozenset(),
-            frozenset(),
-            runtime,
-            policy_run,
-            None,
-            _GcSteps(harness._gc),
-        )
+        policy = _Source(policy_keys.POLICY_SOURCE, policy_run, frozenset(), frozenset())
+        step = partial(harness._step, Task('test', None), runtime, policy, None, None, _GcSteps(harness._gc))
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -2247,7 +2244,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
             list(loop)
     command = LocalDataset(tmp_path)[0][MOTOR]
     assert list(command.timestamps(EMITTED_WORLD)) == [0]
-    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
 
 
 def test_policy_completion_resets_the_sampling_deadline(episode_harness):
@@ -2338,6 +2335,214 @@ def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeup
         assert h.dataset.episodes == []
 
 
+class Helper(Policy):
+    """A helper that sends the commands ``commands`` gives for each call number, with the presses that ``presses``
+    gives from that call number on, and asks for the next observation ``period_ns`` later. It keeps each observation.
+    ``returns_at`` is the call number at which its run returns."""
+
+    def __init__(self, presses=None, commands=None, period_ns=100_000_000, returns_at=None, meta=None):
+        self.presses = presses or {}
+        self.commands = commands or (lambda call: {MOTOR: 100 + call})
+        self.period_ns = period_ns
+        self.returns_at = returns_at
+        self._meta = meta or {}
+        self.observations = []
+
+    def meta(self):
+        return self._meta
+
+    def run(self, runtime):
+        obs = yield
+        presses = {policy_keys.HELPER_TAKE_OVER: None, policy_keys.HELPER_HAND_BACK: None}
+        call = 0
+        while True:
+            call += 1
+            if call == self.returns_at:
+                return PolicyEnd.COMPLETE
+            self.observations.append(obs)
+            presses |= self.presses.get(call, {})
+            obs = yield Step({**self.commands(call), **presses}, runtime.time_ns + self.period_ns)
+
+
+TAKE_OVER_AT_2_HAND_BACK_AT_4 = {2: {policy_keys.HELPER_TAKE_OVER: 1}, 4: {policy_keys.HELPER_HAND_BACK: 2}}
+POLICY, TELEOPERATOR = policy_keys.POLICY_SOURCE, policy_keys.TELEOPERATOR
+SHADOW_MOTOR = f'{policy_keys.SHADOW}.{POLICY}.{MOTOR}'
+
+
+def _control_records(episode) -> dict[str, list[tuple[Any, int]]]:
+    """The value and the step number of each ``control.*`` and ``shadow.*`` sample of ``episode``, in order, by
+    signal."""
+    records: dict[str, list[tuple[Any, int]]] = {}
+    for name, data, timestamps in episode.records:
+        if name.startswith((f'{policy_keys.CONTROL}.', f'{policy_keys.SHADOW}.')):
+            records.setdefault(name, []).append((data, timestamps[HARNESS_STEP]))
+    return records
+
+
+def test_take_over_and_hand_back_switch_the_commands_that_the_rig_gets_in_the_step_of_the_press(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    helper = Helper(TAKE_OVER_AT_2_HAND_BACK_AT_4, meta={policy_keys.TYPE: 'expert'})
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=6), h.dataset, helper))
+    assert _until_answered(h, answer)[eval_keys.TERMINATED] is True
+    assert [value for _, value in h.commands.values] == [1, 102, 103, 4, 5]
+    [episode] = h.dataset.episodes
+    take_over = Event(kind=EventKind.SWITCH, from_=POLICY, to=TELEOPERATOR, cause=policy_keys.HELPER_TAKE_OVER)
+    hand_back = Event(kind=EventKind.SWITCH, from_=TELEOPERATOR, to=POLICY, cause=policy_keys.HELPER_HAND_BACK)
+    by_policy, by_teleoperator = encode_uses(frozenset({POLICY})), encode_uses(frozenset({TELEOPERATOR}))
+    assert _control_records(episode) == {
+        policy_keys.CONTROL_SOURCE: [(POLICY, 0), (TELEOPERATOR, 1), (POLICY, 3)],
+        policy_keys.CONTROL_USES: [(by_policy, 0), (by_teleoperator, 1), (by_policy, 3)],
+        policy_keys.CONTROL_EVENT: [(take_over.encode(), 1), (hand_back.encode(), 3)],
+        SHADOW_MOTOR: [(2, 1), (3, 2)],
+    }
+    assert [(data, timestamps[HARNESS_STEP]) for name, data, timestamps in episode.records if name == MOTOR] == [
+        (1, 0),
+        (102, 1),
+        (103, 2),
+        (4, 3),
+        (5, 4),
+    ]
+    assert episode.static[f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}.{policy_keys.TYPE}'] == 'expert'
+
+
+def test_the_dagger_reader_gives_the_teleoperator_steps_of_a_record_that_the_harness_writes(episode_harness, tmp_path):
+    h = episode_harness
+    licensed = {policy_keys.LICENSE: 'apache-2.0'}
+
+    class LicensedEndAfter(EndAfter):
+        def meta(self):
+            return licensed
+
+    h.observation.emit(1)
+    helper = Helper(TAKE_OVER_AT_2_HAND_BACK_AT_4, meta=licensed)
+    rollout = Rollout(Task('test', 1.0), LicensedEndAfter(calls=6), LocalDatasetWriter(tmp_path), helper)
+    _until_answered(h, h.caller(rollout))
+
+    data = DaggerDataset(LocalDataset(tmp_path), [POSITION], [MOTOR], LicenseRule({'apache-2.0'}))
+    [episode] = data
+    assert list(episode[MOTOR].values()) == [102, 103]
+    assert list(episode[MOTOR].timestamps(HARNESS_STEP)) == [1, 2]
+    assert list(episode[f'{policy_keys.SHADOW}.{policy_keys.POLICY_SOURCE}.{MOTOR}'].values()) == [2, 3]
+    assert list(episode[POSITION].timestamps(HARNESS_STEP)) == [1, 2]
+    assert dict(data.steps_without_shadow) == {policy_keys.POLICY_SOURCE: 0}
+
+
+def test_a_rollout_with_no_helper_records_no_control_signal(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=3), h.dataset))
+    _until_answered(h, answer)
+    [episode] = h.dataset.episodes
+    assert _control_records(episode) == {}
+    assert not any(name.startswith(f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}.') for name in episode.static)
+
+
+@pytest.mark.parametrize('record', [True, False])
+def test_the_helper_gets_the_control_and_the_ground_truth_and_the_policy_gets_neither(record):
+    with _episode_ports(privileged=(OBJECT_POSE,)) as h:
+        policy, helper = Positions(), Helper({2: {policy_keys.HELPER_TAKE_OVER: 1}})
+        h.observation.emit(0)
+        for call, ns in enumerate([0, 100_000_000, 200_000_000]):
+            h.world.clock.advance_to_ns(ns)
+            h.privileged[OBJECT_POSE].emit(np.array([call]))
+            if call == 0:
+                h.caller(Rollout(Task('sample', None), policy, h.dataset if record else None, helper))
+            next(h.loop)
+        assert len(policy.observations) == len(helper.observations) == 3
+        for obs in policy.observations:
+            assert policy_keys.CONTROL not in obs and policy_keys.GROUND_TRUTH not in obs
+        assert [obs[policy_keys.GROUND_TRUTH][OBJECT_POSE].tolist() for obs in helper.observations] == [[0], [1], [2]]
+        switch = {'kind': EventKind.SWITCH, 'from': POLICY, 'to': TELEOPERATOR, 'cause': policy_keys.HELPER_TAKE_OVER}
+        assert [obs[policy_keys.CONTROL] for obs in helper.observations] == [
+            {'source': POLICY, 'event': None},
+            {'source': POLICY, 'event': None},
+            {'source': TELEOPERATOR, 'event': switch},
+        ]
+        assert helper.observations[0][POSITION] == 0
+
+
+def test_the_helper_of_a_rig_with_no_privileged_signal_gets_no_ground_truth(episode_harness):
+    h = episode_harness
+    helper = Helper()
+    h.observation.emit(0)
+    h.caller(Rollout(Task('sample', None), Positions(), None, helper))
+    next(h.loop)
+    assert policy_keys.GROUND_TRUTH not in helper.observations[0]
+
+
+def test_a_step_with_a_helper_comes_at_the_earlier_wake_up_time_of_the_policy_and_the_helper(episode_harness):
+    h = episode_harness
+    policy, helper = Positions(), Helper(period_ns=20_000_000)
+    h.observation.emit(0)
+    h.caller(Rollout(Task('sample', None), policy, None, helper))
+    for ns in range(0, 100_000_000, 10_000_000):
+        h.world.clock.advance_to_ns(ns)
+        next(h.loop)
+    assert len(policy.observations) == len(helper.observations) == 5
+
+
+def test_a_helper_run_that_returns_fails_the_episode(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=10), h.dataset, Helper(returns_at=3)))
+    with pytest.raises(ValueError, match='The helper run returned'):
+        _until_answered(h, answer)
+    assert [value for _, value in h.commands.values] == [1, 2]
+
+
+def test_a_helper_step_that_names_a_channel_the_embodiment_lacks_fails_the_episode(episode_harness):
+    h = episode_harness
+    h.observation.emit(1)
+    helper = Helper(commands=lambda call: {'wheels': call})
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=10), h.dataset, helper))
+    with pytest.raises(PolicyCommandError, match="The step of the teleoperator names \\['wheels'\\]"):
+        _until_answered(h, answer)
+    assert h.commands.values == []
+
+
+def test_the_teleoperator_sends_each_new_console_message_and_the_rig_keeps_it_while_none_comes(episode_harness):
+    h = episode_harness
+    console_out, console_in = h.world.local_pipe()
+    console = pimm.ControlSystemReceiver[dict](Passive())
+    console._bind(console_in)
+    take_over, hand_back = policy_keys.HELPER_TAKE_OVER, policy_keys.HELPER_HAND_BACK
+    h.observation.emit(1)
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=6), h.dataset, Teleoperator(console, 'cc-by-4.0')))
+    messages = [{MOTOR: 50, take_over: 3}, {MOTOR: 60, take_over: 7}, None, {MOTOR: 70, take_over: 7, hand_back: 9}]
+    for step, message in enumerate(messages):
+        h.world.clock.advance_to_ns(step * 5_000_000)
+        if message is not None:
+            console_out.emit(message)
+        next(h.loop)
+    _until_answered(h, answer)
+    assert [value for _, value in h.commands.values] == [1, 60, 60, 4, 5]
+    [episode] = h.dataset.episodes
+    assert _control_records(episode)[SHADOW_MOTOR] == [(2, 1), (3, 2)]
+    teleoperator_meta = f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}'
+    assert episode.static[f'{teleoperator_meta}.{policy_keys.TYPE}'] == policy_keys.TELEOPERATOR
+    assert episode.static[f'{teleoperator_meta}.{policy_keys.LICENSE}'] == 'cc-by-4.0'
+
+
+def test_a_press_from_the_episode_before_is_not_new_in_the_next_episode_of_the_teleoperator(episode_harness):
+    h = episode_harness
+    console_out, console_in = h.world.local_pipe()
+    console = pimm.ControlSystemReceiver[dict](Passive())
+    console._bind(console_in)
+    teleoperator = Teleoperator(console, 'cc-by-4.0')
+    h.observation.emit(1)
+    console_out.emit({MOTOR: 50, policy_keys.HELPER_TAKE_OVER: 3})
+    _until_answered(h, h.caller(Rollout(Task('test', 1.0), EndAfter(calls=2), h.dataset, teleoperator)))
+    policy = EndAfter(calls=4)
+    answer = h.caller(Rollout(Task('test', 1.0), policy, h.dataset, teleoperator))
+    while policy.calls == 0:
+        next(h.loop)
+    console_out.emit({MOTOR: 60, policy_keys.HELPER_TAKE_OVER: 3})
+    _until_answered(h, answer)
+    _, second = h.dataset.episodes
+    assert _control_records(second)[policy_keys.CONTROL_SOURCE] == [(POLICY, 0)]
+
+
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
     h = episode_harness
 
@@ -2361,9 +2566,11 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
     episode = LocalDataset(tmp_path)[0]
     commands = episode[MOTOR]
     assert list(commands.values()) == list(range(5))
-    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
     assert list(commands.timestamps(EMITTED_WORLD)) == [0] * 5
     assert np.all(np.diff(commands.timestamps(EMITTED_WALL)) > 0)
+    # Each step has its own number, also when the steps have one time.
+    assert list(commands.timestamps(HARNESS_STEP)) == [0, 1, 2, 3, 4]
     assert len(episode[POSITION]) == 1
 
 
@@ -2404,8 +2611,10 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     assert [data for name, data, _ in episode.records if name == eval_keys.INSTRUCTION] == ['move']
     inputs_and_commands = [data.tolist() for name, data, _ in episode.records if name != eval_keys.INSTRUCTION]
     assert inputs_and_commands == [[10], [1], [20], [2]]
+    steps = [(data.tolist(), ts[HARNESS_STEP]) for name, data, ts in episode.records if name in (POSITION, MOTOR)]
+    assert steps == [([10], 0), ([1], 0), ([20], 1), ([2], 1)]
     for name, _, ts in episode.records:
-        expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+        expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
         if name == POSITION:
             expected |= {RECEIVED_WALL, RECEIVED_WORLD}
             assert ts[HARNESS_WORLD] == ts[RECEIVED_WORLD]
@@ -2414,6 +2623,35 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
             assert ts[HARNESS_WORLD] == ts[EMITTED_WORLD]
             assert ts[HARNESS_WALL] == ts[EMITTED_WALL]
         assert set(ts) == expected
+
+
+def test_an_input_that_the_harness_reads_between_two_steps_goes_with_the_next_step(episode_harness):
+    h = episode_harness
+    calls = []
+
+    class Move(Policy):
+        def run(self, runtime):
+            obs = yield
+            while True:
+                calls.append(obs[POSITION])
+                obs = yield Step({MOTOR: len(calls)}, runtime.time_ns + 5_000_000)
+
+    h.observation.emit(10)
+    answer = h.caller(Rollout(Task('move', None), Move(), h.dataset))
+    next(h.loop)
+    h.world.clock.advance_to_ns(1_000_000)
+    h.observation.emit(20)
+    h.world.clock.advance_to_ns(2_000_000)
+    next(h.loop)
+    h.world.clock.advance_to_ns(5_000_000)
+    next(h.loop)
+    assert not answer.done()
+    assert calls == [10, 20]
+    records = h.dataset.episodes[0].records
+    positions = [(data, ts[HARNESS_WORLD], ts[HARNESS_STEP]) for name, data, ts in records if name == POSITION]
+    assert positions == [(10, 0, 0), (20, 2_000_000, 1)]
+    commands = [(ts[HARNESS_WORLD], ts[HARNESS_STEP]) for name, _, ts in records if name == MOTOR]
+    assert commands == [(0, 0), (5_000_000, 1)]
 
 
 def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_harness, tmp_path):
@@ -2471,10 +2709,10 @@ def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name)
         assert timestamps[RECEIVED_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
         assert timestamps[RECEIVED_WALL] == original_time[RECEIVED_WALL]
         assert message.time is original_time
-        assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
+        assert not {HARNESS_WORLD, HARNESS_WALL, HARNESS_STEP} & set(message.time)
 
 
-@pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL])
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL, HARNESS_STEP])
 def test_producer_cannot_overwrite_harness_recording_timestamps(episode_harness, timeline):
     h = episode_harness
     h.observation.emit(1, time=pimm.Time(**{timeline: 123}))
@@ -2556,9 +2794,9 @@ def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     assert serialized[keys.STATUS_SUFFIX] is status
 
 
-def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, commands=None):
-    """Run one episode of ``policy`` for ``ticks`` world ticks on a robot embodiment that reports the poses
-    ``static_meta`` states, and whose arm publishes ``robot_meta`` and stands at ``[0.1, 0.2, 0.3]``. Append each
+def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, commands=None, helper=None):
+    """Run one episode of ``policy`` and ``helper`` for ``ticks`` world ticks on a robot embodiment that reports the
+    poses ``static_meta`` states, and whose arm publishes ``robot_meta`` and stands at ``[0.1, 0.2, 0.3]``. Append each
     robot command the rig gets to ``commands``."""
     with pimm.World(virtual_time=True) as world:
         device = Passive()
@@ -2588,7 +2826,7 @@ def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, com
         loop = world.start([harness, device])
         try:
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
-            answer = caller(Rollout(Task('move', None), policy, None))
+            answer = caller(Rollout(Task('move', None), policy, None, helper))
             for _ in range(ticks):
                 next(loop)
             done.emit({eval_keys.SUCCESS: True})
@@ -2641,6 +2879,74 @@ def test_a_policy_that_states_only_the_frame_of_the_pose_it_reads_fails_at_its_f
         run_robot_rollout(policy, commands=commands).result()
     assert len(policy.observations) == 1
     assert commands == []
+
+
+class FramedHelper(Helper):
+    """A ``Helper`` that states ``frames`` as its ``EE_FRAMES``."""
+
+    def __init__(self, frames, **kwargs):
+        super().__init__(meta=ee_frames_entry(frames), **kwargs)
+
+
+def test_each_source_observes_only_the_poses_that_it_states():
+    policy, helper = FramedPolicy(RIG_FRAMES), Helper(commands=lambda call: {})
+    assert run_robot_rollout(policy, helper=helper).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE in policy.observations[0]
+    assert keys.EE_POSE not in helper.observations[0]
+    assert keys.JOINTS in helper.observations[0]
+    helper = FramedHelper(RIG_FRAMES, commands=lambda call: {})
+    assert run_robot_rollout(StubPolicy(command=JointPosition(positions=np.zeros(7))), helper=helper).result()
+    assert keys.EE_POSE in helper.observations[0]
+
+
+class RuntimeFramedHelper(Helper):
+    """A ``Helper`` whose run writes ``frames`` as its ``EE_FRAMES`` to its runtime as it starts, as a remote run
+    does."""
+
+    def __init__(self, frames, **kwargs):
+        super().__init__(**kwargs)
+        self.frames = frames
+
+    def run(self, runtime):
+        for name, value in ee_frames_entry(self.frames).items():
+            runtime.set_metadata(name, value)
+        return super().run(runtime)
+
+
+def test_a_helper_whose_run_states_its_frames_on_its_runtime_observes_the_poses_and_keeps_its_metadata(tmp_path):
+    helper = RuntimeFramedHelper(RIG_FRAMES, commands=lambda call: {})
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    assert run_robot_rollout(policy, helper=helper).result()[eval_keys.TERMINATED] is True
+    assert keys.EE_POSE in helper.observations[0]
+    assert keys.EE_POSE not in policy.observations[0]
+
+
+@pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
+def test_a_helper_that_states_no_frames_fails_at_its_first_pose_command(command):
+    helper = Helper(commands=lambda call: {keys.ROBOT_COMMAND: command})
+    with pytest.raises(PolicyCommandError, match=f'The teleoperator sends a pose command .*{roboarm_keys.EE_FRAMES}'):
+        run_robot_rollout(FramedPolicy(RIG_FRAMES), helper=helper).result()
+
+
+def test_the_teleoperator_states_the_frames_of_its_console_as_a_policy_does():
+    console = pimm.ControlSystemReceiver[dict](Passive())
+    assert Teleoperator(console, 'cc-by-4.0', RIG_FRAMES).meta() == {
+        policy_keys.TYPE: TELEOPERATOR,
+        policy_keys.LICENSE: 'cc-by-4.0',
+        **ee_frames_entry(RIG_FRAMES),
+    }
+    assert roboarm_keys.EE_FRAMES not in Teleoperator(console, 'cc-by-4.0').meta()
+
+
+@pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
+def test_a_helper_that_states_the_frame_of_the_commanded_pose_drives_the_rig_after_take_over(command):
+    presses = {2: {policy_keys.HELPER_TAKE_OVER: 1}}
+    helper = FramedHelper(RIG_FRAMES, presses=presses, commands=lambda call: {keys.ROBOT_COMMAND: command})
+    policy = StubPolicy(command=JointPosition(positions=np.zeros(7)))
+    commands = []
+    assert run_robot_rollout(policy, ticks=200, commands=commands, helper=helper).result()
+    assert commands[0] == policy.command
+    assert commands[1:] and all(sent == command for sent in commands[1:])
 
 
 class ArmPolicy(FramedPolicy):
@@ -2867,7 +3173,14 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     run = runtime.start(Slow())
     try:
         assert (
-            h.harness._step(Task('test', None), frozenset(), frozenset(), runtime, run, None, _GcSteps(h.harness._gc))
+            h.harness._step(
+                Task('test', None),
+                runtime,
+                _Source(policy_keys.POLICY_SOURCE, run, frozenset(), frozenset()),
+                None,
+                None,
+                _GcSteps(h.harness._gc),
+            )
             == expected_ns
         )
     finally:
@@ -2902,9 +3215,8 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(
-                Task('move', None), frozenset(), frozenset(RIG_FRAMES), runtime, run, None, _GcSteps(harness._gc)
-            )
+            source = _Source(policy_keys.POLICY_SOURCE, run, frozenset(RIG_FRAMES), frozenset())
+            harness._step(Task('move', None), runtime, source, None, None, _GcSteps(harness._gc))
         finally:
             runtime.close()
             run.close()
