@@ -64,6 +64,18 @@ def arm_channel(channel: str, arm: str | None) -> str:
     return channel if arm is None else f'{channel}.{arm}'
 
 
+def arm_key(key: str, arm: str | None) -> str:
+    """``key`` for ``arm``: ``arm_channel`` of its channel, the part of ``key`` before the first dot."""
+    channel, dot, rest = key.partition('.')
+    return f'{arm_channel(channel, arm)}{dot}{rest}'
+
+
+def frame_keys(arms: tuple[str | None, ...]) -> tuple[str, ...]:
+    """The keys of each arm of ``arms`` that a change of the EE frame moves: the measured pose, the commanded pose and
+    the command."""
+    return tuple(arm_key(key, arm) for arm in arms for key in (EE_POSE, TARGET_EE_POSE, ROBOT_COMMAND))
+
+
 # The arms of a one-arm embodiment: its channels carry no arm name.
 ONE_ARM: tuple[str | None, ...] = (None,)
 # The arms of a two-arm embodiment, left first.

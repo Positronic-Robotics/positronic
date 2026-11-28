@@ -73,7 +73,10 @@ class EpisodeDictDataset(torch.utils.data.Dataset):
         episode = self.dataset[idx]
         timeline = recording_timeline(episode.timelines)
         start, finish = episode.bounds(timeline)
-        timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, finish, 1e9 / self.fps, dtype=np.int64)]
+        # An episode of one step, such as a DAgger correction of one step, starts and finishes at one time. It gives one
+        # frame, not none.
+        end = max(finish, start + 1)
+        timestamps = [Time(**{timeline: ts}) for ts in np.arange(start, end, 1e9 / self.fps, dtype=np.int64)]
         sampled = episode.time[timestamps]
         # A DataLoader worker pickles its result, and the lazy values of a signal can hold a local function. Indexing up
         # to `len` lets a decode error of a frame reach the caller.

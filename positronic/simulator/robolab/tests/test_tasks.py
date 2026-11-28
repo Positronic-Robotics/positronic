@@ -105,6 +105,20 @@ def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_bu
     assert override[robolab_keys.TOKEN_EPISODE_LENGTH_S] == 240.0
 
 
+def test_the_reset_token_carries_a_scene_state_only_when_the_params_give_one():
+    adapter = RobolabYamAdapter({keys.EXTERIOR_IMAGE: robolab_keys.TOP_CAMERA})
+    params = {
+        eval_keys.TASK: 'BananaInBowlTask',
+        robolab_keys.INSTRUCTION_TYPE: 'default',
+        robolab_keys.CAMERAS: robolab_keys.TOP_AND_WRISTS,
+    }
+    banana = {robolab_keys.STATE_ROOT_POSE: [0.5, -0.1, 0.02, 1.0, 0.0, 0.0, 0.0]}
+    state = {robolab_keys.STATE_RIGID_OBJECTS: {'banana': banana}}
+
+    assert robolab_keys.TOKEN_STATE not in adapter.reset_token(params)
+    assert adapter.reset_token({**params, robolab_keys.STATE: state})[robolab_keys.TOKEN_STATE] == state
+
+
 @pytest.mark.parametrize('cameras', list(robolab_keys.CAMERA_SETS))
 def test_each_reset_token_names_the_camera_set_of_its_eval(listing, cameras):
     trials = list(robolab_cfg.benchmark.override(cameras=cameras).instantiate().tasks())

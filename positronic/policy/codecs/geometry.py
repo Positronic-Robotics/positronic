@@ -36,7 +36,7 @@ class ChangeEEFrame(CommandsPathCodec):
     def __init__(
         self,
         frame: EEFrame,
-        keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
+        keys: tuple[str, ...] = obs_keys.frame_keys(obs_keys.ONE_ARM),
         *,
         commands_path: tuple[str | int, ...] | None = None,
     ):

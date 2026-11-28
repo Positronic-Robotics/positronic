@@ -20,8 +20,7 @@ import pyarrow.parquet as pq
 import tqdm
 
 from positronic.dataset.dataset import Dataset
-from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
-from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.local_dataset import OWN_META_KEYS, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
 from positronic.dataset.vector import parquet_write_options
@@ -42,7 +41,8 @@ def migrate_dataset(source: Dataset, dest_path: str, profile=None) -> int:
     with LocalDatasetWriter(resolved_path) as writer:
         for episode in tqdm.tqdm(source, total=len(source), desc=f'Migrating → {dest_path}'):
             meta = episode.meta
-            with writer.new_episode(created_ts_ns=meta.get(META_CREATED_TS_NS), uid=meta.get(META_UID)) as ew:
+            given = {name: meta[name] for name in meta if name not in OWN_META_KEYS}
+            with writer.new_episode(meta=given) as ew:
                 for key, value in episode.static.items():
                     ew.set_static(key, value)
 

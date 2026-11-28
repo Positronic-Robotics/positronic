@@ -47,6 +47,7 @@ class RobolabAdapter(WireCommandAdapter):
                 if robolab_keys.EPISODE_LENGTH_OVERRIDE in params
                 else {}
             ),
+            **({robolab_keys.TOKEN_STATE: params[robolab_keys.STATE]} if robolab_keys.STATE in params else {}),
         }
 
     @abstractmethod

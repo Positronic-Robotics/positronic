@@ -125,6 +125,10 @@ class WaitResult:
     completed: tuple[Answer[Any], ...] = ()
 
 
+# The default bound on the local calls of one execution.
+DEFAULT_MAX_IN_FLIGHT = 16
+
+
 class ExecutionRuntime(Runtime):
     """Own workers and a call limit while sharing the enclosing runtime's episode state."""
 
@@ -173,6 +177,22 @@ class ExecutionRuntime(Runtime):
         self._workers.shutdown(wait=True, cancel_futures=True)
 
 
+class SourceRuntime(ExecutionRuntime):
+    """An ``ExecutionRuntime`` with episode metadata of its own: the runtime of a second top-level source, on the
+    clock of the enclosing runtime."""
+
+    def __init__(self, runtime: Runtime, *, max_in_flight: int = DEFAULT_MAX_IN_FLIGHT):
+        super().__init__(runtime, max_in_flight=max_in_flight)
+        self._metadata: dict[str, Any] = {}
+
+    def set_metadata(self, name: str, value: Any) -> None:
+        self._metadata[name] = deepcopy(value)
+
+    def metadata_snapshot(self) -> dict[str, Any]:
+        """Return an independent copy of the episode metadata of this source."""
+        return deepcopy(self._metadata)
+
+
 class Executor(Runtime):
     """Run submitted functions on worker threads and expose their answers on ``clock``.
 
@@ -187,7 +207,12 @@ class Executor(Runtime):
     """
 
     def __init__(
-        self, clock: Callable[[], int], *, simulated: bool, charge_inference_time: bool, max_in_flight: int = 16
+        self,
+        clock: Callable[[], int],
+        *,
+        simulated: bool,
+        charge_inference_time: bool,
+        max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
     ) -> None:
         self._clock = clock
         self._simulated = simulated

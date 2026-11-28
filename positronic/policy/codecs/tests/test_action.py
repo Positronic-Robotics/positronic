@@ -21,6 +21,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,
+    LEROBOT_FEATURES,
     BimanualCartesianAction,
     BimanualJointsAction,
     CartesianDeltaAction,
@@ -581,6 +582,25 @@ def test_bimanual_cartesian_action_restores_from_its_wire_spec_and_encodes_what_
     decoded = restored.decode({ACTION: TWO_ARM_POSE_ACTION})
     encoded = BimanualCartesianAction(commands_path=('plan',)).encode({'plan': [decoded]})
     np.testing.assert_allclose(encoded['plan'][0][ACTION], TWO_ARM_POSE_ACTION, atol=1e-6)
+
+
+def test_bimanual_cartesian_action_trains_on_the_commanded_pose_and_the_target_grip_of_each_arm():
+    quat = Rotation.Representation.QUAT
+    samples = {
+        obs_keys.arm_key(obs_keys.TARGET_EE_POSE, obs_keys.LEFT_ARM): LEFT_POSE.as_vector(quat),
+        LEFT_GRIP: 1.0,
+        obs_keys.arm_key(obs_keys.TARGET_EE_POSE, obs_keys.RIGHT_ARM): RIGHT_POSE.as_vector(quat),
+        RIGHT_GRIP: 0.25,
+    }
+    episode = EpisodeContainer({
+        name: DummySignal([[100], [200]], [value, value], timelines=(HARNESS_WORLD,)) for name, value in samples.items()
+    })
+    encoder = BimanualCartesianAction().training_encoder
+
+    rows = encoder(episode).time[[Time(**{HARNESS_WORLD: ts}) for ts in (100, 200)]]
+
+    np.testing.assert_allclose(rows[ACTION], [TWO_ARM_POSE_ACTION, TWO_ARM_POSE_ACTION], atol=1e-6)
+    assert encoder.meta[LEROBOT_FEATURES][ACTION]['shape'] == (len(TWO_ARM_POSE_ACTION),)
 
 
 def test_bimanual_cartesian_action_refuses_to_encode_a_joint_target():
