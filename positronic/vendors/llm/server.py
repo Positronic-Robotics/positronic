@@ -39,8 +39,6 @@ class _Session:
         self._resources = ExitStack()
         self.client = self._resources.enter_context(policy.endpoint.open())
         self.metadata: dict[str, Any] = {}
-        if self.client.api_key_fingerprint is not None:
-            self.metadata[policy_keys.API_KEY_FINGERPRINT] = self.client.api_key_fingerprint
         self.conversation = Conversation(policy, self.metadata.__setitem__)
         self.pending: deque[list[dict[str, Any]]] = deque()
         self.end: PolicyEnd | None = None
@@ -125,6 +123,8 @@ class LLMModel(Model):
 
     def _write(self, session_id: str, session: _Session) -> None:
         record = {**self._policy.meta(), **session.metadata, policy_keys.SESSION_ID: session_id}
+        if session.client.api_key_fingerprints:
+            record[policy_keys.API_KEY_FINGERPRINTS] = list(session.client.api_key_fingerprints)
         path = self._sessions_dir / f'{session_id}.json'
         pending = path.with_suffix('.json.tmp')
         pending.write_text(json.dumps(record))
