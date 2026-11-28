@@ -1115,7 +1115,7 @@ def test_a_pull_request_number_json_wrote_as_a_float_is_the_same_number():
     [
         pytest.param({gmm.MCP_PULL_NUMBER: 566}, GUARDED, same_name, 'Pass `owner` and `repo`', id='no-repository'),
         pytest.param(
-            {'owner': 'old-owner', 'repo': 'old-name', gmm.MCP_PULL_NUMBER: 566},
+            {gmm.MCP_OWNER: 'old-owner', gmm.MCP_REPO: 'old-name', gmm.MCP_PULL_NUMBER: 566},
             GUARDED,
             old_name,
             f'as `{GUARDED_SLUG}`',
