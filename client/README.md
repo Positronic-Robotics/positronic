@@ -400,9 +400,12 @@ is in. The platform presents `Authorization: Bearer <token>` to that endpoint on
 token when the run ends. The token is 1 to 4096 characters of visible ASCII, and the last line
 ending of the file comes off. A plan file never states the token itself. `plan_with_secrets_read`
 reads the file, and the request carries the token as `auth_token`. A `served` or an `image`
-endpoint takes no token, and neither do the `websocket_unix` and `modal_websocket_tls` wires: no session
-on them carries the endpoint's headers. On the `websocket`, `grpc` and `roboarena` wires, which have no TLS, the
-token travels in clear.
+endpoint takes no token, and neither does the `websocket_unix` wire: no session on it carries the
+endpoint's headers. On the `modal_websocket_tls` wire, the token goes on each Modal session start and
+end, and each session call carries only its session token. The wire drops the token when the last
+Modal session on that endpoint ends. A session that no call uses ends after its idle timeout. For a
+Modal Server that requires proxy auth, the file holds a proxy token as `<token-id>.<token-secret>`. On the `websocket`, `grpc` and
+`roboarena` wires, which have no TLS, the token travels in clear.
 
 ```yaml
 endpoints:

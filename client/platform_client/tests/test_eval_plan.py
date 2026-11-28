@@ -1177,13 +1177,8 @@ def test_a_plan_with_no_token_dumps_no_token_field(context: dict | None):
         an_image_endpoint(),
         {'name': 'baseline'},
         {'name': 'local', 'wire': 'websocket_unix', 'address': {'uds': '/run/policy.sock', 'path': SESSION}},
-        {
-            'name': 'modal',
-            'wire': 'modal_websocket_tls',
-            'address': {'host': 'h.example', 'port': 443, 'path': SESSION},
-        },
     ],
-    ids=['served', 'image', 'bare label', 'websocket_unix', 'modal_websocket_tls'],
+    ids=['served', 'image', 'bare label', 'websocket_unix'],
 )
 def test_a_token_is_refused_where_the_platform_cannot_present_it(token_file: Path, entry: dict):
     with pytest.raises(ValidationError, match='bearer token') as caught:
@@ -1205,6 +1200,17 @@ def test_a_token_is_refused_where_the_platform_cannot_present_it(token_file: Pat
 def test_a_token_is_taken_on_a_wire_with_no_tls(token_file: Path, wire: str, address: dict):
     entry = {'name': 'baseline', 'wire': wire, 'address': address, 'auth_token_file': str(token_file)}
     assert EndpointFile.model_validate(entry).states_a_token
+
+
+def test_a_token_is_taken_on_the_modal_wire_whose_session_start_carries_it(token_file: Path):
+    entry = {
+        'name': 'modal',
+        'wire': 'modal_websocket_tls',
+        'address': {'host': 'h.example', 'port': 443, 'path': SESSION},
+    }
+    assert EndpointFile.model_validate({**entry, 'auth_token_file': str(token_file)}).states_a_token
+    token = Endpoint.model_validate({**entry, 'auth_token': A_TOKEN}).auth_token
+    assert token is not None and token.get_secret_value() == A_TOKEN
 
 
 def test_a_plan_file_refuses_a_token_it_states():
