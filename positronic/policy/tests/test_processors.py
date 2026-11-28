@@ -1030,7 +1030,7 @@ def test_a_chunk_that_opens_with_an_empty_waypoint_counts_the_hold_to_its_first_
 
 
 @pytest.mark.parametrize('level', list(telemetry.Level))
-def test_each_hold_records_a_span_as_long_as_the_hold_at_each_level(execution, tmp_path, level):
+def test_hold_spans_on_a_simulated_clock_lie_inside_the_episode_and_sum_to_the_hold_total(execution, tmp_path, level):
     runtime, clock = execution
     inner = Mock(
         send=Mock(
@@ -1042,18 +1042,24 @@ def test_each_hold_records_a_span_as_long_as_the_hold_at_each_level(execution, t
             ]
         )
     )
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level):
+    with (
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level),
+        telemetry.span(telemetry_keys.SPAN_EPISODE),
+    ):
         run = runtime.start(TrajectoryPlayer(), inner)
         try:
+            # The world clock runs one second while the wall clock runs a few milliseconds.
             for now_ms in (0, 100, 200, 300, 450, 550, 600, 700, 800, 1000):
                 clock.advance_to_ns(now_ms * 1_000_000)
                 run.send({})
         finally:
             run.close()
-    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    [episode] = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     holds = [s for s in spans if s.name == telemetry_keys.SPAN_WAYPOINTS_HOLD]
+    assert all(episode.start_ns <= s.start_ns <= s.end_ns <= episode.end_ns for s in holds)
     # The third chunk starts where the second ends, so it ends no hold.
-    assert [s.end_ns - s.start_ns for s in holds] == [150_000_000, 100_000_000]
+    assert [s.attrs[telemetry_keys.ATTR_HOLD_MS] for s in holds] == [150.0, 100.0]
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 250.0
 
 
@@ -1075,7 +1081,7 @@ def test_a_hold_span_under_a_schedule_ends_at_the_first_command_of_the_next_answ
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     [hold] = [s for s in spans if s.name == telemetry_keys.SPAN_WAYPOINTS_HOLD]
     # The plan ends at 100 ms, and the answer of call 1 sends its first command at 130 ms.
-    assert hold.end_ns - hold.start_ns == 30_000_000
+    assert hold.attrs[telemetry_keys.ATTR_HOLD_MS] == 30.0
 
 
 @pytest.mark.parametrize(

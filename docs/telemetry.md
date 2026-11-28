@@ -118,7 +118,7 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold; at the `call` level, the `episode` | — | one hold of the arm between two chunks |
+| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold; at the `call` level, the `episode` | `hold.ms` | one hold of the arm between two chunks |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
@@ -199,10 +199,13 @@ count, and a hold that the episode end cuts does not count. The hold share of a 
 `hold_sum_ms / 1000 / episode.virtual_s`.
 
 When the player records its stats (`record_stats`), each hold longer than zero also records a `waypoints.hold`
-span. The span ends at the wall time of the round that sends the first command of the next chunk. Its length is the hold on the clock of the policy runtime, so the lengths
-of the spans add up to `hold_sum_ms`. On a real rig this clock is the monotonic clock of the host. In a simulation it
-is the world clock, so the span has the simulated length of the hold. The span carries no id of the call that made
-the next chunk, so an analysis joins a hold to its `policy.submit` span by time. A hold comes at most once per chunk,
+span. Both bounds of the span are wall times. The span starts at the first player round at or after the end of the
+plan, and ends at the round that sends the first command of the next chunk. Its `hold.ms` is the length of the hold
+on the clock of the policy runtime, so the `hold.ms` values add up to `hold_sum_ms`. On a real rig this clock is the
+monotonic clock of the host, and the span can be shorter than `hold.ms` by the wake delay of one round. In a simulation
+it is the world clock, so `hold.ms` is the simulated length of the hold, and the span is the wall time that the hold
+took. The span carries no id of the call that made the next chunk, so an analysis joins a hold to its
+`policy.submit` span by time. A hold comes at most once per chunk,
 so the span records at the `call` level.
 
 An inference schedule states its settings in its metadata, so the `episode` span carries them under

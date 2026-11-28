@@ -315,8 +315,9 @@ class TrajectoryPlayer(Policy):
 
         A hold is the time from the end of the plan to the first command of the next chunk. The arm keeps its last
         target during a hold, also through a waypoint with no commands. The wait for the first chunk and a hold that
-        the episode end cuts do not count. Each hold longer than zero records a span that ends on the wall clock when
-        the next chunk sends its first command.
+        the episode end cuts do not count. Each hold longer than zero records a span on the wall clock. It starts at
+        the first round at or after the end of the plan, and ends at the round that sends the next chunk. Its
+        ``hold.ms`` is the hold on the runtime clock.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -329,6 +330,8 @@ class TrajectoryPlayer(Policy):
             # The end of the chunk that plays now, and of the chunk whose first round comes next.
             self._played_end_ns: int | None = None
             self._starting_chunk_end_ns: int | None = None
+            # The wall time of the first round at or after the end of the plan.
+            self._hold_start_wall_ns: int | None = None
             self._hold_sum_ns = 0
             self._hold_max_ns = 0
 
@@ -348,6 +351,8 @@ class TrajectoryPlayer(Policy):
 
         def count_round(self, planned: int | None, now_ns: int, queued: int, *, sent: bool) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``; ``sent`` if any went out."""
+            if self._hold_start_wall_ns is None and self._played_end_ns is not None and now_ns >= self._played_end_ns:
+                self._hold_start_wall_ns = time.time_ns()
             if planned is None and self._round_due_ns is None:
                 return
             if planned is not None:
@@ -370,10 +375,13 @@ class TrajectoryPlayer(Policy):
                 hold_ns = max(0, now_ns - self._played_end_ns)
                 self._hold_sum_ns += hold_ns
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
-                if hold_ns > 0:
-                    end_ns = time.time_ns()
-                    telemetry.record_span(telemetry_keys.SPAN_WAYPOINTS_HOLD, end_ns - hold_ns, end_ns)
+                if hold_ns > 0 and self._hold_start_wall_ns is not None:
+                    attrs = {telemetry_keys.ATTR_HOLD_MS: hold_ns / 1e6}
+                    telemetry.record_span(
+                        telemetry_keys.SPAN_WAYPOINTS_HOLD, self._hold_start_wall_ns, time.time_ns(), **attrs
+                    )
             self._played_end_ns = max(self._starting_chunk_end_ns, now_ns)
+            self._hold_start_wall_ns = None
             self._starting_chunk_end_ns = None
 
         def _write(self, queued: int) -> None:
