@@ -114,7 +114,7 @@ nebius compute filesystem create \
 # --volume needs the filesystem ID, not its name. Grab it and export it:
 nebius compute filesystem list --parent-id "$PARENT_ID" --format json \
   | jq -r '.items[] | select(.metadata.name=="positronic-serverless-cache") | .metadata.id'
-# → computefilesystem-...   (pass via NEBIUS_CACHE_FS, or rely on the script default)
+# → computefilesystem-...   (export it as NEBIUS_CACHE_FS; the scripts have no default)
 ```
 
 The filesystem is RWX — many jobs/endpoints attach it concurrently. pos3's own cache
@@ -499,7 +499,7 @@ project — **external users must override them** with their own project + subne
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
 | `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` and `eval.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) injected as the container's `AUTH_TOKEN`. There is no open-endpoint mode. See [Authenticated inference](#authenticated-inference). |
 | `NEBIUS_HF_TOKEN_SECRET` | `huggingface-read-token` | GR00T training and serving only. MysteryBox secret name with payload key `HF_TOKEN`. |
-| `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
+| `NEBIUS_CACHE_FS` | none, required | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. A script that mounts it stops before it creates anything when this is unset. See [Shared cache filesystem](#shared-cache-filesystem). |
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 

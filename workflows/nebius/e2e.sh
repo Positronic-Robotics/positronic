@@ -62,6 +62,8 @@ if [ "$VENDOR" != "gr00t" ]; then
   CONVERT_CONFIG=("--dataset.dataset=${DATASET}" "--dataset.codec=@${CODEC}")
 fi
 
+require_cache_fs
+
 mkdir -p "$LOG_ROOT"
 DATASET_DIR="$S3_BASE/$VENDOR/dataset/"
 CKPT_DIR="$S3_BASE/$VENDOR/checkpoints/"

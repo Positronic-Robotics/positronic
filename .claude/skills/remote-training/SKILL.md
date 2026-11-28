@@ -110,7 +110,7 @@ Defaults point at the Positronic-internal project; override via env when needed:
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox name for WandB key. Set empty to disable wandb. |
 | `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | MysteryBox name (payload key `AUTH_TOKEN`) for the token gating served endpoints. No open-endpoint mode. |
-| `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared cache filesystem **ID** (mounted RW at `/cache`) |
+| `NEBIUS_CACHE_FS` | none, required | Shared cache filesystem **ID** (mounted RW at `/cache`) |
 
 ## Pipeline
 

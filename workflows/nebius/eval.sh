@@ -58,6 +58,8 @@ EOF
   exit 1
 fi
 
+require_cache_fs
+
 JOB_NAME="robolab-eval-$(date +%Y%m%d-%H%M%S)"
 EVAL_ARGS="run --python 3.13 positronic eval run $*"
 

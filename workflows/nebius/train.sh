@@ -98,6 +98,8 @@ JOB_NAME="${VENDOR//_/-}-train-$(date +%Y%m%d-%H%M%S)"
 
 TRAIN_ARGS="${UV_ARGS} ${EXTRA}python -m positronic.vendors.${VENDOR}.train ${NEW_ARGS[*]}"
 
+require_cache_fs
+
 WANDB_FLAGS=()
 if [ -n "$WANDB_SECRET" ]; then
   WANDB_FLAGS+=(--env-secret "WANDB_API_KEY=$WANDB_SECRET")
