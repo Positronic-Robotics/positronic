@@ -120,6 +120,12 @@ comes also when the window is not open, and the service closes it when the wait 
 plays the sound with `paplay`. The window manager puts the dialog, for example in the top left corner.
 `--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
 
+A run can open a warm-up session before its episodes, with the session parameter `warm_up=true`. A warm-up session
+starts no trial and does not wait for Ready. It opens at once. Only the dialog shows the heads-up: "A run with a teleop
+episode is starting. The episode comes later." The window, the headset and the phone page show "Waiting for a trial".
+The heads-up stays until a trial waits for Ready, or for 30 min at most (`--heads_up_limit`, in seconds). A press of B
+in the heads-up does nothing.
+
 A Linux service that runs as a user other than the user at the screen shows the dialog only with `DISPLAY=:0` and an X
 grant from the session at the screen: `xhost +SI:localuser:<user>`. The sound of `paplay` then plays nowhere, because
 only the user at the screen has the sound output.
@@ -367,8 +373,9 @@ and vary how you come to the object.
   A Ctrl-C during the wait closes the session, and the service stops the wait.
 - The service serves one session at a time, and refuses a second one. Each trial opens a new session.
 - The scripted headset sends only the right controller, so it does the trials of one-arm sessions only.
-- When the connection drops before the first frame reply, the client opens the session again. The trial goes on with
-  no second Ready. The service keeps such a trial for 45 s.
+- When the connection drops after the first frame request and before the second one, the client opens the session
+  again. The trial goes on with no second Ready. The service keeps such a trial for 45 s. A session that ends before
+  its first frame request ends its trial at once, so the next session waits for Ready.
 - Each frame request carries the camera images, so the images go at the rate of the frames, about the rate of the
   headset. A slow network can feel it.
 - When the service is down, a trial fails after the connect deadline of the client (900 s).

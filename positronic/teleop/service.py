@@ -206,6 +206,8 @@ class Phase(StrEnum):
     """Where the service is in a trial."""
 
     IDLE = 'idle'
+    # A run with a teleop episode started, and its trial does not wait for Ready yet.
+    HEADS_UP = 'heads_up'
     READY_WAIT = 'ready_wait'
     RUNNING = 'running'
     ENDED = 'ended'
@@ -221,7 +223,7 @@ class TrialNotStarted(Exception):
 
 @dataclass(frozen=True)
 class TrialState:
-    """What the window on the station screen shows."""
+    """The trial that the service holds, and the count of the heads-ups that started."""
 
     phase: Phase
     task: str
@@ -229,6 +231,8 @@ class TrialState:
     cameras: tuple[str, ...]
     # A sample that tracks a controller came within the silence limit
     tracked: bool
+    # The count of the heads-ups that started
+    heads_ups: int
 
 
 # The use of Y on the left controller, at the bottom of the view
@@ -296,7 +300,8 @@ class TeleopService:
 
     ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
     When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
-    preparation of a session waits for Ready or Cancel up to ``ready_limit``.
+    preparation of a session waits for Ready or Cancel up to ``ready_limit``. A warm-up session opens at once and starts
+    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -321,8 +326,10 @@ class TeleopService:
         auth_token: str | None = None,
         cameras: Sequence[str] = (),
         controller_axes: geom.Rotation | None = CONTROLLER_AXES,
+        heads_up_limit: float = 30 * 60.0,
     ):
-        for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
+        limits = (('ready_limit', ready_limit), ('silence_limit', silence_limit), ('heads_up_limit', heads_up_limit))
+        for name, value in limits:
             check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
@@ -331,6 +338,8 @@ class TeleopService:
         # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
         self.controller_axes = controller_axes
         self.ready_limit = ready_limit
+        # The longest time of the heads-up of a run, so the heads-up of a run that stopped ends.
+        self.heads_up_limit = heads_up_limit
         self.silence_limit = silence_limit
         self._buttons = {
             RIGHT: ButtonMap(hold_sec, hold_threshold),
@@ -379,6 +388,9 @@ class TeleopService:
         # The `time.monotonic()` instant until which a new session resumes this trial, after its session dropped
         # before its first answer.
         self._resumable_until: float | None = None
+        # The `time.monotonic()` instant at which the heads-up of a run goes.
+        self._heads_up_until: float | None = None
+        self._heads_ups = 0
         # A wait ends at once when the service stops.
         self._stopping = False
         self._wire: WebsocketWire | None = None
@@ -479,17 +491,17 @@ class TeleopService:
     @property
     def phase(self) -> Phase:
         with self._locked():
-            self._forget_an_old_dropped_trial()
+            self._forget_what_expired()
             return self._phase
 
     def _state(self) -> TrialState:
         """Hold the lock."""
-        self._forget_an_old_dropped_trial()
+        self._forget_what_expired()
         control = any(tracker.on for tracker in self._trackers.values())
         tracked = (
             self._tracked_at_ns is not None and time.monotonic_ns() - self._tracked_at_ns < self.silence_limit * 1e9
         )
-        return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
+        return TrialState(self._phase, self._task, control, tuple(self._images), tracked, self._heads_ups)
 
     def state(self) -> TrialState:
         with self._locked():
@@ -519,12 +531,15 @@ class TeleopService:
         self._events, self._connection_lost = [], set()
         self._task, self._trackers, self._images, self._trial_cameras = '', {}, {}, ()
         self._headset_camera, self._hold, self._frames, self._resumable_until = None, {}, 0, None
-        self._end = None
+        self._end, self._heads_up_until = None, None
 
-    def _forget_an_old_dropped_trial(self) -> None:
-        """Show no trial once no session can resume it. Hold the lock."""
-        if self._resumable_until is not None and time.monotonic() >= self._resumable_until:
+    def _forget_what_expired(self) -> None:
+        """Show no trial once no session can resume it, and no heads-up once it expired. Hold the lock."""
+        now = time.monotonic()
+        if self._resumable_until is not None and now >= self._resumable_until:
             self._clear_trial('no session resumed the dropped trial')
+        elif self._heads_up_until is not None and now >= self._heads_up_until:
+            self._clear_trial('the heads-up expired')
 
     def cameras(self) -> CameraState:
         with self._changed:
@@ -752,7 +767,7 @@ class TeleopService:
     def _text_of(self, snapshot: _ViewSnapshot, task: bool) -> ViewText:
         footer = (CAMERA_HINT,)
         match snapshot.state.phase:
-            case Phase.IDLE:
+            case Phase.IDLE | Phase.HEADS_UP:
                 return ViewText(('Waiting for a trial',), footer)
             case Phase.READY_WAIT:
                 return ViewText(('Human trial', 'B: Ready', 'Stick: Cancel'), footer)
@@ -781,13 +796,21 @@ class TeleopService:
                 return name
         return next(iter(self._trial_cameras), None)
 
+    def start_heads_up(self) -> None:
+        """Start the heads-up of a run that has a teleop episode, in place of the trial that the service kept."""
+        with self._locked():  # Field writes only: no reader sees the heads-up with the fields of the old trial.
+            self._clear_trial('a warm-up session starts')
+            self._set_phase(Phase.HEADS_UP, 'a warm-up session starts')
+            self._heads_up_until = time.monotonic() + self.heads_up_limit
+            self._heads_ups += 1
+
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
-        """Resume the trial whose session dropped before its first answer, as the next session of its client.
+        """Resume the trial whose session dropped after its first frame request, as the next session of its client.
 
         The client opens such a session again within its reconnect deadline, and the teleoperator pressed Ready already.
         """
         with self._locked():
-            self._forget_an_old_dropped_trial()
+            self._forget_what_expired()
             if self._resumable_until is None:
                 return ResumeOutcome.NO_DROPPED_TRIAL
             self._resumable_until, self._trial_cameras = None, settings.cameras
@@ -936,14 +959,16 @@ class TeleopService:
         return {ACTION: np.concatenate([np.append(pose.as_vector(QUAT), grip) for pose, grip in self._hold.values()])}
 
     def end_session(self) -> None:
-        """End the session of the trial. A trial that answered at most one frame stays for a client that opens its
-        session again, because the client cannot know that the one answer came."""
-        # TODO: `Session.close` does not tell how the session ended, so a clean end after at most one frame also keeps
-        #  the trial. A new session within `RESUME_LIMIT_SEC` then resumes it and skips Ready, so in UMI mode the robot
+        """End the session of the trial. A trial that answered one frame stays for a client that opens its session
+        again, because the client cannot know that the one answer came. A heads-up stays."""
+        # TODO: `Session.close` does not tell how the session ended, so a clean end after one frame also keeps the
+        #  trial. A new session within `RESUME_LIMIT_SEC` then resumes it and skips Ready, so in UMI mode the robot
         #  follows the hand at once. We think this is improbable. Fix it when it occurs, or when we think that it is
         #  more probable.
         with self._locked():
-            if self._phase is Phase.RUNNING and self._frames <= 1:
+            if self._phase is Phase.HEADS_UP:
+                return
+            if self._phase is Phase.RUNNING and self._frames == 1:
                 self._resumable_until = time.monotonic() + self.RESUME_LIMIT_SEC
                 self._log(f'The session ended. A new session can resume the trial for {self.RESUME_LIMIT_SEC} s')
                 return
@@ -1051,7 +1076,9 @@ class TeleopModel(Model):
             settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
+            if settings.warm_up:
+                self._service.start_heads_up()
+            elif self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
                 self._service.wait_for_ready(settings, self.preparation_cancelled)
         except BaseException:
             self._open = False
