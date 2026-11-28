@@ -74,6 +74,7 @@ def _server_connection(send: AsyncMock, receive: AsyncMock) -> websocket_wire.We
             'server': ('localhost', 8000),
             'subprotocols': [],
         },
+        {},
         receive,
         send,
         server_wire.ServedHostPort('localhost', 8000),

@@ -77,8 +77,6 @@ class SessionParams:
     ``cameras`` names the cameras that the client sends. ``headset_camera`` names the one that the headset shows;
     ``None`` is the first one. The client sends the camera images as JPEG at ``jpeg_quality``. With a
     ``video_bitrate`` in bits per second, it sends them as H.264 at that bit rate and ``video_fps`` in place of JPEG.
-    A ``warm_up`` session opens at once and starts no trial. It tells the service that a run with a teleop episode
-    starts.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
@@ -88,7 +86,6 @@ class SessionParams:
     headset_camera: str | None = None
     video_bitrate: int | None = None
     video_fps: int = 30
-    warm_up: bool = False
 
     def __post_init__(self) -> None:
         if self.operator_position is not None and not isinstance(self.operator_position, OperatorPosition):
@@ -102,8 +99,6 @@ class SessionParams:
         if self.video_bitrate is not None:
             check_positive_int(self.video_bitrate, 'video_bitrate')
         check_positive_int(self.video_fps, 'video_fps')
-        if not isinstance(self.warm_up, bool):
-            raise ValueError(f'warm_up must be true or false, got {self.warm_up!r}')
         if fields := {TASK, *self.arms.arm_fields()} & set(self.cameras):
             raise ValueError(f'a camera name must not be a field of a frame request, got {sorted(fields)}')
         if self.headset_camera is not None and self.headset_camera not in self.cameras:

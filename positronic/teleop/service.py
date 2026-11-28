@@ -1076,7 +1076,7 @@ class TeleopModel(Model):
             settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if settings.warm_up:
+            if self.preparing_warm_up:
                 self._service.start_heads_up()
             elif self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
                 self._service.wait_for_ready(settings, self.preparation_cancelled)

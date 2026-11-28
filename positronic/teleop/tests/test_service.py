@@ -1001,6 +1001,12 @@ def test_a_session_with_unknown_arms_is_refused_at_connect(service, socket_path)
         _client(socket_path, 'arms="BOTH"').new_session()
 
 
+def test_a_warm_up_parameter_is_refused_at_connect_as_an_unknown_parameter(service, socket_path):
+    with pytest.raises(RuntimeError, match="Unknown session parameters: \\['warm_up'\\]"):
+        _client(socket_path, 'warm_up=true').new_session()
+    assert service.phase is Phase.IDLE
+
+
 def test_a_session_with_a_jpeg_quality_out_of_range_is_refused_at_connect(service, socket_path):
     with pytest.raises(RuntimeError, match='jpeg_quality must be an integer between 0 and 100'):
         _client(socket_path, 'jpeg_quality=101').new_session()
@@ -1026,8 +1032,8 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(video_bitrate=0)
     with pytest.raises(ValueError, match='video_fps must be a positive integer'):
         session_query(video_fps=2.5)
-    with pytest.raises(ValueError, match='warm_up must be true or false'):
-        session_query(warm_up='yes')
+    with pytest.raises(TypeError, match='warm_up'):
+        session_query(warm_up=True)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -2583,7 +2589,7 @@ def test_a_session_that_ends_before_its_first_frame_ends_its_trial_at_once(servi
 
 def _warm_up(service: TeleopService, socket_path: Path, connect) -> None:
     """Open and close a warm-up session."""
-    connection = connect(socket_path, session_query(warm_up=True))
+    connection = connect(socket_path, headers={wire.SESSION_PURPOSE_HEADER: wire.WARM_UP_PURPOSE})
     connection.wait_open()
     assert service.phase is Phase.HEADS_UP
     connection.session.close()

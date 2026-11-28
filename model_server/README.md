@@ -78,6 +78,13 @@ opener as an error. A preparation whose opener left before it began does not run
 preparation ends after its opener left is closed. The client sends nothing before `ready`, so the server
 reads the connection during preparation, and sees at once that the opener closed it.
 
+A client marks a warm-up session with the session header `positronic-session-purpose: warm-up`
+(`positronic_wire.wire.SESSION_PURPOSE_HEADER` and `WARM_UP_PURPOSE`). Each wire reads the header, and the
+connection tells it as `ServerConnection.is_warm_up`. `Model.preparing_warm_up` is `True` while
+`prepare_session` prepares such a session, and `False` at all other times. A model that has no use for it
+ignores it, and a server that does not read the header opens a normal session. The header is not a session
+parameter, so the parameter rule does not apply to it.
+
 The server sends `waiting` messages during preparation, including while another session holds the
 model. It then sends `ready` with a session ID, protocol v3, the pipeline description and metadata:
 

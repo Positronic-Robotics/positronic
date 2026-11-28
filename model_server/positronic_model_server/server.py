@@ -64,19 +64,26 @@ class Model(ABC):
     resolved values, validates their model-specific meaning and returns only once that session is warm.
     A preparation that waits for an event outside the server, such as a person, watches
     ``preparation_cancelled`` and raises ``PreparationCancelled`` when it is set. A preparation that
-    raises must release any resources it acquired before returning a session.
+    raises must release any resources it acquired before returning a session. A model that has no use for
+    ``preparing_warm_up`` ignores it.
     """
 
     def __init__(self, *, parameters: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None):
         self.parameters = {} if parameters is None else parameters
         self.metadata = {} if metadata is None else metadata
         self._preparation_cancelled = threading.Event()
+        self._preparing_warm_up = False
 
     @property
     def preparation_cancelled(self) -> threading.Event:
         """Set when the session that ``prepare_session`` prepares can no longer open: its opener left, or the
         server stops. The server gives each preparation its own event."""
         return self._preparation_cancelled
+
+    @property
+    def preparing_warm_up(self) -> bool:
+        """Whether the session that ``prepare_session`` prepares is a warm-up, and ``False`` outside a preparation."""
+        return self._preparing_warm_up
 
     @abstractmethod
     def prepare_session(self, params: dict[str, Any]) -> Session: ...
@@ -235,9 +242,13 @@ class ModelServer:
             # The opener can leave while its preparation waits for the worker.
             if cancelled.is_set():
                 return
-            # Preparations run one at a time on the worker, so the event is this preparation's for its whole call.
-            model._preparation_cancelled = cancelled
-            session = model.prepare_session(json.loads(json.dumps(params, allow_nan=False)))
+            # Preparations run one at a time on the worker, so the event and the purpose are this preparation's for its
+            # whole call.
+            model._preparation_cancelled, model._preparing_warm_up = cancelled, conn.is_warm_up
+            try:
+                session = model.prepare_session(json.loads(json.dumps(params, allow_nan=False)))
+            finally:
+                model._preparing_warm_up = False
             spec.validate(session.client_stack)
 
         received = asyncio.create_task(conn.receive())

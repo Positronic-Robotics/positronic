@@ -311,6 +311,25 @@ def test_sessions_under_other_credentials_are_kept_apart(modal_wire, edge, inner
     assert edge.ended == ['token-2']
 
 
+@pytest.mark.parametrize('header', [wire.SESSION_PURPOSE_HEADER, wire.SESSION_PURPOSE_HEADER.title()])
+def test_a_warm_up_dial_takes_the_session_of_its_credentials(modal_wire, edge, inner, header):
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+
+    modal_wire.dial(_ADDRESS, {**_CREDENTIALS, header: wire.WARM_UP_PURPOSE}, 5.0)
+
+    assert inner.dialled == ['token-1']
+    assert len(edge.starts) == 1
+
+
+def test_a_warm_up_dial_starts_its_session_without_the_purpose(modal_wire, edge):
+    modal_wire.dial(_ADDRESS, {**_CREDENTIALS, wire.SESSION_PURPOSE_HEADER: wire.WARM_UP_PURPOSE}, 5.0).close()
+
+    modal_wire._wait_for_ends()
+    assert edge.starts[0]['Modal-Key'] == 'KEY'
+    assert wire.SESSION_PURPOSE_HEADER not in edge.starts[0]
+    assert edge.ended == ['token-1']
+
+
 def test_a_timed_out_connection_is_not_a_drop_and_ends_its_session(modal_wire, edge):
     conn = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
     conn.close()

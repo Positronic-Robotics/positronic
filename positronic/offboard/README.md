@@ -141,6 +141,10 @@ The client names each part: `--policy=.remote --policy.wire=websocket --policy.a
 --policy.address.query='fps=10'`, and forwards the query string verbatim. Credentials stay a
 separate `headers` argument.
 
+A warm-up session carries the header `positronic-session-purpose: warm-up` in `headers`, not a session
+parameter. `ModelServer` gives it to the model as `Model.preparing_warm_up`. `PolicyServer` does not read it,
+and opens a normal session.
+
 ### Session Flow
 
 #### 1. Handshake

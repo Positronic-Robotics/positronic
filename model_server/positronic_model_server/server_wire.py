@@ -54,6 +54,11 @@ class ServerConnection(abc.ABC):
     def query_params(self) -> list[tuple[str, str]]:
         """The session params the client asked for."""
 
+    @property
+    @abc.abstractmethod
+    def is_warm_up(self) -> bool:
+        """Whether the client marked this session with ``positronic_wire.wire.WARM_UP_PURPOSE``."""
+
     @abc.abstractmethod
     async def send(self, message: bytes) -> None:
         """Raises ``positronic_wire.wire.PeerDisconnected`` once the client ends the session."""

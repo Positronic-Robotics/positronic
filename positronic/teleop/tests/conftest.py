@@ -22,10 +22,12 @@ class TeleopConnection:
     The session opens in the background, because its preparation waits for Ready.
     """
 
-    def __init__(self, socket_path: Path, query: str = ''):
+    def __init__(self, socket_path: Path, query: str = '', headers: dict[str, str] | None = None):
         address = UnixSocketAddress(socket_path, SESSION_PATH, query)
         wire = registry.client_wire('websocket_unix')
-        client = InferenceClient(wire, address, infer_timeout=5, connect_deadline=5, reconnect_deadline=1)
+        client = InferenceClient(
+            wire, address, headers=headers, infer_timeout=5, connect_deadline=5, reconnect_deadline=1
+        )
         self._pool = ThreadPoolExecutor(max_workers=1)
         self.opening: Future[InferenceSession] = self._pool.submit(client.new_session)
 
@@ -53,8 +55,8 @@ def connect():
     """Open ``TeleopConnection`` sessions, and close them at the end of the test. A test ends each wait for Ready."""
     opened: list[TeleopConnection] = []
 
-    def open_connection(socket_path: Path, query: str = '') -> TeleopConnection:
-        opened.append(TeleopConnection(socket_path, query))
+    def open_connection(socket_path: Path, query: str = '', headers: dict[str, str] | None = None) -> TeleopConnection:
+        opened.append(TeleopConnection(socket_path, query, headers))
         return opened[-1]
 
     yield open_connection
