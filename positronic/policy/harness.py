@@ -62,9 +62,44 @@ _SCHEDULE_ATTRS = {
 }
 
 
+class _MsCounts:
+    """Count durations in milliseconds: all of them, the ones at or above each bound, and their sum."""
+
+    def __init__(self, count_attr: str, buckets: tuple[tuple[str, float], ...], sum_attr: str) -> None:
+        self._count_attr = count_attr
+        self._buckets = tuple(sorted(buckets, key=lambda bucket: bucket[1]))
+        self._bounds = tuple(bound for _, bound in self._buckets)
+        self._sum_attr = sum_attr
+        self.clear()
+
+    def clear(self) -> None:
+        # One bin per gap between the bounds: `add` adds 1 to one bin, and `attrs` sums the bins.
+        self._bins = [0] * (len(self._bounds) + 1)
+        self._sum_ms = 0.0
+
+    def add(self, ms: float) -> None:
+        self._bins[bisect_right(self._bounds, ms)] += 1
+        self._sum_ms += ms
+
+    def attrs(self) -> dict[str, Any]:
+        return {
+            self._count_attr: sum(self._bins),
+            **{attr: n for (attr, _), n in zip(self._buckets, _EpisodeTelemetry._at_or_above(self._bins), strict=True)},
+            self._sum_attr: self._sum_ms,
+        }
+
+
+@dataclass
+class _EpisodeEncodes:
+    """The encodes of one episode: one bin per gap between the bounds, and the sum of their durations."""
+
+    bins: list[int]
+    sum_ns: int = 0
+
+
 class _EpisodeTelemetry:
-    """Parent reset, inference, and recorder spans to one episode; count its steps, late steps, encodes, and virtual
-    duration."""
+    """Parent reset, inference, and recorder spans to one episode; count its steps, late steps, encodes, frame waits,
+    frame driver times, and virtual duration."""
 
     # The episode span counts the steps that start this many milliseconds or more after their due time, by attribute.
     # Sorted by bound, as `bisect` needs.
@@ -109,7 +144,33 @@ class _EpisodeTelemetry:
         self._late_steps = [0] * (len(self._LATE_STEP_MS) + 1)
         # The policy workers count encodes too.
         self._encodes_lock = threading.Lock()
-        self._encodes = [0] * (len(self._SLOW_ENCODE_NS) + 1)
+        self._encodes = _EpisodeEncodes([0] * (len(self._SLOW_ENCODE_NS) + 1))
+        # The waits of the camera frames that the steps read, from the hand-off to the read.
+        self._frame_waits = _MsCounts(
+            telemetry_keys.ATTR_EPISODE_FRAME_READS,
+            (
+                (telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_5MS, 5.0),
+                (telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_10MS, 10.0),
+                (telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_20MS, 20.0),
+                (telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_50MS, 50.0),
+                (telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_GE_100MS, 100.0),
+            ),
+            telemetry_keys.ATTR_EPISODE_FRAME_READS_WAIT_SUM_MS,
+        )
+        # The driver times of the camera frames, from the capture to the hand-off.
+        self._frame_drivers = _MsCounts(
+            telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_TIMED,
+            (
+                (telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_10MS, 10.0),
+                (telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_20MS, 20.0),
+                (telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_50MS, 50.0),
+                (telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_100MS, 100.0),
+                (telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_GE_200MS, 200.0),
+            ),
+            telemetry_keys.ATTR_EPISODE_FRAMES_DRIVER_SUM_MS,
+        )
+        # The capture stamp of the last frame of each camera that `_frame_drivers` counts.
+        self._counted_capture_by_signal: dict[str, int] = {}
         self._virtual_start: float | None = None
 
     def begin(self, params: dict[str, Any]) -> None:
@@ -117,8 +178,11 @@ class _EpisodeTelemetry:
         self._index += 1
         self._steps = 0
         self._late_steps = [0] * (len(self._LATE_STEP_MS) + 1)
-        # A new list: each sink adds to the list of its own episode.
-        self._encodes = [0] * (len(self._SLOW_ENCODE_NS) + 1)
+        # A new record: each sink adds to the record of its own episode.
+        self._encodes = _EpisodeEncodes([0] * (len(self._SLOW_ENCODE_NS) + 1))
+        self._frame_waits.clear()
+        self._frame_drivers.clear()
+        self._counted_capture_by_signal.clear()
         self._virtual_start = None
         attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
         attrs.update(self._scalars(params))
@@ -144,21 +208,33 @@ class _EpisodeTelemetry:
     def late_step(self, late_ms: float) -> None:
         self._late_steps[bisect_right(self._LATE_STEP_MS, late_ms)] += 1
 
+    def frame_read(self, wait_ms: float) -> None:
+        self._frame_waits.add(wait_ms)
+
+    def frame_driver(self, name: str, capture_ns: int, driver_ms: float) -> None:
+        """Count the driver time of the frame of camera ``name`` that ``capture_ns`` stamps, once per episode."""
+        if self._counted_capture_by_signal.get(name) == capture_ns:
+            return
+        self._counted_capture_by_signal[name] = capture_ns
+        self._frame_drivers.add(driver_ms)
+
     @contextmanager
     def counting_encodes(self) -> Iterator[None]:
         """Count the encodes of the policy calls that the block submits, also the calls that end after the block."""
         if not telemetry.enabled():
             yield
             return
-        # A worker keeps the sink after the episode ends, so the sink holds this episode's histogram.
+        # A worker keeps the sink after the episode ends, so the sink holds this episode's record.
         with telemetry.timings_to(partial(self._count_encode, self._encodes)):
             yield
 
-    def _count_encode(self, encodes: list[int], name: str, start_ns: int, end_ns: int) -> None:
+    def _count_encode(self, encodes: _EpisodeEncodes, name: str, start_ns: int, end_ns: int) -> None:
         if name != telemetry_keys.SPAN_POLICY_ENCODE:
             return
-        with self._encodes_lock:  # one integer add; the workers and the harness thread count at once
-            encodes[bisect_left(self._SLOW_ENCODE_NS, end_ns - start_ns)] += 1
+        encode_ns = end_ns - start_ns
+        with self._encodes_lock:  # two integer adds; the workers and the harness thread count at once
+            encodes.bins[bisect_left(self._SLOW_ENCODE_NS, encode_ns)] += 1
+            encodes.sum_ns += encode_ns
 
     def describe_schedule(self, policy_meta: dict[str, Any]) -> None:
         """Copy the schedule's holds from the policy's recorded metadata onto the open episode span."""
@@ -182,8 +258,9 @@ class _EpisodeTelemetry:
         if self._span is None:
             return
         virtual_s = virtual_now - self._virtual_start if self._virtual_start is not None else 0.0
-        with self._encodes_lock:  # one list copy; the span gets each count of the same encodes
-            encodes = list(self._encodes)
+        with self._encodes_lock:  # one list copy; the span gets each count and the sum of the same encodes
+            encodes = list(self._encodes.bins)
+            encode_ns = self._encodes.sum_ns
         attrs = {
             telemetry_keys.ATTR_EPISODE_STEPS: self._steps,
             telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s,
@@ -193,6 +270,9 @@ class _EpisodeTelemetry:
             },
             telemetry_keys.ATTR_EPISODE_ENCODES: sum(encodes),
             **{attr: n for (attr, _), n in zip(self._SLOW_ENCODE_BUCKETS, self._at_or_above(encodes), strict=True)},
+            telemetry_keys.ATTR_EPISODE_ENCODES_SUM_MS: encode_ns / 1e6,
+            **self._frame_waits.attrs(),
+            **self._frame_drivers.attrs(),
         }
         if partial:
             attrs[telemetry_keys.ATTR_EPISODE_PARTIAL] = True
@@ -505,19 +585,28 @@ class Harness(pimm.ControlSystem):
             self._append(values, timestamps, timing)
         return values
 
-    def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
-        """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
+    def _time_frame(
+        self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float] | None
+    ) -> None:
+        """Count the driver time of camera frame ``name`` on the episode, once per frame. In a step, also put the two
+        parts of the age of the frame into ``step_ms`` and count its wait on the episode.
 
         The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
         driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
         capture time.
         """
-        if emitted_ns is not None and self._clock is not None:
-            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6
+        driver_ms = None
         if CAPTURE_TIME in stamps and HANDOFF_TIME in stamps:
-            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = (
-                stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
-            ) / 1e6
+            driver_ms = (stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]) / 1e6
+            self._telemetry.frame_driver(name, stamps[CAPTURE_TIME], driver_ms)
+        if step_ms is None:
+            return
+        if emitted_ns is not None and self._clock is not None:
+            wait_ms = (self._clock.now_ns() - emitted_ns) / 1e6
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = wait_ms
+            self._telemetry.frame_read(wait_ms)
+        if driver_ms is not None:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = driver_ms
 
     def _sample(
         self,
@@ -538,7 +627,7 @@ class Harness(pimm.ControlSystem):
             else:
                 emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
                 is_frame = name.startswith(keys.IMAGE_PREFIX)
-                if is_frame and step_ms is not None:
+                if is_frame:
                     self._time_frame(name, message.time, emitted_ns, step_ms)
                 if message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                     self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms, timing)

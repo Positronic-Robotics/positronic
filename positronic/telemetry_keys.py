@@ -38,8 +38,8 @@ ATTR_EPISODE_STEPS = 'episode.steps'
 ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 # On `episode`: the count of harness steps that start N ms or more after their due time (`steps_late_ge_<N>ms`),
-# the count of the episode's `policy.encode` spans, and the count of those that take more than N ms
-# (`encodes_gt_<N>ms`).
+# the count of the episode's `policy.encode` spans, the count of those that take more than N ms
+# (`encodes_gt_<N>ms`), and the sum of their durations.
 ATTR_EPISODE_STEPS_LATE_GE_1MS = 'episode.steps_late_ge_1ms'
 ATTR_EPISODE_STEPS_LATE_GE_2MS = 'episode.steps_late_ge_2ms'
 ATTR_EPISODE_STEPS_LATE_GE_5MS = 'episode.steps_late_ge_5ms'
@@ -52,6 +52,24 @@ ATTR_EPISODE_ENCODES_GT_10MS = 'episode.encodes_gt_10ms'
 ATTR_EPISODE_ENCODES_GT_15MS = 'episode.encodes_gt_15ms'
 ATTR_EPISODE_ENCODES_GT_30MS = 'episode.encodes_gt_30ms'
 ATTR_EPISODE_ENCODES_GT_60MS = 'episode.encodes_gt_60ms'
+ATTR_EPISODE_ENCODES_SUM_MS = 'episode.encodes_sum_ms'
+# On `episode`: the camera frame reads of the steps, the count of those whose frame waits N ms or more after its
+# hand-off, and the sum of the waits. Then the camera frames whose driver stamps a capture time, the count of those
+# whose driver takes N ms or more from capture to hand-off, and the sum of the driver times.
+ATTR_EPISODE_FRAME_READS = 'episode.frame_reads'
+ATTR_EPISODE_FRAME_READS_WAIT_GE_5MS = 'episode.frame_reads_wait_ge_5ms'
+ATTR_EPISODE_FRAME_READS_WAIT_GE_10MS = 'episode.frame_reads_wait_ge_10ms'
+ATTR_EPISODE_FRAME_READS_WAIT_GE_20MS = 'episode.frame_reads_wait_ge_20ms'
+ATTR_EPISODE_FRAME_READS_WAIT_GE_50MS = 'episode.frame_reads_wait_ge_50ms'
+ATTR_EPISODE_FRAME_READS_WAIT_GE_100MS = 'episode.frame_reads_wait_ge_100ms'
+ATTR_EPISODE_FRAME_READS_WAIT_SUM_MS = 'episode.frame_reads_wait_sum_ms'
+ATTR_EPISODE_FRAMES_DRIVER_TIMED = 'episode.frames_driver_timed'
+ATTR_EPISODE_FRAMES_DRIVER_GE_10MS = 'episode.frames_driver_ge_10ms'
+ATTR_EPISODE_FRAMES_DRIVER_GE_20MS = 'episode.frames_driver_ge_20ms'
+ATTR_EPISODE_FRAMES_DRIVER_GE_50MS = 'episode.frames_driver_ge_50ms'
+ATTR_EPISODE_FRAMES_DRIVER_GE_100MS = 'episode.frames_driver_ge_100ms'
+ATTR_EPISODE_FRAMES_DRIVER_GE_200MS = 'episode.frames_driver_ge_200ms'
+ATTR_EPISODE_FRAMES_DRIVER_SUM_MS = 'episode.frames_driver_sum_ms'
 ATTR_PASS_FAILED = 'pass.failed'
 
 # What the server reported, stamped on `policy.infer` under this prefix — `served.infer_ms`, its sibling
