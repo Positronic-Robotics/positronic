@@ -165,6 +165,7 @@ class Site(Enum):
     TARGET_GRIP_READ = ('target_grip', 'read')
     IDLE_PARK_READ = ('idle_park_on', 'read')
     GRIPPER_FORCE_CAP_READ = ('gripper_force_cap_n', 'read')
+    ENGAGED_READ = ('engaged', 'read')
 
 
 # Calls made after torque is released, outside the protected region.
@@ -216,12 +217,15 @@ class Rig:
         gripper_force_cap_n=None,
         grasp_tuning=None,
         driver: yam.Robot | None = None,
+        engage_on_input=False,
     ):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
         self.idle_park_on = ManualCommandReceiver()
         self.gripper_force_cap = ManualCommandReceiver()
+        self.engaged = ManualCommandReceiver()
+        self.connects = 0
         self.states = RecordingEmitter()
         ports: dict[str, Any] = {
             'vendor': self.vendor,
@@ -229,6 +233,7 @@ class Rig:
             'target_grip': self.grip,
             'idle_park_on': self.idle_park_on,
             'gripper_force_cap_n': self.gripper_force_cap,
+            'engaged': self.engaged,
             'state': self.states,
         }
         self.grips = RecordingEmitter()
@@ -236,20 +241,27 @@ class Rig:
         ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter(), 'arm_meta': self.arm_metas}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
+
+        def connect(channel, sim, compensation):
+            self.connects += 1
+            return ports['vendor']
+
         self.driver = driver or yam.Robot(
-            connect=lambda channel, sim, compensation: ports['vendor'],
+            connect=connect,
             compensation=compensation,
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
             grasp_tuning=grasp_tuning,
             gripper_force_cap_n=gripper_force_cap_n,
+            engage_on_input=engage_on_input,
         )
         self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
         self.driver.idle_park_on._bind(ports['idle_park_on'])
         self.driver.gripper_force_cap_n._bind(ports['gripper_force_cap_n'])
+        self.driver.engaged._bind(ports['engaged'])
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
@@ -293,6 +305,15 @@ class Rig:
 @pytest.fixture
 def rig():
     result = Rig()
+    yield result
+    result.loop.close()
+
+
+@pytest.fixture
+def engaged_rig():
+    """A rig whose driver opts in to the ``engaged`` input, with the input on."""
+    result = Rig(engage_on_input=True)
+    result.engaged.push(True)
     yield result
     result.loop.close()
 
@@ -799,6 +820,174 @@ def test_a_shutdown_releases_a_chain_whose_control_loop_stopped_with_no_park_and
     assert 'arm still powered' not in caplog.text
     assert len(rig.vendor.targets) == sent
     assert rig.vendor.released_at and rig.vendor.closed
+
+
+def test_a_driver_that_starts_disengaged_opens_no_chain_until_the_input_turns_on():
+    rig = Rig(engage_on_input=True)
+    rig.tick(5)
+    assert rig.connects == 0
+    assert not rig.vendor.targets and not rig.states.emitted
+
+    rig.engaged.push(True)
+    rig.ready()
+    assert rig.connects == 1
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    rig.finish()
+
+
+def test_a_disengaged_driver_refuses_a_move_and_answers_a_ready_call_after_the_start_move(world):
+    rig = Rig(engage_on_input=True)
+    move = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    ready = _readier(world, rig)(None)
+    _until_answered(rig, move)
+    rig.tick(1)
+
+    with pytest.raises(DeviceFault, match='not engaged') as refused:
+        move.result()
+    assert refused.value.kind is FaultKind.ARM
+    assert not ready.done() and rig.connects == 0
+    rig.engaged.push(True)
+    _until_answered(rig, ready)
+    assert ready.result() is None
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    rig.finish()
+
+
+def test_disengaging_parks_the_arm_and_cuts_the_torque_only_after_the_park(engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    rig.engaged.push(False)
+    rig.tick(15)
+
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+    reopened = FakeYam()
+    rig.driver._connect = lambda channel, sim, compensation: reopened
+    rig.engaged.push(True)
+    rig.tick(5)
+    # The start move, then the idle park after it
+    assert any(np.allclose(target[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad) for target in reopened.targets)
+    rig.finish()
+
+
+def test_a_grip_call_queued_behind_the_last_grip_move_is_refused_once_the_disengage_park_ends(world, engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    gripper = _gripper(world, rig)
+    first = gripper(0.8)
+    rig.tick()
+    rig.engaged.push(False)
+    queued = gripper(0.2)
+    _until_answered(rig, first)
+    _until_answered(rig, queued, within_s=30.0)
+
+    assert first.result() is None
+    with pytest.raises(DeviceFault, match='not engaged'):
+        queued.result()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
+def test_a_stop_during_the_park_for_disengaging_parks_the_arm_once(engaged_rig, monkeypatch):
+    rig = engaged_rig
+    rig.raise_arm()
+    parks = []
+    park = yam._Arm.park
+
+    def counted(arm, *args, **kwargs):
+        parks.append(rig.stop.stopped)
+        return (yield from park(arm, *args, **kwargs))
+
+    monkeypatch.setattr(yam._Arm, 'park', counted)
+    rig.engaged.push(False)
+    rig.tick(0.1)
+    assert parks == [False]
+    rig.finish()
+
+    assert parks == [False]
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+def test_disengaging_lets_a_grip_move_in_flight_arrive_before_the_park(world, engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    answer = _gripper(world, rig)(0.8)
+    rig.tick()
+    assert not answer.done(), 'the grip move ended before the input turned off'
+    rig.engaged.push(False)
+    _until_answered(rig, answer)
+
+    assert answer.result() is None
+    rig.tick(15)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
+def test_a_park_that_fails_for_disengaging_keeps_the_torque_on_until_the_input_turns_on_and_off(engaged_rig, caplog):
+    rig = engaged_rig
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.engaged.push(False)
+    rig.tick(60)
+
+    assert 'Parking failed; the arm stays powered' in caplog.text
+    assert _last(rig.states).status == RobotStatus.ERROR
+    assert not rig.vendor.released_at and not rig.vendor.closed
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
+    rig.vendor.stuck = False
+    rig.engaged.push(True)
+    rig.tick(0.1)
+    rig.engaged.push(False)
+    rig.tick(15)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    rig.finish()
+
+
+def test_a_disengaged_arm_whose_park_failed_refuses_a_move_and_holds_where_it_stopped(world, engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.engaged.push(False)
+    rig.tick(60)
+    move = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, move)
+    rig.tick(1)
+
+    with pytest.raises(DeviceFault, match='not engaged') as refused:
+        move.result()
+    assert refused.value.kind is FaultKind.ARM
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
+    rig.vendor.stuck = False
+    rig.finish()
+
+
+def test_a_driver_that_does_not_opt_in_ignores_the_engaged_input(world, rig):
+    rig.engaged.push(False)
+    rig.raise_arm()
+    answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, answer)
+
+    assert answer.result() is None
+    assert not rig.vendor.released_at and not rig.vendor.closed
+    rig.finish()
+
+
+def test_a_driver_that_does_not_opt_in_never_reads_the_engaged_input():
+    watch = Watch()
+    rig = Rig(watch=watch)
+    rig.raise_arm()
+    rig.finish()
+    assert Site.ENGAGED_READ.value not in watch.seen
+
+
+def test_a_ready_call_made_while_disengaged_fails_when_the_world_stops(world):
+    rig = Rig(engage_on_input=True)
+    ready = _readier(world, rig)(None)
+    rig.tick(1)
+    rig.finish()
+
+    with pytest.raises(DeviceFault, match='not engaged'):
+        ready.result()
+    assert rig.connects == 0
 
 
 def test_stop_during_a_move_answers_the_caller_and_parks(world, rig):
@@ -1613,7 +1802,8 @@ def test_sync_call_is_answered_when_interrupting_idle_parking_cannot_hold(world,
 def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
     """Closes the list below: a new collaborator call fails here until it gets a ``Site`` and its fault test."""
     watch = Watch()
-    rig = Rig(watch=watch)
+    rig = Rig(watch=watch, engage_on_input=True)
+    rig.engaged.push(True)
     rig.raise_arm()
     rig.grip.push(0.5)
     rig.tick(0.1)
@@ -1631,7 +1821,8 @@ ONCE_PER_CHAIN_SITES = [Site.INFO_READ]  # read once, as the chain opens
 @pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES + ONCE_PER_CHAIN_SITES])
 def test_a_fault_at_a_site_off_the_chain_parks_releases_and_is_raised_again(site):
     watch = Watch(site)
-    rig = Rig(watch=watch)
+    rig = Rig(watch=watch, engage_on_input=True)
+    rig.engaged.push(True)
     if site not in (Site.META_EMIT, Site.ARM_META_EMIT):  # the metadata goes out once, as the run starts
         rig.raise_arm()
     watch.armed = True
@@ -3119,6 +3310,17 @@ def test_only_the_yambox_config_gives_each_gripper_a_rate_limited_close_and_a_fo
     assert tunings == [None] * 4 + [dataclasses.asdict(DEFAULT_GRASP), dataclasses.asdict(slow_right)]
     assert close_s[:4] == [i2rt_s] * 4
     assert close_s[4:] == [pytest.approx(1 / DEFAULT_GRASP.close_rate_per_s, rel=0.15), pytest.approx(1.0, rel=0.15)]
+
+
+def test_the_bimanual_config_that_opts_in_starts_both_arms_with_no_chain_open():
+    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, engage_on_input=True).instantiate()
+    arms = [system for system in bimanual.control_systems if isinstance(system, yam.Robot)]
+    assert len(arms) == 2
+    for arm in arms:
+        rig = Rig(driver=arm)
+        rig.driver._connect = lambda channel, sim, compensation: pytest.fail('a disengaged arm opened its chain')
+        rig.tick(1)
+        rig.loop.close()
 
 
 @pytest.mark.parametrize(
