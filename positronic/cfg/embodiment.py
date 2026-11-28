@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.compensation import Compensation
     from positronic.drivers.roboarm.yam.grasp import GraspTuning
     from positronic.drivers.roboarm.yam.settle import SettleTuning
+    from positronic.drivers.roboarm.yam.stream import StreamTuning
 
 
 @cfn.config(
@@ -110,6 +111,7 @@ def yam(robot_arm, cameras):
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
     },
     gripper_force_cap_n=None,
+    stream=positronic.cfg.hardware.roboarm.yam_stream,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -122,6 +124,7 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     compensation: dict[str, 'Compensation'],
     gripper_force_cap_n: float | None,
+    stream: 'StreamTuning',
     cameras,
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
@@ -136,7 +139,8 @@ def yam_bimanual(
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
     that arm. ``gripper_force_cap_n`` is the force cap of both grippers, and ``grasp_tuning[side]`` is how the gripper
-    of that arm closes on an object (see ``yam.Robot``). Each arm's meta carries the settings that its chain reports.
+    of that arm closes on an object (see ``yam.Robot``). ``stream`` is how a streamed target moves each arm, its
+    obstacles in the world frame. Each arm's meta carries the settings that its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
@@ -151,6 +155,7 @@ def yam_bimanual(
             move_tuning=move_tuning[side],
             grasp_tuning=grasp_tuning[side],
             gripper_force_cap_n=gripper_force_cap_n,
+            stream=stream,
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
@@ -196,12 +201,13 @@ def yam_bimanual(
 
 # The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
 # there are the onboard controllers and reach no arm.
+_FEET_X, _FEET_Y, _FEET_Z = positronic.cfg.hardware.roboarm.YAMBOX_FEET
 yam_bimanual_yambox = yam_bimanual.override(
     left_channel='can_follower_l',
     right_channel='can_follower_r',
-    # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
-    # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
+    # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 23.5 mm plate (`yambox_stream`).
+    # Only z differs from the default: it is 0.011 higher.
+    mounts={keys.LEFT_ARM: [_FEET_X, _FEET_Y, _FEET_Z], keys.RIGHT_ARM: [_FEET_X, -_FEET_Y, _FEET_Z]},
     # A fit to live data over all poses of this station gives the mass of the end effector and the gravity factors,
     # except joint 2: its factor 0.96 is below the fit, so that the arm sags into the friction that holds it high on
     # a descent to the desk. Each friction value is below the static friction measured on its joint. The friction
@@ -220,6 +226,7 @@ yam_bimanual_yambox = yam_bimanual.override(
     ),
     grasp_tuning=dict.fromkeys(keys.BIMANUAL_ARMS, positronic.cfg.hardware.roboarm.yam_grasp_tuning),
     gripper_force_cap_n=20.0,
+    stream=positronic.cfg.hardware.roboarm.yambox_stream,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),

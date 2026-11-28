@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.compensation import Compensation, FrictionFade
     from positronic.drivers.roboarm.yam.grasp import GraspTuning
     from positronic.drivers.roboarm.yam.settle import SettleTuning
+    from positronic.drivers.roboarm.yam.stream import StreamTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -154,6 +155,39 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     return FrictionFade(zero_below_rad_s=zero_below_rad_s, full_from_rad_s=full_from_rad_s)
 
 
+@cfn.config(max_joint_accel_rad_s2=None)
+def yam_stream(max_joint_accel_rad_s2: float | None) -> 'StreamTuning':
+    from positronic.drivers.roboarm.yam.stream import StreamTuning
+
+    return StreamTuning(max_joint_accel_rad_s2)
+
+
+# The feet of the YAM arms of the yambox station (measured 2026-11-22): x, the y of the left arm (the right arm is at
+# -y), and z, in the world frame of `yam_bimanual_yambox`
+YAMBOX_FEET = (0.30, 0.305, 0.3125)
+
+
+@cfn.config(max_joint_accel_rad_s2=12.0, obstacle_margin_m=0.002)
+def yambox_stream(max_joint_accel_rad_s2: float | None, obstacle_margin_m: float) -> 'StreamTuning':
+    """The stream of the YAM arms of the yambox station (measured 2026-11-22), in the world frame of
+    ``yam_bimanual_yambox``.
+
+    The feet of the arms stand at ``YAMBOX_FEET`` on a plate 23.5 mm thick, 760 mm wide and centered,
+    from 230 mm behind the feet to 40 mm ahead. The table top is 23.5 mm below the feet, from the back of the plate
+    to 1170 mm ahead, 205 mm past the plate on the right (-y) and 235 mm on the left. A small ``obstacle_margin_m``
+    lets the fingertips take a flat object from the table.
+
+    ``max_joint_accel_rad_s2`` caps a followed Cartesian target. A joint target keeps the speed cap alone.
+    """
+    from positronic.drivers.roboarm.yam.stream import Box, StreamTuning
+
+    feet_x, _, feet_z = YAMBOX_FEET
+    table_top = feet_z - 0.0235
+    plate = Box((feet_x - 0.230, -0.380, table_top), (feet_x + 0.040, 0.380, feet_z))
+    table = Box((feet_x - 0.230, -0.585, table_top - 0.04), (feet_x + 1.170, 0.615, table_top))
+    return StreamTuning(max_joint_accel_rad_s2, (plate, table), obstacle_margin_m)
+
+
 @cfn.config(
     channel='can0',
     sim=False,
@@ -164,6 +198,7 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     move_tuning=yam_move_tuning,
     grasp_tuning=None,
     gripper_force_cap_n=None,
+    stream=yam_stream,
 )
 def yam(
     channel: str,
@@ -175,6 +210,7 @@ def yam(
     move_tuning: 'SettleTuning',
     grasp_tuning: 'GraspTuning | None',
     gripper_force_cap_n: float | None,
+    stream: 'StreamTuning',
 ):
     from positronic.drivers.roboarm.yam.driver import Robot
 
@@ -188,4 +224,5 @@ def yam(
         move_tuning=move_tuning,
         grasp_tuning=grasp_tuning,
         gripper_force_cap_n=gripper_force_cap_n,
+        stream=stream,
     )
