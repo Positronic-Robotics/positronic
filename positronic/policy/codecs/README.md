@@ -142,6 +142,7 @@ that path back into model values, such as an RTC prefix.
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
 | [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
+| [`TransformOnArrival`](image.py) | Inference: applies a `TransformImages` to each new frame of the named cameras. It has no wire form. | The client gives it to the `TemporalStack` that feeds the transform, which applies it on a background thread (`positronic/policy/arrival.py`). |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
 | [`EncodeVideo`](image.py) | Inference: encodes the image at each explicit path as one H.264 access unit, one video stream for each path. The receiver decodes each stream in order with `AnnexBDecoder`, so the codec is `ordered`, and a client keeps one call in flight for a stack that holds it. | Send the camera images of a run to a server that keeps a decoder for each stream, such as the teleop service. |
 

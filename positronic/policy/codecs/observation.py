@@ -9,6 +9,7 @@ from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get, Identity
+from positronic.policy.base import FieldUse
 
 from .base import Codec
 from .metadata import LEROBOT_FEATURES, lerobot_vector
@@ -37,6 +38,12 @@ class SelectObservationFields(Codec):
 
     def encode(self, data: dict[str, Any]) -> dict[str, Any]:
         return {name: data[source] for name, source in self._mapping.items()}
+
+    def field_use(self, field: str) -> FieldUse:
+        names = [name for name, source in self._mapping.items() if source == field]
+        if not names:
+            return FieldUse.DROPPED
+        return FieldUse.FORWARDED if names == [field] else FieldUse.OTHER
 
     def to_spec(self):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'mapping': dict(self._mapping)}}

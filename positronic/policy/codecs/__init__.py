@@ -16,7 +16,7 @@ from .base import Codec, PolicyCommandError
 from .end import EndCommand
 from .geometry import ChangeEEFrame, ConvertPose
 from .gripper import BinarizeGripInference, BinarizeGripTraining, FlipGrip
-from .image import EncodeImages, EncodeVideo, Resample, ResizeMode, TransformImages
+from .image import EncodeImages, EncodeVideo, Resample, ResizeMode, TransformImages, TransformOnArrival
 from .metadata import (
     ACTION,
     GR00T_MODALITY,
