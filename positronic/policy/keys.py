@@ -7,6 +7,8 @@
 TYPE = 'type'
 CHECKPOINT_ID = 'checkpoint_id'
 CHECKPOINT_PATH = 'checkpoint_path'
+# The license of the weights or the code that a source runs. A remote source states it in its server metadata.
+LICENSE = 'license'
 EXPERIMENT_NAME = 'experiment_name'
 CONFIG_NAME = 'config_name'
 # The `provider:model` id that an API policy calls.
@@ -33,8 +35,32 @@ API_KEY_FINGERPRINT = 'api_key_fingerprint'
 # The reserved field of a result element that holds the ``PolicyEnd`` that ends the run.
 END = 'end'
 
-POLICY_META = 'inference.policy'
+# The record keeps the metadata of each top-level source under f'{SOURCES}.{name}.'.
+SOURCES = 'inference'
+# The name of the top-level source of the policy of a rollout.
+POLICY_SOURCE = 'policy'
+POLICY_META = f'{SOURCES}.{POLICY_SOURCE}'
 SERVER_META = f'{POLICY_META}.{SERVER}'
+# The name of the helper of a run: the top-level source that can take over from the policy.
+TELEOPERATOR = 'teleoperator'
+
+# The signals of the control record of a run with a helper.
+CONTROL_SOURCE = 'control.source'
+CONTROL_USES = 'control.uses'
+CONTROL_EVENT = 'control.event'
+# The record keeps each shadow action of a top-level source as f'{SHADOW}.{name}.{channel}'.
+SHADOW = 'shadow'
+# The observation key that the harness adds to the observation of the helper: a ``takeover.ControlObservation`` as
+# plain data.
+CONTROL = 'control'
+# The observation key that holds the ground truth of a simulator: the last values of each privileged signal of the
+# harness, by their names in the record. The harness gives it to the helper and to no other source.
+GROUND_TRUTH = 'ground_truth'
+# The press fields of an element of the helper, beside its commands. A press field holds the time of the last press,
+# or ``None`` before the first press, so a new value is a new press.
+HELPER_TAKE_OVER = 'take_over'
+HELPER_HAND_BACK = 'hand_back'
+HELPER_FIELDS = frozenset({HELPER_TAKE_OVER, HELPER_HAND_BACK})
 
 OBS_TIME_NS = 'obs_time_ns'
 SAMPLE_INDEX = 'sample_index'

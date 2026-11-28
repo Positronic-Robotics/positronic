@@ -5,7 +5,7 @@ from pathlib import Path
 import positronic.dataset
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 
 _DATASET_ROOT = Path(positronic.dataset.__file__).parent
 
@@ -48,6 +48,7 @@ def test_dataset_has_no_application_timeline_dependencies():
     clock_names = {
         HARNESS_WORLD,
         HARNESS_WALL,
+        HARNESS_STEP,
         EMITTED_WORLD,
         EMITTED_WALL,
         RECEIVED_WORLD,
