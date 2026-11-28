@@ -19,10 +19,11 @@ CLONE = '/w/positronic'  # positronic clone, on main
 WORKTREE = '/w/positronic-wt'  # positronic worktree, feature branch
 INFRA = '/w/agent_infra'  # different repo, on main
 INFRA_CASED = '/w/agent_infra-cased'  # the guarded repo, origin differs only in casing, on main
+OLD_NAME_CLONE = '/w/old-name'  # the guarded repo, origin under a name GitHub redirects
 POSITRONIC_URL_LC = 'git@github.com:positronic-robotics/positronic.git'
 
 
-EXISTING_DIRS = {CLONE, WORKTREE, INFRA, INFRA_CASED, '/w', '/tmp', '/somewhere'}
+EXISTING_DIRS = {CLONE, WORKTREE, INFRA, INFRA_CASED, OLD_NAME_CLONE, '/w', '/tmp', '/somewhere'}
 
 
 def fake_path_exists(p):
@@ -72,6 +73,7 @@ def git():
         WORKTREE: {'branch': 'feature-x', 'remotes': {'origin': POSITRONIC_URL}},
         INFRA: {'branch': 'main', 'remotes': {'origin': INFRA_URL}},
         INFRA_CASED: {'branch': 'main', 'remotes': {'origin': POSITRONIC_URL_LC}},
+        OLD_NAME_CLONE: {'branch': 'feature-x', 'remotes': {'origin': 'git@github.com:old-owner/old-name.git'}},
     })
 
 
@@ -198,6 +200,8 @@ ALLOWED = [
     'gh pr merge 5 -R github.com/o/r.git -m -b body',
     'gh pr merge 5 -R o/r --subject -R',
     'GH_TOKEN=$(cat ~/tokens/gh) gh pr merge 5 -R o/r --squash',
+    'gh pr merge 5 -R o/r --match-head-commit abc123',
+    'gh pr merge 5 -R o/r --match-head-commit=abc123 --squash',
     f'cd {INFRA} && gh pr merge 566 -R someone/agent_infra',
     'git status',
     'git log --oneline',
@@ -364,7 +368,7 @@ def test_an_old_name_of_the_guarded_repository_stays_guarded(git):
     assert mcp_verdict(MERGE_TOOL, merge_args(566) | {'owner': 'old-owner', 'repo': 'old-name'}, canonical=canonical)
 
 
-def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alone(git):
+def test_a_command_makes_only_the_lookups_of_one_merge(git):
     looked_up = []
 
     def canonical(slug):
@@ -373,7 +377,8 @@ def test_the_exact_form_in_another_repository_is_looked_up_only_when_it_runs_alo
 
     cmd = 'gh pr merge 1 -R a/one && gh pr merge 2 -R b/two && gh pr merge 566'
     assert verdict(git, cmd, allow_merge=lambda *_: True, canonical=canonical) is not None
-    assert looked_up == []
+    assert looked_up == ['a/one', GUARDED.casefold()]
+    looked_up.clear()
     assert verdict(git, 'cd /tmp && gh pr merge 1 -R a/one --squash', canonical=canonical) is None
     assert looked_up == ['a/one', GUARDED.casefold()]
 
@@ -495,6 +500,192 @@ def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
         verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
     )
     assert asked == []
+
+
+@pytest.mark.parametrize(
+    ('cmd', 'exact_form'),
+    [
+        (
+            'GH_TOKEN=$(cat ~/t) gh pr merge 566 -R someone/other && gh pr view 566 -R someone/other',
+            'gh pr merge 566 -R someone/other',
+        ),
+        ('gh pr merge 566 -R someone/other --admin', 'gh pr merge 566 -R someone/other'),
+        (
+            'gh pr merge 566 -R someone/other --match-head-commit abc123 && echo done',
+            'gh pr merge 566 -R someone/other --match-head-commit abc123',
+        ),
+        (
+            'gh pr merge 566 --match-head-commit=abc123 -R someone/other --admin',
+            'gh pr merge 566 -R someone/other --match-head-commit abc123',
+        ),
+        ('gh pr -R someone/other merge 566', 'gh pr merge 566 -R someone/other'),
+        (f'cd {INFRA} && gh pr merge 566', 'gh pr merge 566 -R someone/agent_infra'),
+    ],
+)
+def test_a_merge_in_another_repository_out_of_the_exact_form_is_told_that_form_and_not_a_receipt(git, cmd, exact_form):
+    """No receipt is read for another repository, so the denial names the one form that passes."""
+    denial = verdict(git, cmd)
+    assert denial is not None and '!allow_merge' not in denial
+    assert f'`{exact_form}`' in denial and 'alone in its own Bash call' in denial
+    assert verdict(git, exact_form) is None
+
+
+@pytest.mark.parametrize('cmd', ['gh pr merge 566', f'gh pr merge 566 -R {GUARDED}'])
+def test_a_merge_into_this_repository_without_a_receipt_is_told_to_get_one(git, cmd):
+    assert verdict(git, cmd) == gmm.GH_MERGE_MSG
+    assert '`!allow_merge <pr>`' in gmm.GH_MERGE_MSG
+
+
+GUARDED_SLUG = GUARDED.casefold()
+
+
+def old_name(slug):
+    return {'old-owner/old-name': GUARDED_SLUG}.get(slug, slug)
+
+
+def renamed(slug):
+    return {GUARDED_SLUG: 'positronic-robotics/new-name'}.get(slug, slug)
+
+
+def receipt_reads(git, cmd, guarded=GUARDED, gh_repo_env='', canonical=same_name):
+    """The denial of `cmd`, and the pull requests whose receipt the guard read on the way."""
+    read = []
+
+    def spy(number, slug):
+        read.append(number)
+        return False
+
+    denial = gmm.analyze(
+        cmd,
+        CLONE,
+        guarded,
+        git,
+        path_exists=fake_path_exists,
+        allow_merge=spy,
+        authorized=spy,
+        gh_repo_env=gh_repo_env,
+        stack_below=lambda *_: [],
+        canonical=canonical,
+    )
+    return denial, read
+
+
+# Each merge the guard blocks without reading a receipt, the change its denial names, and the
+# command after that change, which a receipt then authorizes.
+UNRECEIPTED_MERGES = [
+    pytest.param('gh pr merge 566', {'gh_repo_env': 'someone/other'}, 'Unset `GH_REPO`', 'gh pr merge 566', id='env'),
+    pytest.param(
+        'GH_REPO=someone/other gh pr merge 566', {}, 'Remove the `GH_REPO` assignment', 'gh pr merge 566', id='assign'
+    ),
+    pytest.param(
+        "env G''H_REPO=someone/other gh pr merge 566",
+        {},
+        'Remove the `GH_REPO` assignment',
+        'gh pr merge 566',
+        id='quoted-assign',
+    ),
+    pytest.param(
+        'cd /missing; gh pr merge 566', {}, f'from a checkout of `{GUARDED_SLUG}`', 'gh pr merge 566', id='no-dir'
+    ),
+    pytest.param(
+        'cd /tmp && gh pr merge 566',
+        {},
+        f'add `-R {GUARDED_SLUG}`',
+        f'cd /tmp && gh pr merge 566 -R {GUARDED}',
+        id='no-origin',
+    ),
+    pytest.param(
+        f'gh pr merge 566 -R https://github.com/{GUARDED}',
+        {},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='url',
+    ),
+    pytest.param(
+        f'gh pr merge 566 -R https://github.com/{GUARDED} --match-head-commit abc123',
+        {},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED} --match-head-commit abc123',
+        id='url-head-commit',
+    ),
+    pytest.param(
+        f'gh pr merge 566 -R github.com/{GUARDED}.git && echo done',
+        {},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='url-chained',
+    ),
+    pytest.param(
+        f'gh pr merge 566 -R ssh://git@github.com/{GUARDED}',
+        {},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='unreadable',
+    ),
+    pytest.param(
+        'gh pr merge 566 -R old-owner/old-name',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='old-name',
+    ),
+    pytest.param(
+        'gh pr merge 566 -R old-owner/old-name --admin',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='old-name-chained',
+    ),
+    pytest.param(
+        f'cd {OLD_NAME_CLONE} && gh pr merge 566 && echo done',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'cd {OLD_NAME_CLONE} && gh pr merge 566 -R {GUARDED}',
+        id='old-name-checkout',
+    ),
+    pytest.param(
+        'gh pr merge 566 -R https://github.com/old-owner/old-name',
+        {'canonical': old_name},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='old-name-url',
+    ),
+    pytest.param(
+        'gh pr merge 566 -R Positronic-Robotics/new-name',
+        {'canonical': renamed},
+        f'Write `-R {GUARDED_SLUG}`',
+        f'gh pr merge 566 -R {GUARDED}',
+        id='new-name-from-old-checkout',
+    ),
+]
+
+
+@pytest.mark.parametrize(('cmd', 'kwargs', 'change', 'changed'), UNRECEIPTED_MERGES)
+def test_a_merge_no_receipt_can_authorize_is_told_the_change_that_lets_one_apply(git, cmd, kwargs, change, changed):
+    denial, read = receipt_reads(git, cmd, **kwargs)
+    assert read == [] and denial is not None
+    assert gmm.MERGE_ESCAPE not in denial
+    assert change in denial
+    assert f'`gh pr merge 566`, with the flags it already has, run in a checkout of `{GUARDED_SLUG}`' in denial
+    assert 'does not unblock this command as written' in denial
+    applied = {**kwargs, 'gh_repo_env': ''}
+    assert verdict(git, changed, allow_merge=lambda *_: True, **applied) is None
+
+
+def test_a_merge_in_a_session_with_no_readable_origin_says_no_receipt_applies(git):
+    denial, read = receipt_reads(git, 'gh pr merge 566 -R someone/other', guarded='')
+    assert read == [] and denial is not None
+    assert '!allow_merge' not in denial
+    assert 'origin' in denial
+
+
+@pytest.mark.parametrize(
+    'cmd', [*BLOCKED, *(p.values[0] for p in UNRECEIPTED_MERGES), 'gh pr merge 566 -R old-owner/old-name']
+)
+def test_a_denial_offers_a_receipt_as_the_way_out_only_after_reading_one(git, cmd):
+    for kwargs in ({}, {'gh_repo_env': 'someone/other'}, {'canonical': old_name}, {'canonical': renamed}):
+        denial, read = receipt_reads(git, cmd, **kwargs)
+        assert read or denial is None or gmm.MERGE_ESCAPE not in denial, (cmd, kwargs)
 
 
 def test_a_merge_whose_repository_cannot_be_established_is_refused(git):
@@ -934,6 +1125,35 @@ def test_an_mcp_merge_naming_no_pull_request_says_to_name_one(number):
 
 def test_a_pull_request_number_json_wrote_as_a_float_is_the_same_number():
     assert mcp_verdict(MERGE_TOOL, merge_args(566.0), allow_merge=lambda number, slug: number == 566) is None
+
+
+@pytest.mark.parametrize(
+    ('arguments', 'guarded', 'canonical', 'change'),
+    [
+        pytest.param({gmm.MCP_PULL_NUMBER: 566}, GUARDED, same_name, 'Pass `owner` and `repo`', id='no-repository'),
+        pytest.param(
+            {gmm.MCP_OWNER: 'old-owner', gmm.MCP_REPO: 'old-name', gmm.MCP_PULL_NUMBER: 566},
+            GUARDED,
+            old_name,
+            f'as `{GUARDED_SLUG}`',
+            id='old-name',
+        ),
+        pytest.param({**OTHER_REPO_ARGS, gmm.MCP_PULL_NUMBER: 566}, '', same_name, 'origin', id='no-origin'),
+    ],
+)
+def test_an_mcp_merge_no_receipt_can_authorize_is_told_the_change_that_lets_one_apply(
+    arguments, guarded, canonical, change
+):
+    read = []
+
+    def spy(number, slug):
+        read.append(number)
+        return False
+
+    denial = mcp_verdict(MERGE_TOOL, arguments, guarded, allow_merge=spy, authorized=spy, canonical=canonical)
+    assert read == [] and denial is not None
+    assert gmm.MERGE_ESCAPE not in denial
+    assert change in denial
 
 
 def test_an_mcp_merge_whose_repository_cannot_be_established_is_refused():

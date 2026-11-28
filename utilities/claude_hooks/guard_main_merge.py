@@ -64,6 +64,53 @@ MERGE_EXPANSION_MSG = (
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 GH_MERGE_MSG = 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+OTHER_REPOSITORY_MERGE_MSG = (
+    'BLOCKED: this merge is in another repository, `{repo}`. The guard lets it run in one exact form only.'
+    ' Run `{form}` alone in its own Bash call, with nothing beside it but `cd`. The form can add one merge'
+    ' method, `--delete-branch`, `--subject`, `--body`, `--body-file`, `--match-head-commit` and a'
+    ' `GH_TOKEN=$(cat <file>)` prefix. This merge needs no authorization from chat.'
+)
+# The denials of a merge the guard blocks without reading a receipt: each names the change after which one applies.
+RECEIPT_FORM = (
+    ' A `!allow_merge {number}` receipt applies only to `gh pr merge {number}`, with the flags it already has, run'
+    ' in a checkout of `{guarded}` or with `-R {guarded}`, alone in its Bash call. It does not unblock this command'
+    ' as written.'
+)
+GH_REPO_ENV_MERGE_MSG = (
+    'BLOCKED: `GH_REPO` is set in the environment, so gh can merge in a repository the command does not name.'
+    ' Unset `GH_REPO` in the environment the session starts from.' + RECEIPT_FORM
+)
+GH_REPO_ASSIGNMENT_MERGE_MSG = (
+    'BLOCKED: the command sets `GH_REPO`, which can select a repository the command does not name.'
+    ' Remove the `GH_REPO` assignment.' + RECEIPT_FORM
+)
+DIRECTORY_MERGE_MSG = (
+    'BLOCKED: the guard cannot read the repository of the directory the merge runs in. Run the merge from a'
+    ' checkout of `{guarded}`, with no `cd` the guard cannot follow, or add `-R {guarded}`.' + RECEIPT_FORM
+)
+REPOSITORY_SPELLING_MERGE_MSG = (
+    'BLOCKED: `-R {repo}` is not a plain `owner/repo`, and a receipt matches only the plain name.'
+    ' Write `-R {guarded}` for this repository, or the plain `owner/repo` of another one.' + RECEIPT_FORM
+)
+OLD_NAME_MERGE_MSG = (
+    'BLOCKED: GitHub names `{repo}` as this repository, and a receipt matches only the name this checkout'
+    ' gives it. Write `-R {guarded}`.' + RECEIPT_FORM
+)
+UNGUARDED_MERGE_MSG = (
+    "BLOCKED: the guard cannot read the `origin` of this session's project, so it cannot tell which repository it"
+    ' guards, and no receipt applies. Start the session in a checkout whose `origin` names its GitHub repository.'
+)
+MCP_RECEIPT_FORM = (
+    ' A `!allow_merge {number}` receipt applies only to a call that names `owner` and `repo` as `{guarded}`.'
+    ' It does not unblock this call as written.'
+)
+MCP_NO_REPOSITORY_MERGE_MSG = (
+    'BLOCKED: {tool} names no repository. Pass `owner` and `repo` as `{guarded}`.' + MCP_RECEIPT_FORM
+)
+MCP_OLD_NAME_MERGE_MSG = (
+    'BLOCKED: GitHub names `{repo}` as this repository, and a receipt matches only the name this checkout gives it.'
+    ' Pass `owner` and `repo` as `{guarded}`.' + MCP_RECEIPT_FORM
+)
 MCP_MERGE_MSG = 'BLOCKED: {tool} is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 MCP_UNNUMBERED_MSG = (
     'BLOCKED: {tool} names no pull request — an authorization names one pull request, so a merge'
@@ -608,6 +655,15 @@ def _mcp_pull_number(arguments: dict) -> int | None:
     return int(number) if isinstance(number, str) and number.isdigit() else None
 
 
+def _unreceipted_mcp_merge_msg(tool: str, number: int, slug: str, guarded_slug: str) -> str:
+    """The deny message for an MCP merge of `number` that `analyze_mcp` does not place in `guarded_slug`."""
+    if not guarded_slug:
+        return UNGUARDED_MERGE_MSG
+    if not slug:
+        return MCP_NO_REPOSITORY_MERGE_MSG.format(tool=tool, number=number, guarded=guarded_slug)
+    return MCP_OLD_NAME_MERGE_MSG.format(repo=slug, number=number, guarded=guarded_slug)
+
+
 def analyze_mcp(
     tool: str,
     arguments: dict,
@@ -628,9 +684,9 @@ def analyze_mcp(
         number = _mcp_pull_number(arguments)
         if number is None:
             return MCP_UNNUMBERED_MSG.format(tool=tool)
-        refused = MCP_MERGE_MSG.format(tool=tool)
         if slug != guarded_slug:
-            return refused
+            return _unreceipted_mcp_merge_msg(tool, number, slug, guarded_slug)
+        refused = MCP_MERGE_MSG.format(tool=tool)
         return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, refused)
     # A write the guard cannot place — no repository named, or none to compare it against — is
     # treated as a write onto this repository.
@@ -809,6 +865,8 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
 GH_REPO_FLAGS = ('-R', '--repo')
 # Asking for help makes gh print it and merge nothing.
 GH_HELP_FLAGS = ('--help', '-h')
+# The precondition that the pull request head is still the commit the merge names.
+MATCH_HEAD_COMMIT_FLAG = '--match-head-commit'
 # `gh pr merge` flags that consume the following argument, so its value is never the pull
 # request being merged: `gh pr merge --subject 566 999` merges 999.
 GH_MERGE_VALUE_FLAGS = frozenset({
@@ -818,7 +876,7 @@ GH_MERGE_VALUE_FLAGS = frozenset({
     '--body',
     '-F',
     '--body-file',
-    '--match-head-commit',
+    MATCH_HEAD_COMMIT_FLAG,
     '-t',
     '--subject',
     *GH_REPO_FLAGS,
@@ -890,6 +948,7 @@ EXACT_MERGE_FLAGS: dict[str, str] = {
     **dict.fromkeys(('-t', '--subject'), '--subject'),
     **dict.fromkeys(('-b', '--body'), '--body'),
     **dict.fromkeys(('-F', '--body-file'), '--body-file'),
+    MATCH_HEAD_COMMIT_FLAG: MATCH_HEAD_COMMIT_FLAG,
 }
 
 
@@ -964,6 +1023,15 @@ def _runs_gh_directly(cmd: str) -> bool:
     return False
 
 
+def _repository_of_exact_form_run_alone(words: list[str], cmd: str) -> str:
+    """`owner/repo` when `gh <words>` is the exact form run alone in `cmd`; '' otherwise."""
+    if _carries_substitution(cmd) or _carries_expansion(cmd):
+        return ''
+    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
+        return ''
+    return _repository_of_exact_merge_form(words)
+
+
 def _is_exact_merge_in_another_repository(
     words: list[str], guarded_slug: str, cmd: str, gh_repo_env: str, canonical=canonical_repository
 ) -> bool:
@@ -972,11 +1040,9 @@ def _is_exact_merge_in_another_repository(
     Any substitution, expansion or `GH_REPO` can still select the guarded repository, so each one says no.
     The merge runs alone, as a guarded one must, so one command makes only the two lookups of one merge.
     """
-    if gh_repo_env or _sets_gh_repo(cmd) or _carries_substitution(cmd) or _carries_expansion(cmd):
+    if gh_repo_env or _sets_gh_repo(cmd):
         return False
-    if not (_merge_runs_alone(cmd) and _runs_gh_directly(cmd)):
-        return False
-    repo = _repository_of_exact_merge_form(words)
+    repo = _repository_of_exact_form_run_alone(words, cmd)
     if not (repo and guarded_slug) or repo == guarded_slug:
         return False
     return not _names_guarded(repo, guarded_slug, canonical)
@@ -1032,6 +1098,57 @@ def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str: 
     if inv_dir is None:
         return ''
     return repo_slug(git.remote_url(inv_dir, remote))
+
+
+def _other_repository_form(number: int, repo: str, words: list[str]) -> str:
+    """The exact form that merges `number` in `repo`, with the head commit `gh <words>` requires, if any."""
+    form = f'gh pr merge {number} -R {repo}'
+    pending = ''
+    for w in words:
+        if pending:
+            if pending == MATCH_HEAD_COMMIT_FLAG:
+                return f'{form} {MATCH_HEAD_COMMIT_FLAG} {w}'
+            pending = ''
+        elif w.startswith('-'):
+            flag, value = _gh_flag(w)
+            if flag == MATCH_HEAD_COMMIT_FLAG and value:
+                return f'{form} {MATCH_HEAD_COMMIT_FLAG} {value}'
+            pending = flag if flag and not value else ''
+    return form
+
+
+def _unreceipted_merge_msg(
+    number: int,
+    target: str,
+    words: list[str],
+    inv_dir: str | None,
+    guarded_slug: str,
+    git: GitInfo,
+    cmd: str,
+    gh_repo_env: str,
+    canonical,
+) -> str:
+    """The deny message for a merge that `_gh_repo` does not place in `guarded_slug`."""
+    if not guarded_slug:
+        return UNGUARDED_MERGE_MSG
+    names = {'number': number, 'guarded': guarded_slug}
+    if gh_repo_env:
+        return GH_REPO_ENV_MERGE_MSG.format(**names)
+    if _sets_gh_repo(cmd):
+        return GH_REPO_ASSIGNMENT_MERGE_MSG.format(**names)
+    if target:
+        m = GH_REPO_SELECTOR_RE.fullmatch(target.casefold())
+        slug = m.group(1).casefold() if m else ''
+        if slug in ('', guarded_slug):
+            return REPOSITORY_SPELLING_MERGE_MSG.format(repo=target, **names)
+    else:
+        slug = repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
+        if not slug:
+            return DIRECTORY_MERGE_MSG.format(**names)
+    # The exact form run alone was already looked up, and reaches here only when GitHub names it `guarded_slug`.
+    if _repository_of_exact_form_run_alone(words, cmd) or _names_guarded(slug, guarded_slug, canonical):
+        return OLD_NAME_MERGE_MSG.format(repo=target or slug, **names)
+    return OTHER_REPOSITORY_MERGE_MSG.format(repo=slug, form=_other_repository_form(number, slug, words), **names)
 
 
 def analyze(  # noqa: C901
@@ -1111,7 +1228,9 @@ def analyze(  # noqa: C901
             if pending_merge is not None:
                 return MULTIPLE_MERGES_MSG
             if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
-                return GH_MERGE_MSG
+                return _unreceipted_merge_msg(
+                    number, target, inv.words, inv.dir, guarded_slug, git, cmd, gh_repo_env, canonical
+                )
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
             pending_merge = number
