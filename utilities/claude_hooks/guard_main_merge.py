@@ -980,13 +980,13 @@ def _is_exact_merge_in_another_repository(
     """
     if gh_repo_env or _sets_gh_repo(cmd):
         return False
-    repo = _exact_form_run_alone(words, cmd)
+    repo = _repository_of_exact_form_run_alone(words, cmd)
     if not (repo and guarded_slug) or repo == guarded_slug:
         return False
     return not _names_guarded(repo, guarded_slug, canonical)
 
 
-def _exact_form_run_alone(words: list[str], cmd: str) -> str:
+def _repository_of_exact_form_run_alone(words: list[str], cmd: str) -> str:
     """`owner/repo` when `gh <words>` is the exact form run alone in `cmd`; '' otherwise."""
     if _carries_substitution(cmd) or _carries_expansion(cmd):
         return ''
@@ -996,14 +996,10 @@ def _exact_form_run_alone(words: list[str], cmd: str) -> str:
 
 
 def _another_repository(words: list[str], repo: str, guarded_slug: str, cmd: str) -> str:
-    """`owner/repo` when `repo` plainly names a repository other than `guarded_slug`, for a merge out of the exact form.
-
-    The exact form run alone fails `_is_exact_merge_in_another_repository` here only when GitHub names its repository
-    the guarded one, so it gives ''.
-    """
+    """`owner/repo` when `repo` names a repository other than `guarded_slug`, out of the exact form; '' otherwise."""
     m = GH_REPO_SELECTOR_RE.fullmatch(repo)
     slug = m.group(1).casefold() if m else ''
-    if not guarded_slug or slug in ('', guarded_slug) or _exact_form_run_alone(words, cmd):
+    if not guarded_slug or slug in ('', guarded_slug) or _repository_of_exact_form_run_alone(words, cmd):
         return ''
     return slug
 
