@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
+# The two CRON arms of the stand, mounted tilted out on a V rack: the gripper level, and the left pose the mirror of
+# the right one
+CRON_LEFT_NOMINAL_JOINTS = [-3.36325, -1.34565, -2.27067, 3.64774, 4.45932, 2.36322]
+CRON_RIGHT_NOMINAL_JOINTS = [0.22166, -1.79594, 2.27067, -0.50615, 1.82387, 7.06156]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The law that DROID-pretrained checkpoints run under: the joint gains and the Cartesian damping of DROID's Franka,

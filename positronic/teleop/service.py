@@ -138,7 +138,7 @@ class ButtonMap:
         self._presses: tuple[int, ...] | None = None
         self._read = tuple(buttons)
 
-    def _new_presses(self, buttons: ControllerButtons, now_ns: int) -> dict[Button, int]:
+    def new_presses(self, buttons: ControllerButtons, now_ns: int) -> dict[Button, int]:
         """Record the state of the buttons, and return the number of presses of each button since the previous
         sample. A sample with a count that went down, or with another number of counts, is of a page that loaded
         again: all its counts become the counts to count from, and it presses nothing."""
@@ -162,7 +162,7 @@ class ButtonMap:
     def observe(self, buttons: ControllerButtons, now_ns: int) -> None:
         """Record the state of the buttons, outside a trial. A press here does nothing, and a button that is down here
         does not hold in the next."""
-        self._new_presses(buttons, now_ns)
+        self.new_presses(buttons, now_ns)
         self._used.update(self._down_since)
 
     def cancel_holds(self) -> None:
@@ -174,7 +174,7 @@ class ButtonMap:
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
     def ready_answer(self, buttons: ControllerButtons, now_ns: int) -> ReadyAnswer | None:
-        new_presses = self._new_presses(buttons, now_ns)
+        new_presses = self.new_presses(buttons, now_ns)
         # A button that is down before the trial runs does not hold in it.
         self._used.update(self._down_since)
         if Button.B in new_presses:
@@ -187,8 +187,7 @@ class ButtonMap:
         """The events of the sample ``buttons``. An odd number of presses of A since the previous sample gives one
         clutch event. An even number gives two, so control that is on turns off and on again, at the new place of the
         hand."""
-        presses_of_a = self._new_presses(buttons, now_ns).get(Button.A, 0)
-        events = [Event.CLUTCH] * (0 if presses_of_a == 0 else 1 if presses_of_a % 2 else 2)
+        events = [Event.CLUTCH] * self.clutches(self.new_presses(buttons, now_ns).get(Button.A, 0))
         if self._is_held(Button.B, now_ns):
             self._used.add(Button.B)
             events.append(Event.COMPLETE)
@@ -196,6 +195,11 @@ class ButtonMap:
             self._used.add(Button.STICK)
             events.append(Event.GIVE_UP)
         return events
+
+    @staticmethod
+    def clutches(presses_of_a: int) -> int:
+        """The number of turns of control for ``presses_of_a`` presses of A between two samples: 0, 1 or 2."""
+        return 0 if presses_of_a == 0 else 1 if presses_of_a % 2 else 2
 
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:
