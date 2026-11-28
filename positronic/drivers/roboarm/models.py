@@ -295,7 +295,7 @@ def bundled_yam_model() -> dict:
     attach_frame(root, GRIPPER_SITE, YAM_WRIST_LINK, _GRIPPER_YAM_XYZ, _GRIPPER_YAM_RPY)
     attach_frame(root, EE_LINK, GRIPPER_SITE, *_urdf_origin(YAM_GRASP_SITE_FRAME))
     return {
-        'robot': 'i2rt_yam',
+        roboarm_keys.ROBOT: 'i2rt_yam',
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         roboarm_keys.MESHES: {name: (urdf_path.parent / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: list(YAM_JOINT_NAMES),

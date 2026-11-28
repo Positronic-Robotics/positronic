@@ -1044,6 +1044,7 @@ class Robot(pimm.ControlSystem):
         # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
         return {
+            roboarm_keys.ROBOT: 'droid',  # the arm with the Robotiq 2F-85: the arm and gripper of a DROID rig
             roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             roboarm_keys.MESHES: meshes,
