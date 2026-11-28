@@ -1,4 +1,4 @@
-.PHONY: all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi-base push-openpi-base build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
+.PHONY: build-train-cosmos3 build-train-flux3 all build tag push clean prune help build-molmospaces tag-molmospaces push-molmospaces build-training tag-training push-training build-openpi-base push-openpi-base build-openpi tag-openpi push-openpi build-groot tag-groot push-groot build-dreamzero-base push-dreamzero-base build-dreamzero tag-dreamzero push-dreamzero build-robolab tag-robolab push-robolab nebius-login push-robolab-cr
 
 IMAGE_NAME_TRAINING := positro/positronic
 IMAGE_NAME_OPENPI := positro/openpi
@@ -158,6 +158,13 @@ push-serve-$(1):
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
+
+# Training images (README.md § Training images). They go to a private registry, built and pushed by hand.
+build-train-cosmos3:
+	docker build --platform linux/amd64 -f Dockerfile.train-cosmos3 -t positro/train-cosmos3:local ..
+
+build-train-flux3:
+	docker build --platform linux/amd64 $(HF_TOKEN_BUILD_FLAGS) -f Dockerfile.train-flux3 -t positro/train-flux3:local ..
 
 # A docker-container builder reads a base from the registry only, so the push needs the base published.
 build-serve-pi05-droid: build-openpi-base

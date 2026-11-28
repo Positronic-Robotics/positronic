@@ -67,6 +67,35 @@ gets by default.
 DreamZero's self-contained DROID build lives in
 [`vendors/dreamzero`](../positronic/vendors/dreamzero/README.md#self-contained-droid-image), with separate serving and training Dockerfiles.
 
+## Training images
+
+Each `Dockerfile.train-*` recipe builds a fine-tuning image for one DROID policy, with its training code and its
+start weights inside. Build each one by hand and push it to a private registry. Pin it by digest.
+
+| Recipe | Image | Training code | Start weights |
+|---|---|---|---|
+| [`Dockerfile.train-cosmos3`](Dockerfile.train-cosmos3) | `positro/train-cosmos3` | NVIDIA cosmos-framework | Cosmos3-Nano-Policy-DROID as a DCP checkpoint, at `BASE_CHECKPOINT_PATH` |
+| [`Dockerfile.train-flux3`](Dockerfile.train-flux3) | `positro/train-flux3` | BFL flux-action | FLUX 3 Action DROID root package and the base files, under `/opt/flux3` |
+
+```bash
+make -C docker build-train-cosmos3
+HF_TOKEN=<a read token> make -C docker build-train-flux3
+```
+
+Each image carries `/opt/train/train-resume.service`, a host unit for a preemptible VM. At each boot it starts the
+image on the run that the data disk holds, so a VM that a preemption stopped resumes its run when it starts again.
+It reads `/data/run/run.env` (`TRAIN_IMAGE`, `RUN`, `FINAL_MARKER`, `S3_ENDPOINT`, `S3_REGION`) and the S3 key in
+`/data/keys/s3.json`. When the run's final marker exists, it launches nothing. Otherwise it runs
+`/data/run/run.sh` if that file is executable, or else the image's launcher on `/data/run/config.toml` (Cosmos3)
+or `/data/run/train.json` (FLUX 3 Action). When that exits 0, it writes the final marker. The Cosmos3 launcher also
+needs `DROID_ROOT` in `run.env`: the dataset directory under `/data`, named `droid_plus_lerobot_640x360_20260412`,
+that holds `success/`. Install it on the VM:
+
+```bash
+docker run --rm "$TRAIN_IMAGE" cat /opt/train/train-resume.service > /etc/systemd/system/train-resume.service
+systemctl daemon-reload && systemctl enable --now train-resume.service
+```
+
 ## GR00T N1.7 containers
 
 `make build-groot` pulls the published `positro/gr00t-base:latest` image. The fork image contains
