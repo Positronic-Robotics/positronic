@@ -91,9 +91,12 @@
         const INPUT_FIELD = {
           headsetCamera: 'headset_camera', textOnly: 'headset_text_only', taskHidden: 'headset_task_hidden',
         };
-        const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+        const PHASE = {
+          idle: 'idle', headsUp: 'heads_up', readyWait: 'ready_wait', running: 'running', ended: 'ended',
+        };
         const PHASE_TEXT = {
-          [PHASE.idle]: 'Waiting for a trial', [PHASE.readyWait]: 'A trial waits for Ready',
+          [PHASE.idle]: 'Waiting for a trial', [PHASE.headsUp]: 'Waiting for a trial',
+          [PHASE.readyWait]: 'A trial waits for Ready',
           [PHASE.running]: 'Trial running', [PHASE.ended]: 'The trial ended',
         };
         // Y on the left controller: a press shows the next camera, a hold cycles the panel of the headset.

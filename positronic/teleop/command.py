@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import webbrowser
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -24,7 +24,7 @@ from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES
 from .protocol import DEFAULT_PORT, default_socket_path
-from .service import Phase, TeleopService
+from .service import Phase, TeleopService, TrialState
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
@@ -136,38 +136,51 @@ class _Headset(pimm.ControlSystem):
         self.page_state.emit(asdict(page_state))
 
 
+@dataclass(frozen=True)
+class NoticeText:
+    """The title and the message of a notice."""
+
+    title: str
+    message: str
+
+
 class Notice(Protocol):
     """A notice to the teleoperator on the computer of the service."""
 
-    def show(self, text: str) -> None: ...
+    def show(self, text: NoticeText) -> None: ...
 
     def hide(self) -> None: ...
 
 
-class _ReadyNotice(pimm.ControlSystem):
-    """Show ``text`` with ``notice`` while a trial waits for Ready."""
+class _PhaseNotice(pimm.ControlSystem):
+    """Show the text of each phase in ``texts`` with ``notice`` while the trial that ``state`` gives is in that phase.
+    Each new heads-up shows its text again."""
 
-    def __init__(self, notice: Notice, text: str):
+    def __init__(self, notice: Notice, texts: Mapping[Phase, NoticeText], state: Callable[[], TrialState]):
         self._notice = notice
-        self._text = text
-        # The state of the trial, as a `PageState` mapping.
-        self.page_state = pimm.ControlSystemReceiver(self)
+        self._texts = dict(texts)
+        self._state = state
+
+    def _switch(self, shown: NoticeText | None, text: NoticeText | None) -> None:
+        """Hide the notice of ``shown``, and show ``text``. ``None`` is no notice."""
+        if shown is not None:
+            self._notice.hide()
+        if text is not None:
+            self._notice.show(text)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        waiting = False
+        shown: NoticeText | None = None
+        heads_ups = None
         try:
             while not should_stop.value:
-                state = pimm.read_updated(self.page_state)
-                if state is not None:
-                    was_waiting, waiting = waiting, PageState(**state.data).phase is Phase.READY_WAIT
-                    if waiting and not was_waiting:
-                        self._notice.show(self._text)
-                    elif was_waiting and not waiting:
-                        self._notice.hide()
+                state = self._state()
+                text = self._texts.get(state.phase)
+                if text != shown or state.heads_ups != heads_ups:
+                    self._switch(shown, text)
+                    shown, heads_ups = text, state.heads_ups
                 yield pimm.Sleep(0.1)
         finally:
-            if waiting:
-                self._notice.hide()
+            self._switch(shown, None)
 
 
 _MACOS_SOUND, _LINUX_SOUND = '/System/Library/Sounds/Glass.aiff', '/usr/share/sounds/freedesktop/stereo/complete.oga'
@@ -177,12 +190,7 @@ class DesktopNotice:
     """A dialog with ``sound`` on the screen of this computer: ``osascript`` and ``afplay`` on macOS, else ``zenity`` on
     ``DISPLAY`` and ``paplay``."""
 
-    def __init__(
-        self,
-        title: str = 'Teleoperation trial',
-        sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND,
-    ):
-        self._title = title
+    def __init__(self, sound: str = _MACOS_SOUND if sys.platform == 'darwin' else _LINUX_SOUND):
         self._sound = Path(sound)
         self._dialog: subprocess.Popen | None = None
 
@@ -199,13 +207,14 @@ class DesktopNotice:
             logger.error('Cannot show the notice with %s: %s', command[0], error)
             return None
 
-    def show(self, text: str) -> None:
+    def show(self, text: NoticeText) -> None:
         if sys.platform == 'darwin':
             self._start(['afplay', str(self._sound)])
-            script = f'display alert {self._applescript_string(self._title)} message {self._applescript_string(text)}'
-            self._dialog = self._start(['osascript', '-e', script])
+            title, message = self._applescript_string(text.title), self._applescript_string(text.message)
+            self._dialog = self._start(['osascript', '-e', f'display alert {title} message {message}'])
         else:
-            dialog = ['zenity', '--info', '--no-markup', '--width=700', f'--title={self._title}', f'--text={text}']
+            dialog = ['zenity', '--info', '--no-markup', '--width=700']
+            dialog += [f'--title={text.title}', f'--text={text.message}']
             # GTK waits some seconds for the session bus and the accessibility bus of the screen. A user other than the
             # user at the screen cannot reach them, and the dialog needs neither.
             self._dialog = self._start(
@@ -245,6 +254,7 @@ def serve(
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
+    heads_up_limit: float = 30 * 60.0,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -252,7 +262,8 @@ def serve(
     ``--served_address=@positronic.teleop.command.network`` serves on a host and a port. It checks the bearer token in
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
-    ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
+    ``notice`` shows on this computer while a trial waits for Ready, and in the heads-up of a run that has a teleop
+    episode. ``--notice=None`` turns it off. The heads-up shows for ``heads_up_limit`` seconds at most.
     ``cameras`` names the cameras of the station, such as ``'["image.exterior", "image.wrist"]'``. A run whose address
     names no cameras sends these, and the headset page offers them.
     ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
@@ -288,22 +299,27 @@ def serve(
         auth_token=auth_token,
         cameras=cameras,
         controller_axes=controller_axes,
+        heads_up_limit=heads_up_limit,
     )
     headset = _Headset(service, webxr.video_fps)
-    text = (
+    ready_text = (
         f'A teleoperation trial waits for Ready. Within {ready_limit:g} s, press B on the Quest, '
         'or tap Ready on the phone page.'
     )
-    ready_notice = None if notice is None else _ReadyNotice(notice, text)
+    texts = {
+        Phase.HEADS_UP: NoticeText(
+            'Teleoperation run', 'A run with a teleop episode is starting. The episode comes later.'
+        ),
+        Phase.READY_WAIT: NoticeText('Teleoperation trial', ready_text),
+    }
+    phase_notice = None if notice is None else _PhaseNotice(notice, texts, service.state)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(webxr.page_input, headset.page_input)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
-        if ready_notice is not None:
-            world.connect(headset.page_state, ready_notice.page_state)
         logger.info('The teleop service serves on %s. Its window is %s', service.served_address, window.url)
         if open_window:
             webbrowser.open(window.url)
-        world.run([headset, ready_notice], [webxr])
+        world.run([headset, phase_notice], [webxr])
