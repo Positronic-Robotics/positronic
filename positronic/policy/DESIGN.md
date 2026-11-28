@@ -349,9 +349,12 @@ It records new inputs before each policy call and commands after emission. Betwe
 samples every millisecond; each sampling pass resets that deadline. Reused inputs keep their
 original timestamps and are not written twice. Privileged inputs stay outside policy observations.
 Inputs include receipt timestamps; commands use the emission timestamps returned by `emit()`.
-Harness adds `harness.world` and `harness.wall` to every record, marking when it reads an input
-or emits a command. These coordinates align training, replay, and viewing while preserving
-the original message timestamps. These two names are reserved for the harness.
+Harness adds `harness.world` and `harness.wall` to every sample, marking when it reads an input
+or emits a command. It also adds `harness.step`, the step number. A command has the number of its step. Each other
+sample, such as an input, has the count of the steps before it. So an input that a step reads has the number of that
+step. An input that the harness reads after the last step has a number that no step has. These coordinates align
+training, replay, and viewing while preserving the original message timestamps. These three names are reserved for
+the harness.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 The harness stores episode metadata with the policy definition metadata before policy cleanup.
 TODO: Add per-call records for the policy stack, remote inference payloads, and custom values.

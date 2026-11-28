@@ -28,7 +28,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
@@ -2247,7 +2247,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
             list(loop)
     command = LocalDataset(tmp_path)[0][MOTOR]
     assert list(command.timestamps(EMITTED_WORLD)) == [0]
-    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+    assert set(command.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
 
 
 def test_policy_completion_resets_the_sampling_deadline(episode_harness):
@@ -2361,9 +2361,11 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
     episode = LocalDataset(tmp_path)[0]
     commands = episode[MOTOR]
     assert list(commands.values()) == list(range(5))
-    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+    assert set(commands.timelines) == {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
     assert list(commands.timestamps(EMITTED_WORLD)) == [0] * 5
     assert np.all(np.diff(commands.timestamps(EMITTED_WALL)) > 0)
+    # Each step has its own number, also when the steps have one time.
+    assert list(commands.timestamps(HARNESS_STEP)) == [0, 1, 2, 3, 4]
     assert len(episode[POSITION]) == 1
 
 
@@ -2404,8 +2406,10 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
     assert [data for name, data, _ in episode.records if name == eval_keys.INSTRUCTION] == ['move']
     inputs_and_commands = [data.tolist() for name, data, _ in episode.records if name != eval_keys.INSTRUCTION]
     assert inputs_and_commands == [[10], [1], [20], [2]]
+    steps = [(data.tolist(), ts[HARNESS_STEP]) for name, data, ts in episode.records if name in (POSITION, MOTOR)]
+    assert steps == [([10], 0), ([1], 0), ([20], 1), ([2], 1)]
     for name, _, ts in episode.records:
-        expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD}
+        expected = {EMITTED_WALL, EMITTED_WORLD, HARNESS_WALL, HARNESS_WORLD, HARNESS_STEP}
         if name == POSITION:
             expected |= {RECEIVED_WALL, RECEIVED_WORLD}
             assert ts[HARNESS_WORLD] == ts[RECEIVED_WORLD]
@@ -2414,6 +2418,35 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
             assert ts[HARNESS_WORLD] == ts[EMITTED_WORLD]
             assert ts[HARNESS_WALL] == ts[EMITTED_WALL]
         assert set(ts) == expected
+
+
+def test_an_input_that_the_harness_reads_between_two_steps_goes_with_the_next_step(episode_harness):
+    h = episode_harness
+    calls = []
+
+    class Move(Policy):
+        def run(self, runtime):
+            obs = yield
+            while True:
+                calls.append(obs[POSITION])
+                obs = yield Step({MOTOR: len(calls)}, runtime.time_ns + 5_000_000)
+
+    h.observation.emit(10)
+    answer = h.caller(Rollout(Task('move', None), Move(), h.dataset))
+    next(h.loop)
+    h.world.clock.advance_to_ns(1_000_000)
+    h.observation.emit(20)
+    h.world.clock.advance_to_ns(2_000_000)
+    next(h.loop)
+    h.world.clock.advance_to_ns(5_000_000)
+    next(h.loop)
+    assert not answer.done()
+    assert calls == [10, 20]
+    records = h.dataset.episodes[0].records
+    positions = [(data, ts[HARNESS_WORLD], ts[HARNESS_STEP]) for name, data, ts in records if name == POSITION]
+    assert positions == [(10, 0, 0), (20, 2_000_000, 1)]
+    commands = [(ts[HARNESS_WORLD], ts[HARNESS_STEP]) for name, _, ts in records if name == MOTOR]
+    assert commands == [(0, 0), (5_000_000, 1)]
 
 
 def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_harness, tmp_path):
@@ -2471,10 +2504,10 @@ def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name)
         assert timestamps[RECEIVED_WORLD] == original_time[RECEIVED_WORLD] == 1_000_000
         assert timestamps[RECEIVED_WALL] == original_time[RECEIVED_WALL]
         assert message.time is original_time
-        assert HARNESS_WORLD not in message.time and HARNESS_WALL not in message.time
+        assert not {HARNESS_WORLD, HARNESS_WALL, HARNESS_STEP} & set(message.time)
 
 
-@pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL])
+@pytest.mark.parametrize('timeline', [HARNESS_WORLD, HARNESS_WALL, HARNESS_STEP])
 def test_producer_cannot_overwrite_harness_recording_timestamps(episode_harness, timeline):
     h = episode_harness
     h.observation.emit(1, time=pimm.Time(**{timeline: 123}))

@@ -22,7 +22,7 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.keys import EE_FRAMES
@@ -428,6 +428,9 @@ class Harness(pimm.ControlSystem):
         self._frame_ns_by_signal: dict[str, int] = {}
         # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
         self._recorded_instruction: str | None = None
+        # The count of the steps that the policy gave in this episode, which each sample has on ``HARNESS_STEP``. It
+        # goes up after the commands of a step, so each sample of a step and each input that it reads have its number.
+        self._step_number = 0
         # The newest goal the embodiment published in this episode, which the policy gets over the task's instruction.
         self._goal: str | None = None
         self._clock: pimm.Clock | None = None
@@ -545,15 +548,17 @@ class Harness(pimm.ControlSystem):
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
                 self._recorded_signals.add(name)
 
+    def _harness_coordinates(self, world_ns: int, wall_ns: int) -> dict[str, int]:
+        """The harness's timelines of a sample that it reads, makes or sends at ``world_ns`` and ``wall_ns``."""
+        return {HARNESS_WORLD: world_ns, HARNESS_WALL: wall_ns, HARNESS_STEP: self._step_number}
+
     def _record_instruction(self, instruction: str) -> None:
         """Record the instruction that the policy gets, at the harness's time, when it differs from the last one."""
         if self._writer is None or instruction == self._recorded_instruction:
             return
         assert self._clock is not None, 'an episode records only inside run'
         emitted = emission_time(self._clock)
-        timestamps = pimm.Time(
-            **emitted, **{HARNESS_WORLD: emitted[EMITTED_WORLD], HARNESS_WALL: emitted[EMITTED_WALL]}
-        )
+        timestamps = pimm.Time(**emitted, **self._harness_coordinates(emitted[EMITTED_WORLD], emitted[EMITTED_WALL]))
         self._append({eval_keys.INSTRUCTION: instruction}, timestamps)
         self._recorded_instruction = instruction
 
@@ -581,7 +586,7 @@ class Harness(pimm.ControlSystem):
             step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
         if self._writer is not None:
             world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
-            timestamps = pimm.Time(**message.time, **{HARNESS_WORLD: stamp[world], HARNESS_WALL: stamp[wall]})
+            timestamps = pimm.Time(**message.time, **self._harness_coordinates(stamp[world], stamp[wall]))
             self._append(values, timestamps, timing)
         return values
 
@@ -743,6 +748,7 @@ class Harness(pimm.ControlSystem):
                 if self._writer is not None:
                     for name, message in messages.items():
                         self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
+                self._step_number += 1
             finally:
                 if span.is_recording():
                     telemetry.set_attrs(span, **step_ms)
@@ -810,6 +816,7 @@ class Harness(pimm.ControlSystem):
             self._obs_by_signal.clear()
             self._frame_ns_by_signal.clear()
             self._recorded_instruction = None
+            self._step_number = 0
             self._goal = None
             self._record_wait = _RecordWait()
 
