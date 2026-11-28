@@ -1442,6 +1442,30 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
+class HoldWithSchedule(Hold):
+    """States the metadata of an inference schedule, as a policy stack with a schedule does."""
+
+    def meta(self):
+        return ChunkedSchedule(fps=10, horizon_sec=0.5).meta()
+
+
+def test_the_episode_span_carries_the_schedule_settings_at_the_call_level(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-schedule-meta', level=telemetry.Level.CALL):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), HoldWithSchedule(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    prefix = f'{policy_keys.POLICY_META}.{policy_keys.REQUEST_TIMING}'
+    assert episode.attrs[f'{prefix}.reference'] == 'before_end'
+    assert episode.attrs[f'{prefix}.seconds'] == 0.0
+    assert episode.attrs[f'{policy_keys.POLICY_META}.{policy_keys.LATENCY_ESTIMATE}'] == 0.0
+    assert episode.attrs[f'{policy_keys.POLICY_META}.{policy_keys.ACTION_HORIZON_SEC}'] == 0.5
+
+
 @pytest.mark.parametrize('level', list(telemetry.Level))
 def test_the_episode_span_counts_its_late_steps_and_its_slow_encodes_in_the_policy_workers(
     episode_harness, tmp_path, level

@@ -17,6 +17,7 @@ Describe a local stack without creating episode state::
 """
 
 import threading
+import time
 from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
 from collections import deque
@@ -35,7 +36,7 @@ from attr import asdict, dataclass, evolve
 from positronic_model_server.serialization import check_int_range
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.keys import IMAGE_PREFIX
@@ -246,7 +247,8 @@ class TrajectoryPlayer(Policy):
             It includes the command held now, followed by future commands. The last emitted
             command stays in context until replaced or recovery clears it. ``None`` omits this context.
         record_stats: Record scheduled, emitted and dropped waypoint counts, command lateness,
-            gaps between emissions, and holds between chunks in episode metadata.
+            gaps between emissions, and holds between chunks in episode metadata. Each hold also records a
+            ``waypoints.hold`` span.
         replan_on_error: Clear the plan on an arm's ``ERROR`` status and advance the inner run
             immediately with ``replan_now=True``. Pending calls from the inner run are not cancelled.
             Further resets are suppressed until commands are emitted; ``False`` leaves playback unchanged by arm errors.
@@ -313,7 +315,9 @@ class TrajectoryPlayer(Policy):
 
         A hold is the time from the end of the plan to the first command of the next chunk. The arm keeps its last
         target during a hold, also through a waypoint with no commands. The wait for the first chunk and a hold that
-        the episode end cuts do not count.
+        the episode end cuts do not count. Each hold longer than zero records a span on the wall clock. It starts at
+        the first round at or after the end of the plan, and ends at the round that sends the next chunk. Its
+        ``hold.ms`` is the hold on the runtime clock.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -326,6 +330,7 @@ class TrajectoryPlayer(Policy):
             # The end of the chunk that plays now, and of the chunk whose first round comes next.
             self._played_end_ns: int | None = None
             self._starting_chunk_end_ns: int | None = None
+            self._hold_start_wall_ns: int | None = None
             self._hold_sum_ns = 0
             self._hold_max_ns = 0
 
@@ -345,6 +350,8 @@ class TrajectoryPlayer(Policy):
 
         def count_round(self, planned: int | None, now_ns: int, queued: int, *, sent: bool) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``; ``sent`` if any went out."""
+            if self._hold_start_wall_ns is None and self._played_end_ns is not None and now_ns >= self._played_end_ns:
+                self._hold_start_wall_ns = time.time_ns()
             if planned is None and self._round_due_ns is None:
                 return
             if planned is not None:
@@ -367,7 +374,13 @@ class TrajectoryPlayer(Policy):
                 hold_ns = max(0, now_ns - self._played_end_ns)
                 self._hold_sum_ns += hold_ns
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
+                if hold_ns > 0 and self._hold_start_wall_ns is not None:
+                    attrs = {telemetry_keys.ATTR_HOLD_MS: hold_ns / 1e6}
+                    telemetry.record_anchored_span(
+                        telemetry_keys.SPAN_WAYPOINTS_HOLD, self._hold_start_wall_ns, time.time_ns(), **attrs
+                    )
             self._played_end_ns = max(self._starting_chunk_end_ns, now_ns)
+            self._hold_start_wall_ns = None
             self._starting_chunk_end_ns = None
 
         def _write(self, queued: int) -> None:
@@ -835,7 +848,12 @@ class InferenceSchedule(Policy):
             calls.close()
 
     def meta(self) -> dict[str, Any]:
-        meta = {ACTION_FPS: self._fps}
+        meta: dict[str, Any] = {ACTION_FPS: self._fps, policy_keys.REQUEST_TIMING: self._request_timing.to_spec()}
+        try:
+            meta[policy_keys.LATENCY_ESTIMATE] = self._latency_estimate.to_spec()
+        # rules-allow: swallowed-error — a local estimate has no wire spec by design, and the meta then has no key.
+        except NotImplementedError:
+            pass
         if self._merge.horizon_sec is not None:
             meta[policy_keys.ACTION_HORIZON_SEC] = self._merge.horizon_sec
         return meta

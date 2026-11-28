@@ -53,7 +53,7 @@ Each span has a level, and a process records the spans at or below its active le
 
 | Level | Records | Rate on a real robot |
 |---|---|---|
-| `call` | the pass, each episode, reset and policy call, with their spans: `eval.pass`, `episode`, `reset`, `policy.submit`, `policy.prepare`, `policy.encode` of a call, `policy.infer`, `wire.send`, `wire.recv`, the `record.io` that opens and closes the episode's writer | a few spans per policy call |
+| `call` | the pass, each episode, reset and policy call, with their spans: `eval.pass`, `episode`, `reset`, `policy.submit`, `policy.prepare`, `policy.encode` of a call, `policy.infer`, `wire.send`, `wire.recv`, `waypoints.hold`, the `record.io` that opens and closes the episode's writer | a few spans per policy call |
 | `step` | also the spans of each control step: `harness.step`, one `<processor>` span per processor per step, `record.io` of each append at a step, `step.record_wait_ms` of the samples between steps, `driver.command`, the client `env.step` and `materialize` | hundreds of spans per second |
 
 `POSITRONIC_TELEMETRY_LEVEL` names the level, `call` or `step`, and each process that a run spawns inherits it.
@@ -118,6 +118,7 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
+| `waypoints.hold` | the `episode`, at each level: the span starts before the round that ends the hold | `hold.ms` | one hold of the arm between two chunks |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
@@ -196,6 +197,31 @@ The `episode` span carries `episode.waypoints.hold_sum_ms` and `episode.waypoint
 command of the next chunk. During a hold the arm keeps its last target. The wait for the first chunk does not
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
+
+When the player records its stats (`record_stats`), each hold longer than zero also records a `waypoints.hold`
+span. Both bounds of the span are wall times. The span starts at the first player round at or after the end of the
+plan, and ends at the round that sends the first command of the next chunk. Its `hold.ms` is the length of the hold
+on the clock of the policy runtime, so the `hold.ms` values add up to `hold_sum_ms`. On a real rig this clock is the
+monotonic clock of the host, and the span can be shorter than `hold.ms` by the wake delay of one round. In a simulation
+it is the world clock, so `hold.ms` is the simulated length of the hold, and the span is the wall time that the hold
+took. The span carries no id of the call that made the next chunk, so an analysis joins a hold to its
+`policy.submit` span by time. A hold comes at most once per chunk,
+so the span records at the `call` level.
+
+An inference schedule states its settings in its metadata, so the `episode` span carries them under
+`inference.policy.`:
+
+- `action_fps`: the rate of the commands in a chunk.
+- `action_horizon_sec`: the longest time that one chunk plays. It is absent when each chunk plays all its commands.
+- `request_timing.reference` and `request_timing.seconds`: when the schedule requests the next chunk. `before_end`
+  requests before the plan ends, by the latency estimate. `after_start` requests `seconds` after a chunk starts.
+  `every` requests each `seconds`.
+- `latency_estimate`: the lead of `before_end`. A number is a constant lead in seconds. Zero requests at the end of
+  the plan, so the arm holds for the whole call. `latency_estimate.statistic`, `latency_estimate.last` and
+  `latency_estimate.max_sec` state a lead that follows the delays of the recent calls. The other references do not
+  use the estimate. A local estimate with no wire spec records no `latency_estimate`.
+
+A remote policy records the metadata of its client stack only on protocol version 3.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of

@@ -434,14 +434,24 @@ def traced(name: str, level: Level = Level.CALL, /, **attrs: Any) -> Callable[[C
 def record_span(name: str, start_ns: int, end_ns: int, level: Level = Level.CALL, /, **attrs: Any) -> None:
     """Record a completed span with explicit wall-clock bounds. Parents like ``span``, and reaches a timing sink.
     Inert without an exporter or timing sink, and above the active level."""
+    _record_completed(name, start_ns, end_ns, level, anchored=False, attrs=attrs)
+
+
+def record_anchored_span(name: str, start_ns: int, end_ns: int, level: Level = Level.CALL, /, **attrs: Any) -> None:
+    """``record_span`` for a span that starts before the active span did: it parents to the innermost anchor."""
+    _record_completed(name, start_ns, end_ns, level, anchored=True, attrs=attrs)
+
+
+def _record_completed(
+    name: str, start_ns: int, end_ns: int, level: Level, *, anchored: bool, attrs: dict[str, Any]
+) -> None:
     if not enabled(level):
         return
     sink = _timing_sink.get()
     if sink is not None:
         sink(name, start_ns, end_ns)
-    recorded = _tracer().start_span(
-        name, context=_anchor_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
-    )
+    parent = _anchor_context() if anchored else _anchor_parent()
+    recorded = _tracer().start_span(name, context=parent, start_time=start_ns, attributes=_encode_attrs(attrs))
     recorded.end(end_time=end_ns)
 
 

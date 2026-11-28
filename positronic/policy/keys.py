@@ -15,6 +15,9 @@ MODEL = 'model'
 LLM_TYPE = 'llm'
 ACTION_HORIZON_SEC = 'action_horizon_sec'
 ACTION_FPS = 'action_fps'
+# The wire specs of an inference schedule's ``RequestTiming`` and of its latency estimate.
+REQUEST_TIMING = 'request_timing'
+LATENCY_ESTIMATE = 'latency_estimate'
 JPEG_QUALITY = 'jpeg_quality'
 # Metadata understood by the legacy offboard client and server.
 COMPRESS_IMAGES = 'compress_images'

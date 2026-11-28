@@ -111,6 +111,10 @@ ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
 # The total and the longest time in milliseconds that the arm holds its last target between two chunks.
 ATTR_WAYPOINTS_HOLD_SUM_MS = 'episode.waypoints.hold_sum_ms'
 ATTR_WAYPOINTS_HOLD_MAX_MS = 'episode.waypoints.hold_max_ms'
+# One hold of the arm between two chunks; docs/telemetry.md defines its bounds.
+SPAN_WAYPOINTS_HOLD = 'waypoints.hold'
+# On `waypoints.hold`: the length of the hold in milliseconds on the clock of the policy runtime.
+ATTR_HOLD_MS = 'hold.ms'
 
 # One command that a driver takes: from the tick that reads it to the moment the driver makes it the device's target.
 SPAN_DRIVER_COMMAND = 'driver.command'
