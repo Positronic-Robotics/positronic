@@ -459,7 +459,7 @@ def test_the_expert_takes_over_from_a_source_that_takes_the_arm_back_to_an_earli
     assert commands[HELPER_TAKE_OVER] == run.time_ns - _PERIOD_NS
 
 
-def test_after_a_takeover_the_expert_drives_and_hands_back_at_a_later_phase(run):
+def test_after_a_takeover_before_the_grasp_the_expert_drives_until_the_grip_holds_the_banana_and_hands_back(run):
     above = _grasp() * geom.Transform3D(np.array([0.0, 0.0, -0.03]))
     run.send(_obs(above, source=POLICY_SOURCE))
     run.send(_obs(_down_at([0.6, -0.2, 0.55]), source=POLICY_SOURCE))
@@ -467,7 +467,10 @@ def test_after_a_takeover_the_expert_drives_and_hands_back_at_a_later_phase(run)
     assert run.phase == Phase.ABOVE and commands[HELPER_HAND_BACK] is None
 
     commands = run.send(_obs(above))
-    assert run.phase == Phase.DOWN and commands[HELPER_HAND_BACK] == run.time_ns - _PERIOD_NS
+    assert run.phase == Phase.DOWN and commands[HELPER_HAND_BACK] is None
+
+    commands = run.send(_obs(_grasp(), grip=_HELD_GRIP, contact=True))
+    assert run.phase == Phase.LIFT and commands[HELPER_HAND_BACK] == run.time_ns - _PERIOD_NS
 
 
 # The env origin of the kinematic scene in the rig's world frame, and the reach of a grip that closes on the banana.

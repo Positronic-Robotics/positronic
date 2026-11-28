@@ -151,11 +151,12 @@ class Console(Generic[PhaseT]):
     """The press fields that an expert sends, as the console of a person sends them. ``rank`` gives how far each phase
     is along the path of the expert. ``takes_over_at_start`` says that the expert takes over at its second element and
     never hands back. Else it takes over when the source that drives leaves its path, and presses Hand back at a phase
-    of a higher rank than at the takeover."""
+    of a higher rank than at the takeover, and not lower than ``hand_back_from``."""
 
-    def __init__(self, rank: Mapping[PhaseT, int], takes_over_at_start: bool):
+    def __init__(self, rank: Mapping[PhaseT, int], takes_over_at_start: bool, hand_back_from: PhaseT):
         self._rank = rank
         self._at_start = takes_over_at_start
+        self._hand_back_rank = rank[hand_back_from]
         self._path = Path(rank)
         self._take_over: int | None = None
         self._hand_back: int | None = None
@@ -167,13 +168,13 @@ class Console(Generic[PhaseT]):
     ) -> dict[str, Any]:
         """The element at ``now_ns``: ``commands``, the commands of the expert, and the press fields. ``control`` is
         the ``CONTROL`` observation, and the arm is in ``phase`` at ``distance`` from its sub-goal."""
-        drives = control.source == TELEOPERATOR
+        drives, rank = control.source == TELEOPERATOR, self._rank[phase]
         # The presses of the first element of a helper are not new, so the expert presses at its second element.
         if self._first:
             self._first = False
         elif not drives and (self._at_start or self._path.driver_left(phase, distance, now_ns)):
-            self._take_over, self._taken_rank = now_ns, self._rank[phase]
-        elif drives and not self._at_start and self._rank[phase] > self._taken_rank:
+            self._take_over, self._taken_rank = now_ns, rank
+        elif drives and not self._at_start and rank > self._taken_rank and rank >= self._hand_back_rank:
             self._hand_back = now_ns
             self._path.restart()
         return {**commands, HELPER_TAKE_OVER: self._take_over, HELPER_HAND_BACK: self._hand_back}
