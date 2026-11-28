@@ -648,7 +648,7 @@ class Harness(pimm.ControlSystem):
                 self._step_number += 1
             finally:
                 telemetry.set_attrs(span, **step_ms)
-        period_sec = (resume_at_ns - started_at_ns) / 1e9
+        period_sec = (step.resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
         return started_at_ns + round(period_sec * 1e9)
 
@@ -837,29 +837,23 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
-        policy_run = helper_run = helper_runtime = None
+        policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
-            policy = self._source(policy_keys.POLICY_SOURCE, policy_run, self._policy_frames(rollout.policy, runtime))
-            helper = None
-            if rollout.helper is not None:
-                helper_runtime = SourceRuntime(runtime)
-                helper_run = helper_runtime.start(rollout.helper)
-                frames = self._policy_frames(rollout.helper, helper_runtime)
-                helper = _Helper(self._source(policy_keys.TELEOPERATOR, helper_run, frames), Takeover())
+            stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
+            withheld_poses = self._pose_signals() - stated_poses
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             gc_steps = _GcSteps(self._gc)
             try:
-                with self._recording(rollout.writer, helper is not None):
+                with self._recording(rollout.writer):
                     payload = yield from self._rollout(
-                        should_stop, task, runtime, policy, helper, deadline_ns, gc_steps
+                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
-                            self._build_episode_meta(rollout, runtime, helper_runtime) | (payload or {}),
-                            self._recorded_signals,
+                            self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
                         )
                         for name, value in static.items():
                             self._writer.set_static(name, value)
@@ -868,9 +862,7 @@ class Harness(pimm.ControlSystem):
         finally:
             # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
             self._telemetry.describe_policy(
-                lambda: self._recorded_meta(
-                    policy_keys.POLICY_SOURCE, rollout.policy.meta(), runtime.metadata_snapshot()
-                )
+                lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
             )
             self._telemetry.describe_schedule(runtime.metadata_snapshot())
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
@@ -878,16 +870,10 @@ class Harness(pimm.ControlSystem):
             logging.info('Closing the policy runtime')
             runtime.close()
             logging.info('Policy runtime closed')
-            if helper_runtime is not None:
-                helper_runtime.close()
             if policy_run is not None:
                 logging.info('Closing the policy')
                 policy_run.close()
                 logging.info('Policy closed')
-            if helper_run is not None:
-                logging.info('Closing the helper')
-                helper_run.close()
-                logging.info('Helper closed')
 
         self._telemetry.end(clock.now())
         if payload is not None:
