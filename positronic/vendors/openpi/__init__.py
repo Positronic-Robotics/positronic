@@ -72,7 +72,7 @@ def libero_actions_to_physical(actions: np.ndarray) -> np.ndarray:
 
 # Google revoked anonymous access to gs://big_vision, breaking OpenPI's tokenizer download.
 # Track: https://github.com/Physical-Intelligence/openpi/issues/881
-_TOKENIZER_URL = 'https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model'
+_TOKENIZER_URL = 'https://data.phail.ai/assets/paligemma_tokenizer.model'
 # Mirror upstream openpi's OPENPI_DATA_HOME convention so the tokenizer co-locates
 # with the gs://openpi-assets cache (default ~/.cache/openpi when unset).
 _OPENPI_DATA_HOME = Path(os.getenv('OPENPI_DATA_HOME', Path.home() / '.cache' / 'openpi')).expanduser()
