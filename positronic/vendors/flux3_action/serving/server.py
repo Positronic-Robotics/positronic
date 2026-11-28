@@ -87,8 +87,21 @@ class Flux3Session(Session):
 class Flux3Model(Model):
     """Shared stateless DROID weights; each session owns its latency history and random sequence."""
 
-    def __init__(self, policy: Any, *, metadata: dict, image_mappings: dict[str, str], rtc: dict[str, float] | None):
+    def __init__(
+        self,
+        policy: Any,
+        *,
+        metadata: dict,
+        image_mappings: dict[str, str],
+        rtc: dict[str, float] | None,
+        ee: bool = False,
+    ):
+        if policy.ee != ee:
+            raise ValueError('Launch droid_ee for an EE-50 checkpoint, and only for one')
+        if ee and rtc is not None:
+            raise ValueError('EE-50 checkpoints serve without RTC')
         self._policy = policy
+        self._ee = ee
         super().__init__(
             parameters={
                 'horizon_sec': None,
@@ -134,7 +147,8 @@ class Flux3Model(Model):
         rtc = params[keys.RTC.FIELD]
         if rtc is not None:
             self._validate_rtc(rtc, horizon)
-        return Flux3Session(self._policy, recipe.client_stack(fps=self._policy.config.fps, **params), rtc=rtc)
+        stack = recipe.client_stack(fps=self._policy.config.fps, **params, ee=self._ee)
+        return Flux3Session(self._policy, stack, rtc=rtc)
 
     def close(self) -> None:
         self._policy.close()
@@ -144,11 +158,12 @@ class Flux3Model(Model):
         logger.info('Warming FLUX 3 Action before binding listeners')
         width, height = keys.VIEW_SIZE
         observation = {name: np.zeros((height, width, 3), np.uint8) for name in keys.CAMERAS}
-        observation.update({
-            keys.JOINT_POSITION: np.zeros(7),
-            keys.GRIPPER_POSITION: np.zeros(1),
-            keys.PROMPT: 'Pick up the object.',
-        })
+        pose = (
+            {keys.EE_POSE_FIELD: np.array([0.5, 0.0, 0.4, 0.0, 1.0, 0.0, 0.0])}
+            if self._ee
+            else {keys.JOINT_POSITION: np.zeros(7)}
+        )
+        observation.update({**pose, keys.GRIPPER_POSITION: np.zeros(1), keys.PROMPT: 'Pick up the object.'})
         actions = self._policy.predict(observation, None, seed=0)
         if self.parameters[keys.RTC.FIELD] is not None:
             self._policy.predict(observation, actions[: self._policy.config.rtc_max_prefix].copy(), seed=0)
@@ -161,6 +176,7 @@ def load_model(
     *,
     image_mappings: dict[str, str],
     rtc: dict[str, float] | None,
+    ee: bool = False,
     device: str = 'cuda',
     compile_dit: bool = True,
     offload_text_encoder: bool = False,
@@ -181,6 +197,7 @@ def load_model(
             policy,
             image_mappings=image_mappings,
             rtc=rtc,
+            ee=ee,
             metadata={
                 keys.TYPE: 'flux3_action',
                 keys.CHECKPOINT_ID: checkpoint,
@@ -201,6 +218,7 @@ def load_model(
     subfolder=None,
     image_mappings=recipe.droid_cameras(),
     rtc=None,
+    ee=False,
     device='cuda',
     compile_dit=True,
     offload_text_encoder=False,
@@ -213,6 +231,7 @@ def serve(
     subfolder: str | None,
     image_mappings: dict[str, str],
     rtc: dict[str, float] | None,
+    ee: bool,
     device: str,
     compile_dit: bool,
     offload_text_encoder: bool,
@@ -227,6 +246,7 @@ def serve(
             subfolder,
             image_mappings=image_mappings,
             rtc=rtc,
+            ee=ee,
             device=device,
             compile_dit=compile_dit,
             offload_text_encoder=offload_text_encoder,
@@ -250,6 +270,8 @@ def main() -> None:
         'droid_3cam': three_cameras,
         'droid_rtc': droid.override(rtc=rtc),
         'droid_3cam_rtc': three_cameras.override(rtc=rtc),
+        # An EE-50 package: flange pose in, absolute flange targets out, both exterior cameras.
+        'droid_ee': three_cameras.override(ee=True),
     })
 
 

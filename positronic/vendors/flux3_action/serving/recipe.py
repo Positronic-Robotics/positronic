@@ -15,6 +15,12 @@ DROID_CONTROL_MODE = {
 }
 
 
+# The flange seen from the `gripper` site, as ChangeEEFrame's wire transform [tx, ty, tz, qw, qx, qy, qz].
+# EE-50 poses are DROID flange poses; the arms report the `gripper` site.
+DROID_FLANGE_FROM_GRIPPER = [0.0, 0.0, -0.155, 1.0, 0.0, 0.0, 0.0]
+GRIPPER_SITE = 'gripper'
+
+
 def droid_cameras(*, three_cameras: bool = False) -> dict[str, str]:
     return {
         keys.WRIST: keys.WRIST_IMAGE,
@@ -23,13 +29,29 @@ def droid_cameras(*, three_cameras: bool = False) -> dict[str, str]:
     }
 
 
-def inference(image_mappings: dict[str, str], *, rtc: bool = False) -> dict:
+def _ee_frame() -> dict:
+    return component(
+        'change_ee_frame',
+        site=GRIPPER_SITE,
+        transform=DROID_FLANGE_FROM_GRIPPER,
+        keys=[keys.EE_POSE, keys.TARGET_EE_POSE, keys.ROBOT_COMMAND],
+    )
+
+
+def inference(image_mappings: dict[str, str], *, rtc: bool = False, ee: bool = False) -> dict:
+    """The client codecs. ``ee``: an EE-50 checkpoint reads the flange pose and returns absolute flange targets."""
+    if ee and rtc:
+        raise ValueError('EE-50 checkpoints serve without RTC')
     action_args = {'commands_path': [keys.RTC.ACTION_PREFIX, keys.RTC.PREFIX_ACTIONS]} if rtc else {}
     context = [component('select_observation_fields', mapping={keys.CALL_TIMINGS: keys.CALL_TIMINGS})] if rtc else []
+    pose = {keys.EE_POSE_FIELD: {keys.EE_POSE: 7}} if ee else {keys.JOINT_POSITION: {keys.JOINTS: 7}}
+    action = (
+        component('absolute_position_action', tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.GRIP)
+        if ee
+        else component('absolute_joints_action', tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP, **action_args)
+    )
     encoded = parallel(
-        component(
-            'state_observation', state={keys.JOINT_POSITION: {keys.JOINTS: 7}, keys.GRIPPER_POSITION: {keys.GRIP: 1}}
-        ),
+        component('state_observation', state={**pose, keys.GRIPPER_POSITION: {keys.GRIP: 1}}),
         sequence(
             component('select_observation_fields', mapping={**image_mappings, keys.PROMPT: keys.TASK}),
             component(
@@ -40,12 +62,11 @@ def inference(image_mappings: dict[str, str], *, rtc: bool = False) -> dict:
                 paths=[[name] for name in keys.CAMERAS],
             ),
         ),
-        sequence(
-            component('set_control_mode', mode=DROID_CONTROL_MODE),
-            component('absolute_joints_action', tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP, **action_args),
-        ),
+        sequence(component('set_control_mode', mode=DROID_CONTROL_MODE), action),
         *context,
     )
+    if ee:
+        return sequence(_ee_frame(), encoded, component('split_action_chunk'))
     if not rtc:
         return sequence(encoded, component('split_action_chunk'))
     return sequence(
@@ -72,6 +93,7 @@ def client_stack(
     compress_images: bool,
     jpeg_quality: int,
     rtc: dict[str, float] | None,
+    ee: bool = False,
 ) -> dict:
     player = {'replan_on_error': True}
     request = {'reference': 'before_end'}
@@ -83,7 +105,7 @@ def client_stack(
     parts = [
         component('trajectory_player', **player),
         component('inference_schedule', fps=fps, request_timing=request, merge=merge, latency_estimate=0.0),
-        inference(image_mappings, rtc=rtc is not None),
+        inference(image_mappings, rtc=rtc is not None, ee=ee),
         component('metadata', values={keys.ACTION_FPS: fps}),
     ]
     if compress_images:

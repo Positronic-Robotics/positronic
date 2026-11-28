@@ -91,13 +91,14 @@ RUN git clone https://github.com/black-forest-labs/flux-action.git . \
 # this suffix matches the torch above.
 RUN uv pip install --python .venv/bin/python 'natten==0.21.6+torch2100cu128' -f https://whl.natten.org/
 
-# The server reads the policy package from the environment.
+# The server reads the policy package from the environment. /opt/flux-action on the path serves BFL's
+# examples.droid_ee50, the EE-50 layout of `droid_ee`.
 ENV HF_HOME=/opt/hf-home \
     FLUX_POLICY_REPO=${FLUX_POLICY_REPO} \
     FLUX_POLICY_REVISION=${FLUX_POLICY_REVISION} \
     FLUX_POLICY_SUBFOLDER=${FLUX_POLICY_SUBFOLDER} \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/opt/positronic-vendors \
+    PYTHONPATH=/opt/positronic-vendors:/opt/flux-action \
     UV_LINK_MODE=copy \
     UV_HTTP_TIMEOUT=600
 
@@ -121,7 +122,8 @@ WORKDIR /opt/positronic-vendors
 COPY --link positronic/vendors/flux3_action/serving /opt/positronic-vendors/flux3_serving
 
 # A custom package can replace the DIT and policy-config layers. Select it with --checkpoint,
-# --revision=None and --subfolder=None when launching the server.
+# --revision=None and --subfolder=None when launching the server. An EE-50 package also holds the
+# ee50_stats.json it trained with and serves with `droid_ee`.
 COPY --link --from=dit /opt/hf-home/hub /opt/hf-home/hub
 COPY --link --from=video-vae /opt/hf-home/hub /opt/hf-home/hub
 COPY --link --from=text-encoder-1 /opt/hf-home/hub /opt/hf-home/hub

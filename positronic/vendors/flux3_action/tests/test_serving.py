@@ -14,17 +14,21 @@ from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_model_server.server import ModelServer
 from positronic_wire import websocket, wire
 
+from positronic import geom
 from positronic import keys as obs_keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.vendors.flux3_action.serving import keys, recipe, server
+from positronic.vendors.flux3_action.serving import ee, keys, recipe, server
 
 
 class NativePolicy:
+    ee = False
+
     def __init__(self, **config):
         self.config = SimpleNamespace(**{
             'fps': 15.0,
@@ -48,17 +52,31 @@ class NativePolicy:
         pass
 
 
+class NativeEEPolicy(NativePolicy):
+    """An EE-50 package: returns flange targets [x, y, z, qw, qx, qy, qz, gripper] 1 mm apart along x."""
+
+    ee = True
+
+    def predict(self, observation, committed_actions, *, seed):
+        self.calls.append((observation, committed_actions, seed))
+        pose = np.asarray(observation[keys.EE_POSE_FIELD], dtype=np.float32)
+        actions = np.tile(np.append(pose, 0.75).astype(np.float32), (self.config.chunk_size, 1))
+        actions[:, 0] += 0.001 * np.arange(self.config.chunk_size)
+        return actions
+
+
 @pytest.fixture
 def rtc():
     return {keys.RTC.CALL_AFTER_SEC: 0.5, keys.RTC.MAX_DELAY_SEC: 1.0}
 
 
-def model(native=None, rtc=None, *, three_cameras=False):
+def model(native=None, rtc=None, *, three_cameras=False, ee=False):
     return server.Flux3Model(
         NativePolicy() if native is None else native,
         metadata={},
         rtc=rtc,
         image_mappings=recipe.droid_cameras(three_cameras=three_cameras),
+        ee=ee,
     )
 
 
@@ -87,7 +105,17 @@ def request(targets=(), *, chunk_offset=0.0, observation_offset=0.0, elapsed=())
 
 
 def test_standalone_names_match_client_contract():
-    for name in ('JOINTS', 'GRIP', 'TASK', 'WRIST_IMAGE', 'EXTERIOR_IMAGE', 'EXTERIOR_IMAGE_2'):
+    for name in (
+        'JOINTS',
+        'EE_POSE',
+        'TARGET_EE_POSE',
+        'ROBOT_COMMAND',
+        'GRIP',
+        'TASK',
+        'WRIST_IMAGE',
+        'EXTERIOR_IMAGE',
+        'EXTERIOR_IMAGE_2',
+    ):
         assert getattr(keys, name) == getattr(obs_keys, name)
     for name in ('PLAN', 'CALL_TIMINGS', 'ELAPSED_SEC', 'ACTION_FPS', 'TYPE', 'CHECKPOINT_ID'):
         assert getattr(keys, name) == getattr(policy_keys, name)
@@ -367,3 +395,65 @@ sys.argv = ['flux3_serving.server', 'droid_rtc', '--help']
 server.main()
 """
     subprocess.run([sys.executable, '-I', '-c', script, str(Path(server.__file__).parents[1])], check=True)
+
+
+# The grip point 0.155 m below the flange: the tool z axis points down (180 degrees about x).
+GRIPPER_POSE = np.array([0.5, 0.1, 0.3, 0.0, 1.0, 0.0, 0.0])
+FLANGE_POSE = np.array([0.5, 0.1, 0.455, 0.0, 1.0, 0.0, 0.0])
+
+
+def test_flange_offset_is_droid_ee_frame():
+    np.testing.assert_allclose(
+        recipe.DROID_FLANGE_FROM_GRIPPER, DROID_EE_FRAME.as_vector(geom.Rotation.Representation.QUAT)
+    )
+
+
+def test_ee_recipe_sends_the_flange_pose_and_returns_targets_at_the_grip_point():
+    native = NativeEEPolicy()
+    served = model(native, three_cameras=True, ee=True)
+    session = served.prepare_session({**served.parameters, policy_keys.COMPRESS_IMAGES: False})
+    spec.from_spec(session.client_stack)
+    codec = spec.from_spec(recipe.inference(recipe.droid_cameras(three_cameras=True), ee=True))
+    obs = {**observation(), obs_keys.EE_POSE: GRIPPER_POSE}
+    encoded = serialization.deserialise(serialization.serialise(codec.encode(obs)))
+    np.testing.assert_allclose(encoded[keys.EE_POSE_FIELD], FLANGE_POSE, atol=1e-6)
+    assert keys.JOINT_POSITION not in encoded and encoded[keys.GRIPPER_POSITION] == [0.25]
+    for name, value in ((keys.WRIST, 20), (keys.EXTERIOR, 60), (keys.EXTERIOR_2, 100)):
+        assert int(np.asarray(encoded[name]).mean()) == value
+    result = codec.decode(session.infer(encoded))
+    assert len(result) == 32
+    target = result[5][obs_keys.ROBOT_COMMAND]
+    assert isinstance(target, command.CartesianPosition)
+    np.testing.assert_allclose(target.pose.translation, GRIPPER_POSE[:3] + [0.005, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(abs(target.pose.rotation.as_quat), abs(GRIPPER_POSE[3:]), atol=1e-6)
+    assert result[5][obs_keys.TARGET_GRIP] == 0.75
+
+
+@pytest.mark.parametrize('native_ee, ee', [(True, False), (False, True)])
+def test_the_launch_command_must_match_the_checkpoint_layout(native_ee, ee):
+    native = NativeEEPolicy() if native_ee else NativePolicy()
+    with pytest.raises(ValueError, match='droid_ee'):
+        model(native, ee=ee)
+
+
+def test_ee_sessions_refuse_rtc(rtc):
+    with pytest.raises(ValueError, match='without RTC'):
+        model(NativeEEPolicy(), rtc, ee=True)
+    with pytest.raises(ValueError, match='without RTC'):
+        recipe.inference(recipe.droid_cameras(), rtc=True, ee=True)
+
+
+def test_ee_pose_conversions_agree_with_positronic_geometry():
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        euler = rng.uniform([-np.pi, -1.4, -np.pi], [np.pi, 1.4, np.pi])
+        quat = geom.Rotation.from_euler(euler).as_quat
+        pose = np.concatenate([rng.uniform(-1, 1, 3), quat])
+        cartesian = ee.pose_to_droid_cartesian(pose)
+        np.testing.assert_allclose(cartesian[:3], pose[:3])
+        np.testing.assert_allclose(
+            ee.euler_xyz_to_matrix(*cartesian[3:]), geom.Rotation.from_quat(quat).as_rotation_matrix, atol=1e-9
+        )
+        action = ee.droid_commands_to_actions(np.append(cartesian, 0.5)[None])[0]
+        np.testing.assert_allclose(abs(np.dot(action[3:7], quat)), 1.0, atol=1e-6)
+        assert action[7] == 0.5
