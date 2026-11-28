@@ -28,6 +28,13 @@ def test_export_uses_the_preferred_clock(tmp_path, preferred, other):
     np.testing.assert_array_equal(rows['value'], [0, 0, 1, 1])
 
 
+def test_export_gives_one_row_for_an_episode_of_one_step(tmp_path):
+    with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
+        writer.append('value', 7, Time(**{HARNESS_WORLD: 100_000_000}))
+    rows = EpisodeDictDataset(LocalDataset(tmp_path), fps=20)[0]
+    np.testing.assert_array_equal(rows['value'], [7])
+
+
 def test_export_rows_survive_the_pickle_of_a_dataloader_worker(tmp_path):
     with LocalDatasetWriter(tmp_path) as dataset, dataset.new_episode() as writer:
         for i in range(3):

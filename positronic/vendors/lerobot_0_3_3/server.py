@@ -25,10 +25,10 @@ register_all()
 logger = logging.getLogger(__name__)
 
 
-@cfn.config(checkpoint=None, device=None)
-def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) -> Model:
+@cfn.config(checkpoint=None, device=None, license=None)
+def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None, license: str | None) -> Model:
     """One in-process ACT checkpoint from an experiment directory (its ``checkpoints/`` subdirectory):
-    ``checkpoint``, else the latest one."""
+    ``checkpoint``, else the latest one. Its metadata states ``license``, the license of the checkpoint, when given."""
     experiment_dir = checkpoints_dir.rstrip('/')
     checkpoint_id = resolve_checkpoint(f'{experiment_dir}/{CHECKPOINTS_DIR}', checkpoint)
     checkpoint_path = f'{experiment_dir}/{CHECKPOINTS_DIR}/{checkpoint_id}/{PRETRAINED_MODEL_DIR}'
@@ -43,6 +43,8 @@ def act_model(checkpoints_dir: str, checkpoint: str | None, device: str | None) 
         policy_keys.EXPERIMENT_NAME: experiment_dir.split('/')[-1],
         'device': device,
     }
+    if license is not None:
+        meta[policy_keys.LICENSE] = license
     model = LerobotModel(backbone, device, extra_meta=meta)
     warmup(model, warm_observation(backbone.config))
     return model

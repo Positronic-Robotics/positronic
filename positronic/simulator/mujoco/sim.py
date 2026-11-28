@@ -1,10 +1,11 @@
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import mujoco as mj
 import numpy as np
+from eval_vocabulary.episode import GT_STATE_GRIPPER_CONTACT, GT_STATE_OBJECTS, GT_STATE_POSE
 
 import pimm
 from positronic import geom, telemetry, telemetry_keys
@@ -106,6 +107,7 @@ class MujocoSim(pimm.ControlSystem):
     it. Every other turn applies whatever command has just arrived, steps once, and emits the due streams
     (post-step, Gym-style). The sim sleeps one control period each turn, so it is the eval's sole
     time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    ``objects`` names the body of each object whose pose and finger contact ``gt_state`` gives.
     """
 
     _MOVE_TOL = 0.05  # radians; the position actuators hold the arm a few hundredths short of their ctrl
@@ -124,6 +126,8 @@ class MujocoSim(pimm.ControlSystem):
         state_fps: float | None = None,
         grip_fps: float | None = None,
         sim_state_fps: float | None = None,
+        objects: Mapping[str, str] | None = None,
+        gt_state_fps: float | None = None,
     ):
         self.mujoco_model_path = str(Path(mujoco_model_path).expanduser())
         self.loaders = loaders
@@ -132,6 +136,8 @@ class MujocoSim(pimm.ControlSystem):
 
         self._gripper_site = f'{GRIPPER_SITE}{suffix}'
         self._gripper_body = f'link7{suffix}'
+        self._finger_bodies = (f'left_finger{suffix}', f'right_finger{suffix}')
+        self._objects = dict(objects or {})
         self._joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
         self._actuator_names = [f'actuator{i}{suffix}' for i in range(1, 8)]
         self._gripper_actuator = gripper_actuator
@@ -163,6 +169,9 @@ class MujocoSim(pimm.ControlSystem):
         # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state = pimm.ControlSystemEmitter[dict[str, np.ndarray]](self)
+        # Privileged ground truth of the ``objects``: ``.objects.<name>.pose`` as [x, y, z, qw, qx, qy, qz], and
+        # ``.objects.<name>.gripper_contact``, whether a finger touches the object.
+        self.gt_state = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
         self._moves = Moves[roboarm_command.CommandType](self.sync_move, self.commands)
         # The state has a second reason to go out — a move that ended — so it is not one of ``_streams``.
@@ -170,6 +179,7 @@ class MujocoSim(pimm.ControlSystem):
         self._streams = [
             (_Cadence(self._grip_fps), self._emit_grip),
             (_Cadence(self._sim_state_fps), self._emit_sim_state),
+            (_Cadence(gt_state_fps), self._emit_gt_state),
             (_Cadence(self._camera_fps), self._emit_cameras),
         ]
 
@@ -285,6 +295,7 @@ class MujocoSim(pimm.ControlSystem):
         self._emit_state()
         self._emit_grip()
         self._emit_sim_state()
+        self._emit_gt_state()
         self._emit_cameras()
 
     def _emit_state(self):
@@ -303,6 +314,25 @@ class MujocoSim(pimm.ControlSystem):
         if self.sim_state.num_bound:
             self.sim_state.emit({f'.{name}': arr for name, arr in self.save_state().items() if arr.size})
 
+    def _emit_gt_state(self):
+        if not self.gt_state.num_bound:
+            return
+        contact = self.data.contact
+        touching = self.model.geom_bodyid[np.stack([contact.geom1, contact.geom2])]
+        truth: dict[str, Any] = {}
+        for name, body_name in self._objects.items():
+            body = self.data.body(body_name)
+            pair = touching == body.id
+            touched = bool(
+                np.any(
+                    (pair[0] & np.isin(touching[1], self._finger_ids))
+                    | (pair[1] & np.isin(touching[0], self._finger_ids))
+                )
+            )
+            truth[f'.{GT_STATE_OBJECTS}.{name}.{GT_STATE_POSE}'] = np.concatenate([body.xpos, body.xquat])
+            truth[f'.{GT_STATE_OBJECTS}.{name}.{GT_STATE_GRIPPER_CONTACT}'] = touched
+        self.gt_state.emit(truth)
+
     def _emit_cameras(self):
         if self._adapters is None:
             self._adapters = self._camera_adapters()
@@ -315,6 +345,7 @@ class MujocoSim(pimm.ControlSystem):
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
         self.initial_joints = np.array([self.initial_ctrl[self.model.actuator(n).id] for n in self._actuator_names])
         self._joint_qpos_ids = [self.model.joint(name).qposadr.item() for name in self._joint_names]
+        self._finger_ids = [self.model.body(name).id for name in self._finger_bodies]
         min_grip, max_grip = self.model.actuator(self._gripper_actuator).ctrlrange
         self._grip_range = (float(min_grip), float(max_grip))
         if self._renderer is not None:

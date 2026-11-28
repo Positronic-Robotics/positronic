@@ -257,7 +257,7 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
 - Purpose: store system-generated, immutable information separate from user static items.
 - Storage: sidecar JSON file `meta.json` inside the `Episode` directory.
 - Accessor: `Episode.meta` (read-only dict). Not included in `Episode.keys` and not accessible via `__getitem__`.
-- Written: immediately on `EpisodeWriter` creation (side-effect of constructing the writer).
+- Written: when the `EpisodeWriter` closes.
 - Contents (concise schema):
   - `schema_version: int` – manifest version (starts at 1).
   - `uid: str` – episode identity (uuid4 hex), stamped at recording time; episodes lacking one derive a stable `ts-<created_ts_ns>` uid from their recording timestamp. Stable across views, copies, and exports; position in a dataset is access, the uid is reference.
@@ -268,6 +268,9 @@ Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abo
     - `python: str` – interpreter version.
     - `platform: str` – platform string.
     - `git: {commit, branch, dirty}` – present if a Git repo is detected.
+  - `path: str` – the `Episode` directory, set again on each read.
+  - `size_mb: float` – the size of the `Episode` directory, computed on read.
+  - The items that the caller gives in `LocalDatasetWriter.new_episode(meta=...)`: the `uid` and the `created_ts_ns` of a copied recording, or other facts about the episode, for example the record that a derived episode comes from. The keys `schema_version`, `writer`, `path`, `size_mb` and `duration_ns` fail the write.
 
 Signal schemas (dtype, shape, etc.) are not duplicated here; they reside in the `Signal` files themselves (e.g., Parquet/Arrow metadata or frame index files).
 

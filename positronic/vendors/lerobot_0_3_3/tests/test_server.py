@@ -39,8 +39,7 @@ def _act_config() -> ACTConfig:
     )
 
 
-def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
-    """``checkpoint_path`` is in the metadata, since sampling keys on it."""
+def _loads_a_mock_policy(monkeypatch) -> None:
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path, prefix='': ['42'])
     monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
     policy = MagicMock(spec=lerobot_server.ACTPolicy, config=_act_config())
@@ -48,6 +47,11 @@ def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
     # A mock cannot answer an inference, but the warm observation is still built from the loaded policy,
     # so the load reaches no checkpoint on disk.
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
+
+
+def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
+    """``checkpoint_path`` is in the metadata, since sampling keys on it."""
+    _loads_a_mock_policy(monkeypatch)
     model = lerobot_server.act_model(checkpoints_dir='s3://bucket/exp', device='cpu')
     assert model.meta() == {
         policy_keys.CHECKPOINT_ID: '42',
@@ -56,6 +60,13 @@ def test_handshake_metadata_names_the_loaded_checkpoint(monkeypatch):
         'experiment_name': 'exp',
         'device': 'cpu',
     }
+    model.close()
+
+
+def test_the_metadata_states_the_license_of_the_checkpoint(monkeypatch):
+    _loads_a_mock_policy(monkeypatch)
+    model = lerobot_server.act_model(checkpoints_dir='s3://bucket/exp', device='cpu', license='internal')
+    assert model.meta()[policy_keys.LICENSE] == 'internal'
     model.close()
 
 

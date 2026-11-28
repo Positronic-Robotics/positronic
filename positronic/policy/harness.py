@@ -22,7 +22,7 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.keys import EE_FRAMES
@@ -32,7 +32,9 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import PolicyCommandError
-from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.executor import Executor, SourceRuntime, WaitStatus
+from positronic.policy.record import RecordSamples, StepRecord
+from positronic.policy.takeover import Takeover, helper_commands
 from positronic.utils import flatten_dict, frozen_view, merge_dicts
 
 # Harness wake-up intervals on the world's clock.
@@ -43,16 +45,17 @@ MAX_POLL_PERIOD_SEC = 1.0
 
 @dataclass
 class Rollout:
-    """One trial, its policy definition, and its unopened recording writer.
+    """One trial, its policy definition, its unopened recording writer, and its helper.
 
     The harness creates and owns the runtime and the generator returned by
     ``runtime.start(policy)``. The policy supplies its own dependencies.
-    A ``writer`` of ``None`` records nothing.
+    A ``writer`` of ``None`` records nothing. A ``helper`` can take over from the policy (``takeover.Takeover``).
     """
 
     task: Task
     policy: Policy
     writer: DatasetWriter | None
+    helper: Policy | None = None
 
 
 # The schedule's entries of the policy's metadata that the episode span carries, by span attribute.
@@ -379,6 +382,28 @@ class _RecordWait:
 
 
 @dataclass(frozen=True)
+class _Source:
+    """The run of one top-level source of an episode. The source observes and commands only ``stated_poses``, and
+    does not get ``withheld_poses``."""
+
+    name: str
+    run: PolicyRun
+    stated_poses: frozenset[str]
+    withheld_poses: frozenset[str]
+
+    def observation(self, inputs: Obs, extra: dict[str, Any]) -> Obs:
+        return frozen_view({**{k: v for k, v in inputs.items() if k not in self.withheld_poses}, **extra})
+
+
+@dataclass(frozen=True)
+class _Helper:
+    """The helper of an episode, and the takeover that its elements drive."""
+
+    source: _Source
+    takeover: Takeover
+
+
+@dataclass(frozen=True)
 class _PolicyEnded:
     """What a policy run returned, and the episode time at which it returned."""
 
@@ -407,6 +432,10 @@ class Harness(pimm.ControlSystem):
     that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
     observation fails the episode before the policy reads that value. Between episodes the harness repairs a
     device in error (``_ready_devices_in_error``).
+
+    A rollout with a helper calls the helper after the policy at each step. The helper gets the ``CONTROL``
+    observation and the privileged values as ``GROUND_TRUTH``. Its presses choose the driver whose commands the rig
+    gets, and the record gets the ``control.*`` and ``shadow.*`` signals of each step.
     """
 
     def __init__(
@@ -422,12 +451,19 @@ class Harness(pimm.ControlSystem):
         self._recording_period_ns = round(1e9 / recording_hz)
         self._writer: EpisodeWriter | None = None
         self._recorded_signals: set[str] = set()
-        self._recorded_privileged: set[str] = set()
+        # The values of the last message of each privileged signal, by signal. The harness reads them in an episode
+        # that records or that has a helper, which gets them as ``GROUND_TRUTH``.
+        self._ground_truth: dict[str, dict[str, Any]] = {}
+        # The samples of the control record of an episode with a helper, and ``None`` in an episode with no helper.
+        self._control: RecordSamples | None = None
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         # The emission time of each camera's frame in ``_obs_by_signal``, on the timeline of the policy runtime's clock.
         self._frame_ns_by_signal: dict[str, int] = {}
         # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
         self._recorded_instruction: str | None = None
+        # The count of the steps that the policy gave in this episode, which each sample has on ``HARNESS_STEP``. It
+        # goes up after the commands of a step, so each sample of a step and each input that it reads have its number.
+        self._step_number = 0
         # The newest goal the embodiment published in this episode, which the policy gets over the task's instruction.
         self._goal: str | None = None
         self._clock: pimm.Clock | None = None
@@ -506,12 +542,15 @@ class Harness(pimm.ControlSystem):
         return statics
 
     @staticmethod
-    def _recorded_policy_meta(own_meta: dict[str, Any], runtime_meta: dict[str, Any]) -> dict[str, Any]:
-        """The policy's own metadata and what it set on the runtime, under the names the recording uses."""
+    def _recorded_meta(name: str, own_meta: dict[str, Any], runtime_meta: dict[str, Any]) -> dict[str, Any]:
+        """The metadata of the top-level source ``name`` and what it set on the runtime, under the names the recording
+        uses."""
         merged = deepcopy(flatten_dict(own_meta)) | flatten_dict(runtime_meta)
-        return {f'{policy_keys.POLICY_META}.{k}': v for k, v in merged.items()}
+        return {f'{policy_keys.SOURCES}.{name}.{k}': v for k, v in merged.items()}
 
-    def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
+    def _build_episode_meta(
+        self, rollout: Rollout, runtime: Executor, helper_runtime: SourceRuntime | None
+    ) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
@@ -519,7 +558,12 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        meta.update(self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot()))
+        meta.update(self._recorded_meta(policy_keys.POLICY_SOURCE, rollout.policy.meta(), runtime.metadata_snapshot()))
+        if rollout.helper is not None:
+            assert helper_runtime is not None, 'a rollout with a helper runs it on a runtime of its own'
+            meta.update(
+                self._recorded_meta(policy_keys.TELEOPERATOR, rollout.helper.meta(), helper_runtime.metadata_snapshot())
+            )
         meta.update(task.meta)
         meta[keys.TASK] = self._instruction(task)
         return meta
@@ -545,17 +589,28 @@ class Harness(pimm.ControlSystem):
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
                 self._recorded_signals.add(name)
 
+    def _harness_coordinates(self, world_ns: int, wall_ns: int) -> dict[str, int]:
+        """The harness's timelines of a sample that it reads, makes or sends at ``world_ns`` and ``wall_ns``."""
+        return {HARNESS_WORLD: world_ns, HARNESS_WALL: wall_ns, HARNESS_STEP: self._step_number}
+
+    def _harness_time(self) -> pimm.Time:
+        """The time now, on the timelines of a sample that the harness makes."""
+        assert self._clock is not None, 'an episode records only inside run'
+        emitted = emission_time(self._clock)
+        return pimm.Time(**emitted, **self._harness_coordinates(emitted[EMITTED_WORLD], emitted[EMITTED_WALL]))
+
     def _record_instruction(self, instruction: str) -> None:
         """Record the instruction that the policy gets, at the harness's time, when it differs from the last one."""
         if self._writer is None or instruction == self._recorded_instruction:
             return
-        assert self._clock is not None, 'an episode records only inside run'
-        emitted = emission_time(self._clock)
-        timestamps = pimm.Time(
-            **emitted, **{HARNESS_WORLD: emitted[EMITTED_WORLD], HARNESS_WALL: emitted[EMITTED_WALL]}
-        )
-        self._append({eval_keys.INSTRUCTION: instruction}, timestamps)
+        self._append({eval_keys.INSTRUCTION: instruction}, self._harness_time())
         self._recorded_instruction = instruction
+
+    def _record_control(self, record: StepRecord) -> None:
+        """Record the ``control.*`` and ``shadow.*`` samples of a step, before the harness sends its commands."""
+        assert self._control is not None, 'an episode with a helper records its control'
+        for signal, value, timestamps in self._control.of(record, self._harness_time()):
+            self._append({signal: value}, timestamps)
 
     def _convert_and_record(
         self,
@@ -581,7 +636,7 @@ class Harness(pimm.ControlSystem):
             step_ms[telemetry_keys.ATTR_STEP_CONVERT_MS_PREFIX + name] = (time.perf_counter_ns() - started_ns) / 1e6
         if self._writer is not None:
             world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
-            timestamps = pimm.Time(**message.time, **{HARNESS_WORLD: stamp[world], HARNESS_WALL: stamp[wall]})
+            timestamps = pimm.Time(**message.time, **self._harness_coordinates(stamp[world], stamp[wall]))
             self._append(values, timestamps, timing)
         return values
 
@@ -633,18 +688,18 @@ class Harness(pimm.ControlSystem):
                     self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms, timing)
                     if is_frame and emitted_ns is not None:
                         self._frame_ns_by_signal[name] = emitted_ns
-        if self._writer is not None:
-            for name, receiver in self.privileged.items():
-                message = receiver.read()
-                if message is None or isinstance(message.data, pimm.SignalError):
-                    continue
-                if message.updated or name not in self._recorded_privileged:
-                    self._convert_and_record(name, message, None, timing=timing)
-                    self._recorded_privileged.add(name)
+        if self._writer is None and self._control is None:
+            return
+        for name, receiver in self.privileged.items():
+            message = receiver.read()
+            if message is None or isinstance(message.data, pimm.SignalError):
+                continue
+            if message.updated or name not in self._ground_truth:
+                self._ground_truth[name] = self._convert_and_record(name, message, None, timing=timing)
 
-    def read_obs(self, task: Task, withheld_poses: frozenset[str], step_ms: dict[str, float]) -> Obs | None:
-        """Read sensors, reusing each signal's serialized fields until a new message arrives. Leave out every pose
-        in ``withheld_poses``.
+    def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
+        """Read sensors, reusing each signal's serialized fields until a new message arrives. Return every pose: each
+        top-level source gets only the poses that it states.
 
         Copy updated arrays because devices may reuse their buffers while inference still reads them.
         Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
@@ -666,8 +721,6 @@ class Harness(pimm.ControlSystem):
                 inputs.update(values)
         if not complete:
             return None
-        for name in withheld_poses:
-            inputs.pop(name, None)
         if (goal := pimm.value_updated(self.goal)) is not None:
             self._goal = goal
         inputs[keys.TASK] = instruction = self._instruction(task)
@@ -675,37 +728,50 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
 
-    @staticmethod
-    def _refuse_unstated_pose_commands(commands: Commands, stated_poses: frozenset[str]) -> None:
-        """Raise when ``commands`` holds a pose command on a channel whose pose signal is not in ``stated_poses``."""
+    def _check_commands(self, source: _Source, commands: Commands) -> None:
+        """Raise when ``commands`` of ``source`` name a channel that the embodiment lacks, or hold a pose command on a
+        channel whose pose signal is not in the stated poses of ``source``."""
+        if unknown := sorted(commands.keys() - self._embodiment.commands.keys()):
+            raise PolicyCommandError(
+                f'The step of the {source.name} names {unknown}, and the embodiment takes only '
+                f'{sorted(self._embodiment.commands)}'
+            )
         unstated = sorted(
             name
             for name, command in commands.items()
             if isinstance(command, CartesianPosition | CartesianDelta)
-            and f'{name}{keys.POSE_SUFFIX}' not in stated_poses
+            and f'{name}{keys.POSE_SUFFIX}' not in source.stated_poses
         )
         if unstated:
             raise PolicyCommandError(
-                f'The policy sends a pose command on {unstated}, and states no {EE_FRAMES} entry for the pose of that '
-                'channel. State the frame of each pose that the policy reads or commands.'
+                f'The {source.name} sends a pose command on {unstated}, and states no {EE_FRAMES} entry for the pose '
+                f'of that channel. State the frame of each pose that the {source.name} reads or commands.'
             )
+
+    def _helper_observation(self, inputs: Obs, helper: _Helper) -> Obs:
+        """The observation of the helper: ``inputs`` with ``CONTROL``, and with ``GROUND_TRUTH`` when the rig has
+        privileged signals."""
+        extra: dict[str, Any] = {policy_keys.CONTROL: helper.takeover.control()}
+        if self.privileged:
+            truth = {name: value for values in self._ground_truth.values() for name, value in values.items()}
+            extra[policy_keys.GROUND_TRUTH] = frozen_view(truth)
+        return helper.source.observation(inputs, extra)
 
     def _step(
         self,
         task: Task,
-        withheld_poses: frozenset[str],
-        stated_poses: frozenset[str],
         runtime: Executor,
-        policy_run: PolicyRun,
+        policy: _Source,
+        helper: _Helper | None,
         due_ns: int | None,
         gc_steps: _GcSteps,
     ) -> int | _PolicyEnded | None:
-        """Read sensors, call the policy, emit commands, and return its clamped next wake-up time. Return a
-        ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
+        """Read sensors, call the policy and the helper, emit commands, and return the clamped earlier wake-up time of
+        the two. Return a ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
-        records the step's durations, and the garbage-collection time before and inside the step. A pose command on a
-        channel whose pose is not in ``stated_poses`` fails the step.
+        records the step's durations, and the garbage-collection time before and inside the step. A pose command of a
+        source on a channel whose pose it does not state fails the step, and a return of the helper run fails it too.
         """
         step_ms: dict[str, float] = {}
         with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP, telemetry.Level.STEP) as span, gc_steps.step(span):
@@ -715,15 +781,15 @@ class Harness(pimm.ControlSystem):
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = late_ms = (runtime.time_ns - due_ns) / 1e6
                     self._telemetry.late_step(late_ms)
                 observe_started_ns = time.perf_counter_ns()
-                obs = self.read_obs(task, withheld_poses, step_ms)
+                inputs = self.read_obs(task, step_ms)
                 policy_started_ns = time.perf_counter_ns()
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
-                if obs is None:
+                if inputs is None:
                     return None
                 runtime.start_tick(min(self._frame_ns_by_signal.values(), default=None))
                 started_at_ns = runtime.time_ns
                 try:
-                    step = policy_run.send(obs)
+                    step = policy.run.send(policy.observation(inputs, {}))
                 except StopIteration as end:
                     if not isinstance(end.value, PolicyEnd):
                         raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
@@ -731,22 +797,32 @@ class Harness(pimm.ControlSystem):
                 finally:
                     step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'
-                if unknown := sorted(step.commands.keys() - self._embodiment.commands.keys()):
-                    raise PolicyCommandError(
-                        f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
-                    )
-                self._refuse_unstated_pose_commands(step.commands, stated_poses)
+                self._check_commands(policy, step.commands)
+                commands, resume_at_ns = step.commands, step.resume_at_ns
+                if helper is not None:
+                    try:
+                        element = helper.source.run.send(self._helper_observation(inputs, helper))
+                    except StopIteration as end:
+                        raise ValueError(
+                            f'The helper run returned {end.value!r}. A helper runs until the episode ends'
+                        ) from None
+                    assert element is not None, 'a helper must yield a Step for each observation'
+                    self._check_commands(helper.source, helper_commands(element.commands))
+                    commands, record = helper.takeover.step(step.commands, element.commands)
+                    self._record_control(record)
+                    resume_at_ns = min(resume_at_ns, element.resume_at_ns)
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
-                messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
+                messages = {name: self.commands[name].emit(value) for name, value in commands.items()}
                 step_ms[telemetry_keys.ATTR_STEP_EMIT_MS] = (time.perf_counter_ns() - emit_started_ns) / 1e6
                 if self._writer is not None:
                     for name, message in messages.items():
                         self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
+                self._step_number += 1
             finally:
                 if span.is_recording():
                     telemetry.set_attrs(span, **step_ms)
-        period_sec = (step.resume_at_ns - started_at_ns) / 1e9
+        period_sec = (resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
         return started_at_ns + round(period_sec * 1e9)
 
@@ -793,7 +869,8 @@ class Harness(pimm.ControlSystem):
         return runtime.take_completed()
 
     @contextmanager
-    def _recording(self, dataset_writer: DatasetWriter | None) -> Iterator[None]:
+    def _recording(self, dataset_writer: DatasetWriter | None, has_helper: bool) -> Iterator[None]:
+        """Record the episode to ``dataset_writer``, if any."""
         try:
             with ExitStack() as stack:
                 if dataset_writer is not None:
@@ -802,14 +879,21 @@ class Harness(pimm.ControlSystem):
                         writer = dataset.new_episode()
                         self._writer = writer.__enter__()
                         stack.push(telemetry.traced(telemetry_keys.SPAN_RECORD_IO)(writer.__exit__))
+                if has_helper:
+                    # Also with no writer, so that a step fails the same way whether or not the episode records.
+                    self._control = RecordSamples({
+                        name: command.serializer for name, command in self._embodiment.commands.items()
+                    })
                 yield
         finally:
             self._writer = None
+            self._control = None
             self._recorded_signals.clear()
-            self._recorded_privileged.clear()
+            self._ground_truth.clear()
             self._obs_by_signal.clear()
             self._frame_ns_by_signal.clear()
             self._recorded_instruction = None
+            self._step_number = 0
             self._goal = None
             self._record_wait = _RecordWait()
 
@@ -817,10 +901,9 @@ class Harness(pimm.ControlSystem):
         self,
         should_stop: pimm.SignalReceiver,
         task: Task,
-        withheld_poses: frozenset[str],
-        stated_poses: frozenset[str],
         runtime: Executor,
-        policy_run: PolicyRun,
+        policy: _Source,
+        helper: _Helper | None,
         deadline_ns: int | None,
         gc_steps: _GcSteps,
     ) -> pimm.Run[dict[str, Any] | None]:
@@ -832,7 +915,7 @@ class Harness(pimm.ControlSystem):
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
-                stepped = self._step(task, withheld_poses, stated_poses, runtime, policy_run, resume_at_ns, gc_steps)
+                stepped = self._step(task, runtime, policy, helper, resume_at_ns, gc_steps)
                 if isinstance(stepped, _PolicyEnded):
                     ended = stepped
                 else:
@@ -868,7 +951,7 @@ class Harness(pimm.ControlSystem):
         return payload
 
     @staticmethod
-    def _policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
+    def _policy_frames(policy: Policy, runtime: Executor | SourceRuntime) -> dict[str, EEFrame]:
         """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
 
         The policy states its frames as ``EE_FRAMES`` in ``meta()``, or its run writes them to ``runtime`` as it
@@ -903,6 +986,11 @@ class Harness(pimm.ControlSystem):
             )
         return frozenset(declared.keys() & rig.keys())
 
+    def _source(self, name: str, run: PolicyRun, frames: dict[str, EEFrame]) -> _Source:
+        """The run of the top-level source ``name``, which states ``frames``."""
+        stated = self._stated_poses(frames)
+        return _Source(name, run, stated, self._pose_signals() - stated)
+
     def _pose_signals(self) -> frozenset[str]:
         """Every pose signal of the rig."""
         # The embodiment lists every pose its serializers write; an arm with no model states none of them.
@@ -915,7 +1003,9 @@ class Harness(pimm.ControlSystem):
         task = rollout.task
         self._telemetry.begin(task.meta)
         # Name the policy before the reset, so that an episode that ends in its reset still names it.
-        self._telemetry.describe_policy(lambda: self._recorded_policy_meta(rollout.policy.meta(), {}))
+        self._telemetry.describe_policy(
+            lambda: self._recorded_meta(policy_keys.POLICY_SOURCE, rollout.policy.meta(), {})
+        )
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
         if should_stop.value:
@@ -926,23 +1016,31 @@ class Harness(pimm.ControlSystem):
         )
         # Start the policy in the scope, so that the calls it submits before its first step count too.
         with self._telemetry.counting_encodes():
-            policy_run = None
+            policy_run = helper_run = helper_runtime = None
             try:
                 policy_run = runtime.start(rollout.policy)
-                stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
-                withheld_poses = self._pose_signals() - stated_poses
+                policy = self._source(
+                    policy_keys.POLICY_SOURCE, policy_run, self._policy_frames(rollout.policy, runtime)
+                )
+                helper = None
+                if rollout.helper is not None:
+                    helper_runtime = SourceRuntime(runtime)
+                    helper_run = helper_runtime.start(rollout.helper)
+                    frames = self._policy_frames(rollout.helper, helper_runtime)
+                    helper = _Helper(self._source(policy_keys.TELEOPERATOR, helper_run, frames), Takeover())
                 deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
                 self.deadline_ns.emit(deadline_ns)
                 self._telemetry.start_rollout(clock.now())
                 gc_steps = _GcSteps(self._gc)
                 try:
-                    with self._recording(rollout.writer):
+                    with self._recording(rollout.writer, helper is not None):
                         payload = yield from self._rollout(
-                            should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
+                            should_stop, task, runtime, policy, helper, deadline_ns, gc_steps
                         )
                         if self._writer is not None:
                             static = only_keep_written_signals(
-                                self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                                self._build_episode_meta(rollout, runtime, helper_runtime) | (payload or {}),
+                                self._recorded_signals,
                             )
                             for name, value in static.items():
                                 self._writer.set_static(name, value)
@@ -951,7 +1049,9 @@ class Harness(pimm.ControlSystem):
             finally:
                 # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
                 self._telemetry.describe_policy(
-                    lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
+                    lambda: self._recorded_meta(
+                        policy_keys.POLICY_SOURCE, rollout.policy.meta(), runtime.metadata_snapshot()
+                    )
                 )
                 self._telemetry.describe_schedule(runtime.metadata_snapshot())
                 # Cleanup stops at the first error. Later resources may remain open; do not add nested
@@ -959,10 +1059,16 @@ class Harness(pimm.ControlSystem):
                 logging.info('Closing the policy runtime')
                 runtime.close()
                 logging.info('Policy runtime closed')
+                if helper_runtime is not None:
+                    helper_runtime.close()
                 if policy_run is not None:
                     logging.info('Closing the policy')
                     policy_run.close()
                     logging.info('Policy closed')
+                if helper_run is not None:
+                    logging.info('Closing the helper')
+                    helper_run.close()
+                    logging.info('Helper closed')
 
         self._telemetry.end(clock.now())
         if payload is not None:
