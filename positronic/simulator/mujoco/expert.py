@@ -6,7 +6,8 @@ close the grip, or up past ``LIFT_HEIGHT`` with the cube in the grip. So it can 
 
 Each element also carries the press fields of a console. With ``takes_over_at_start``, the expert presses Take over at
 its second element and drives to the end of the episode, as in round 0 of DAgger. Else it presses Take over when the
-source that drives leaves its path, drives to its next sub-goal, and presses Hand back::
+source that drives leaves its path, drives to its next sub-goal, and presses Hand back. It does not hand back
+before the grip holds the cube, so that a correction before the grasp holds the descent too::
 
     rollout = Rollout(task, policy, writer, LiftCubeExpert(license='...'))
 """
@@ -178,7 +179,7 @@ class LiftCubeExpert(Policy):
         obs = yield
         check_truth(obs, CUBE_NAME)
         lift = LiftCube(grip_pose(obs), runtime.time_ns)
-        console = Console(RANK, self._takes_over_at_start)
+        console = Console(RANK, self._takes_over_at_start, hand_back_from=Phase.LIFT)
         while True:
             now, control = runtime.time_ns, ControlObservation.model_validate(obs[CONTROL])
             here = grip_pose(obs)
