@@ -1043,7 +1043,7 @@ def test_hold_spans_on_a_simulated_clock_lie_inside_the_episode_and_sum_to_the_h
         )
     )
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level):
-        # The harness anchors each episode span this way.
+        # The hold spans parent to this anchor.
         episode_span = telemetry.start_span(telemetry_keys.SPAN_EPISODE)
         telemetry.push_anchor(episode_span)
         run = runtime.start(TrajectoryPlayer(), inner)
