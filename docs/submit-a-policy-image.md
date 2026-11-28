@@ -540,7 +540,7 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 | link | content | present |
 |---|---|---|
 | `result` | the run id, where its episodes are, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
-| `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
+| `policy_log` | your container's stdout and stderr while it served the run | on the same runs as `result`, when the run has lines of its own ([below](#what-policy_log-holds)) |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 
 An `errored` run of a private eval (`--org`) can publish the episodes that closed before it failed.
@@ -576,6 +576,20 @@ log cannot:
   before the model loads. Read `policy_log` for the exception.
 - `container_oom_killed: false` with a low `vram_peak_mib` rules out both memory limits at once.
 
+### What `policy_log` holds
+
+`policy_log` holds the lines that your container printed while it served only this run. A run with
+no such line has no `policy_log`.
+
+- One container can serve several runs of the same image at the same time, for example the parts
+  of one submission. A line from a time when an episode of another run also used the container can
+  belong to either run, so neither run gets it. The cut starts 30 seconds before that episode and
+  ends 30 seconds after it. A part of a submission can get a short log, or no log, when the other
+  parts run at the same time.
+- `policy_log` comes from the last 4 MiB of the container's output, with the time of each line,
+  over all the runs that the container served. When the container prints more, the first lines are
+  lost.
+
 ### The episodes
 
 `submissions.artifacts` lists what a finished run wrote, one page at a time, and it is the only
@@ -585,8 +599,9 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - Read `result.json` first. Its `episode_locations` lists the addresses of the episodes. Where it
   is absent, its `attempt_location` gives the address.
 - The route's `prefix` filter is read under the submission's own prefix, so one attempt's
-  episodes are `attempts/<n>/episodes/`. The same attempt holds `logs/` and `timing.jsonl`.
-  `control/` is never listed.
+  episodes are `attempts/<n>/episodes/`. A run of a MolmoSpaces or a RoboLab eval writes only
+  `episodes/` under an attempt. A run of another eval can also write `logs/`, the output of the
+  eval itself. `control/` is never listed.
 - The route pages: pass `after` with the `next` of the page before it. These links expire after
   15 minutes, like the three above.
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic

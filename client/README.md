@@ -617,8 +617,8 @@ failed run that published episodes before it failed also carries `scores` over t
 `episodes` counts them against the episodes that the run asked for. `policy_log` is the policy
 container's own output, and a finished or failed run carries it. Each link is a signed URL, because
 the submitter holds no credential for the bucket. `artifacts` is absent on a run that wrote nothing,
-`diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
-printed nothing.
+`diagnostics` on a run whose record was not written, and `policy_log` on a run with no lines of its
+own ([What `policy_log` holds](../docs/submit-a-policy-image.md#what-policy_log-holds)).
 
 A running run reads `running_since`. A finished, failed or cancelled run reads the same time as
 `started_at`, and that field is absent where the platform recorded no start. A short run can start

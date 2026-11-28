@@ -612,7 +612,7 @@ and `reason` tell you why it failed.
 | link | content | when it is there |
 |---|---|---|
 | `result` | the run, where its episodes are, and `scores` with `primary`, `episodes` and `unscored` | in all `artifacts` |
-| `policy_log` | the stdout and stderr of your container | when your container printed something |
+| `policy_log` | the stdout and stderr of your container while it served this run | when the run has lines of its own ([What `policy_log` holds](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#what-policy_log-holds)) |
 | `diagnostics` | why the run failed, and the state of the machine | on a failed run, when the run wrote it |
 
 The links expire after 15 minutes. Run `positronic eval status` again to get new links. On a failed run,
