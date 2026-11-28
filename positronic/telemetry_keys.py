@@ -37,6 +37,21 @@ ATTR_EPISODE_INDEX = 'episode.index'
 ATTR_EPISODE_STEPS = 'episode.steps'
 ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
+# On `episode`: the count of harness steps that start N ms or more after their due time (`steps_late_ge_<N>ms`),
+# the count of the episode's `policy.encode` spans, and the count of those that take more than N ms
+# (`encodes_gt_<N>ms`).
+ATTR_EPISODE_STEPS_LATE_GE_1MS = 'episode.steps_late_ge_1ms'
+ATTR_EPISODE_STEPS_LATE_GE_2MS = 'episode.steps_late_ge_2ms'
+ATTR_EPISODE_STEPS_LATE_GE_5MS = 'episode.steps_late_ge_5ms'
+ATTR_EPISODE_STEPS_LATE_GE_10MS = 'episode.steps_late_ge_10ms'
+ATTR_EPISODE_STEPS_LATE_GE_20MS = 'episode.steps_late_ge_20ms'
+ATTR_EPISODE_STEPS_LATE_GE_50MS = 'episode.steps_late_ge_50ms'
+ATTR_EPISODE_ENCODES = 'episode.encodes'
+ATTR_EPISODE_ENCODES_GT_5MS = 'episode.encodes_gt_5ms'
+ATTR_EPISODE_ENCODES_GT_10MS = 'episode.encodes_gt_10ms'
+ATTR_EPISODE_ENCODES_GT_15MS = 'episode.encodes_gt_15ms'
+ATTR_EPISODE_ENCODES_GT_30MS = 'episode.encodes_gt_30ms'
+ATTR_EPISODE_ENCODES_GT_60MS = 'episode.encodes_gt_60ms'
 ATTR_PASS_FAILED = 'pass.failed'
 
 # What the server reported, stamped on `policy.infer` under this prefix — `served.infer_ms`, its sibling
