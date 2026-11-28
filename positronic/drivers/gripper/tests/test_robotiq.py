@@ -2,7 +2,9 @@
 holds a lost gripper until a call activates it again."""
 
 import logging
+import os
 from enum import Enum, auto
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,8 +12,9 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.faults import DeviceFault, FaultKind
-from positronic.drivers.gripper import robotiq
+from positronic.drivers.gripper import robotiq, robotiq_grip_probe
 from positronic.drivers.gripper.robotiq import Activation, Fingers
+from positronic.drivers.gripper.robotiq_grip_probe import GripRecord, RobotiqGripProbe
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -33,7 +36,7 @@ class FakeBus:
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
     they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
     answers with an exception response while ``refuses`` is on, and a write while ``refuses_writes`` is on.
-    ``connect`` answers ``answers``.
+    ``connect`` answers ``answers``. Each read reports ``current`` as ``gCU``.
     """
 
     def __init__(self, object_at: int | None = None):
@@ -45,6 +48,7 @@ class FakeBus:
         self.fault_after_activation = 0
         self.fault = 0
         self.position = 0
+        self.current = 0
         self.raises: Exception | None = None
         self.refuses = False
         self.refuses_writes = False
@@ -87,7 +91,7 @@ class FakeBus:
             return SimpleNamespace(registers=[], isError=lambda: True)
         self._step()
         status = self._fingers.value << 6 | self._activation.value << 4 | self._go << 3 | self._act
-        registers = [status << 8, self.fault << 8 | self._requested, self.position << 8]
+        registers = [status << 8, self.fault << 8 | self._requested, self.position << 8 | self.current]
         return SimpleNamespace(registers=registers, isError=lambda: False)
 
     def _step(self) -> None:
@@ -660,3 +664,221 @@ def test_an_error_that_is_not_the_bus_ends_the_run(monkeypatch):
 
     with pytest.raises(ValueError, match='a bug in the driver'):
         _pump(loop, clock, 1)
+
+
+PROBE_RECORD_S = 0.5
+
+
+def _probed(monkeypatch, bus: FakeBus, out, enters: int) -> GripRecord:
+    """Run the grip probe over ``bus`` to its end, with ``enters`` pushes of Enter and then the end of the input."""
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'\n' * enters)
+    os.close(write_fd)
+    clock = MockClock()
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, out, read_fd).run(StopFlag(), clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+    finally:
+        os.close(read_fd)
+    return record
+
+
+def test_the_grip_probe_records_each_close_on_an_object_and_writes_its_files(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    bus.current = 40
+    record = _probed(monkeypatch, bus, tmp_path, enters=3)
+
+    assert [close.repeat for close in record.closes] == [1, 2, 3]
+    for close in record.closes:
+        o = close.outcome
+        assert (o.fingers, o.position, o.current, o.detected) == (Fingers.CONTACT_CLOSING, OBJECT, 40, True)
+        assert o.fingers_seen == [Fingers.MOVING, Fingers.CONTACT_CLOSING]
+        assert o.stopped_s is not None and 0 < o.stopped_s == o.still_s < PROBE_RECORD_S
+    assert bus.writes[-1][1] == 0, 'the probe left the fingers closed'
+
+    assert GripRecord.model_validate_json((tmp_path / 'pen.json').read_text()) == record
+    csv_lines = (tmp_path / 'pen.csv').read_text().splitlines()
+    assert csv_lines[0] == 'repeat,t_s,fingers,requested,position,current'
+    assert len(csv_lines) == 1 + sum(len(close.samples) for close in record.closes)
+    assert csv_lines[-1].endswith(f',{Fingers.CONTACT_CLOSING.value},255,{OBJECT},40')
+    table = (tmp_path / 'pen.txt').read_text().splitlines()
+    assert len(table) == 1 + 3 + 1
+    assert table[-1] == 'pen: gOBJ is CONTACT_CLOSING at the end of 3 of 3 closes'
+
+
+def test_the_grip_probe_reports_no_object_for_a_close_on_nothing(monkeypatch, tmp_path):
+    record = _probed(monkeypatch, FakeBus(), tmp_path, enters=2)
+
+    for close in record.closes:
+        o = close.outcome
+        assert (o.fingers, o.position, o.detected) == (Fingers.AT_REQUEST, SHUT, False)
+    assert (tmp_path / 'pen.txt').read_text().splitlines()[-1].endswith('at the end of 0 of 2 closes')
+
+
+def test_the_grip_probe_refuses_a_port_that_does_not_open(monkeypatch, tmp_path):
+    bus = FakeBus()
+    bus.answers = False
+
+    with pytest.raises(SystemExit, match='A station or a console can hold the port'):
+        _probed(monkeypatch, bus, tmp_path, enters=1)
+    assert bus.writes == []
+
+
+def test_the_grip_probe_ends_when_the_input_ends(monkeypatch, tmp_path):
+    record = _probed(monkeypatch, FakeBus(object_at=OBJECT), tmp_path, enters=1)
+
+    assert len(record.closes) == 1
+
+
+def test_the_grip_probe_opens_the_fingers_when_a_write_of_its_files_fails(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+
+    with pytest.raises(FileNotFoundError):
+        _probed(monkeypatch, bus, tmp_path / 'absent', enters=3)
+    assert bus.writes[-1][1] == 0, 'the probe left the fingers closed on the object'
+
+
+def test_the_grip_probe_opens_the_fingers_before_it_writes_its_files(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    write = robotiq_grip_probe.write
+    requested_at_write = []
+
+    def recording_write(record, out):
+        requested_at_write.append(bus.writes[-1][1])
+        write(record, out)
+
+    monkeypatch.setattr(robotiq_grip_probe, 'write', recording_write)
+    _probed(monkeypatch, bus, tmp_path, enters=2)
+
+    assert requested_at_write == [0, 0], 'a slow write kept the fingers closed on the object'
+
+
+def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypatch, tmp_path):
+    """A Ctrl-C sets ``should_stop`` while the probe waits for Enter. The probe ends, and the fingers open."""
+    bus = FakeBus(object_at=OBJECT)
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    read_fd, write_fd = os.pipe()
+    stop, clock = StopFlag(), MockClock()
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, tmp_path, read_fd).run(stop, clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+            stop.stopped = clock.now() > 10.0
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert record.closes == []
+    assert bus.writes[-1][1] == 0
+
+
+def _stopped_during_the_activation(monkeypatch, bus: FakeBus, out, stop_after_s: float) -> GripRecord:
+    """Run the grip probe over ``bus``, and stop it once the clock passes ``stop_after_s``."""
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    read_fd, write_fd = os.pipe()
+    stop, clock = StopFlag(), MockClock()
+    stop.stopped = stop_after_s < 0
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, out, read_fd).run(stop, clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+            stop.stopped = clock.now() > stop_after_s
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    return record
+
+
+def test_a_stop_during_the_activation_ends_the_grip_probe_without_an_activation_error(monkeypatch, tmp_path):
+    """A Ctrl-C while the gripper activates ends the probe as a stop, not as a gripper that did not activate."""
+    bus = FakeBus()
+    bus.completes = False
+    record = _stopped_during_the_activation(monkeypatch, bus, tmp_path, stop_after_s=1.0)
+
+    assert record.closes == []
+    assert bus.writes[-1] == [0x0100, 0, 0], 'the probe asked a move of a gripper that did not complete its activation'
+
+
+def test_a_stop_before_the_gripper_reports_its_reset_keeps_the_gripper_reset(monkeypatch, tmp_path):
+    """A move command raises ``rACT``, so a move after a stop before the reset would start an activation stroke."""
+    bus = FakeBus()
+    record = _stopped_during_the_activation(monkeypatch, bus, tmp_path, stop_after_s=-1.0)
+
+    assert record.closes == []
+    assert bus.writes == [[0, 0, 0]]
+
+
+@pytest.mark.parametrize(
+    ('flag', 'value', 'refusal'),
+    [
+        ('--record-s', '0', 'is not a positive number of seconds'),
+        ('--record-s', '-1', 'is not a positive number of seconds'),
+        ('--record-s', 'nan', 'is not a positive number of seconds'),
+        ('--repeats', '0', 'is not a positive count'),
+        ('--repeats', '-2', 'is not a positive count'),
+        ('--speed', '256', 'is not in 0..255'),
+        ('--force', '-1', 'is not in 0..255'),
+        ('--label', '../pen', 'is not a file name'),
+        ('--label', '', 'is not a file name'),
+    ],
+)
+def test_the_grip_probe_refuses_an_argument_out_of_range(monkeypatch, capsys, tmp_path, flag, value, refusal):
+    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path / 'out'), flag, value]
+    monkeypatch.setattr('sys.argv', argv)
+
+    with pytest.raises(SystemExit):
+        robotiq_grip_probe.main()
+    assert refusal in capsys.readouterr().err
+    assert not (tmp_path / 'out').exists(), 'the probe started before it checked its arguments'
+
+
+def test_a_failed_write_keeps_the_files_of_the_closes_before_it(monkeypatch, tmp_path):
+    record = _probed(monkeypatch, FakeBus(object_at=OBJECT), tmp_path, enters=1)
+    before = {name: (tmp_path / name).read_bytes() for name in ('pen.json', 'pen.csv', 'pen.txt')}
+    write_text = Path.write_text
+
+    def torn(path: Path, text: str) -> int:
+        write_text(path, text[: len(text) // 2])
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(Path, 'write_text', torn)
+    record.closes.append(record.closes[0])
+    with pytest.raises(OSError):
+        robotiq_grip_probe.write(record, tmp_path)
+
+    assert {name: (tmp_path / name).read_bytes() for name in before} == before
+
+
+def test_the_grip_probe_prints_each_close_once(monkeypatch, capsys, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'\n\n')
+    os.close(write_fd)
+    monkeypatch.setattr('sys.stdin', SimpleNamespace(fileno=lambda: read_fd))
+    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path), '--repeats', '2']
+    monkeypatch.setattr('sys.argv', [*argv, '--record-s', '0.05'])
+    try:
+        robotiq_grip_probe.main()
+    finally:
+        os.close(read_fd)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count(robotiq_grip_probe.HEADER) == 1
+    assert sum('MOVING>CONTACT_CLOSING' in line for line in lines) == 2
+    assert lines[-1] == 'pen: gOBJ is CONTACT_CLOSING at the end of 2 of 2 closes'
+
+
+@pytest.mark.parametrize('name', ['pen.json', 'pen.csv', 'pen.txt'])
+def test_the_grip_probe_refuses_to_overwrite_any_of_its_files(monkeypatch, tmp_path, name):
+    (tmp_path / name).write_text('earlier')
+    bus = FakeBus()
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    monkeypatch.setattr('sys.argv', ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path)])
+
+    with pytest.raises(SystemExit, match=f'{name} exists'):
+        robotiq_grip_probe.main()
+    assert bus.writes == []
+    assert (tmp_path / name).read_text() == 'earlier'
